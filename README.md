@@ -1,66 +1,15 @@
-## Foundry
+# HighPotential
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+This repository contains the core smart contracts for [HighPotential](https://epl.highpotential.io/).
 
-Foundry consists of:
+## Deployments
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+Latest deployments can be found [here](./Deployments.md) and historical deployment logs for Base and Base Sepolia can be found in the [deployments](./deployments/) folder.
 
-## Documentation
+## Attribution
 
-https://book.getfoundry.sh/
+HighPotential builds on the [Doppler](https://github.com/whetstoneresearch/doppler) Protocol for liquidity bootstrapping and migration, which interacts with [Uniswap V4](https://github.com/Uniswap/v4-core) under the hood. You can learn more about Doppler's mechanics in their [documentation](https://docs.doppler.lol/) or [whitepaper](https://github.com/whetstoneresearch/docs/blob/main/whitepapers/doppler/Dutch_auction_Dynamic_Bonding_Curves.pdf).
 
-## Usage
+## Contact
 
-### Build
-
-```shell
-$ forge build
-```
-
-### Test
-
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+The primary security contact for HighPotential is security@islalabs.co.

@@ -3,6 +3,8 @@ forge-std/=lib/forge-std/src/
 @doppler/=lib/doppler/src/
 @chainlink/=lib/chainlink-evm/contracts/src/v0.8/
 
+@openzeppelin/=lib/doppler/lib/v4-core/lib/openzeppelin-contracts/contracts/
+
 @v4-core/=lib/doppler/lib/v4-core/src/
 @v4-periphery/=lib/doppler/lib/v4-periphery/src/
 @v4-router/=lib/doppler/lib/universal-router/contracts/

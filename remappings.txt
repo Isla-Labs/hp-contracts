@@ -13,6 +13,7 @@ forge-std/=lib/forge-std/src/
 @v4-core/=lib/doppler/lib/v4-core/src/
 @v4-periphery/=lib/doppler/lib/v4-periphery/src/
 @v4-router/=lib/doppler/lib/universal-router/contracts/
+@quoter/=lib/doppler/lib/view-quoter-v4/src/
 
 @solady/=lib/doppler/lib/solady/src/
 

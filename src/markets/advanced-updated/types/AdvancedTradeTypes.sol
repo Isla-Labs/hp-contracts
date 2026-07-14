@@ -34,16 +34,19 @@ struct Position {
     Side side;
     LongOpenMode longMode; // meaningful for LONG only
     uint256 size; // player-token notional (inventory sold for SHORT; escrowed for LONG)
-    uint256 entryMark; // EMA mark at open (WAD)
+    uint256 entryMark; // EMA mark at open (WAD-compatible)
     uint256 collateral; // USDC escrow remaining (shorts; longs may be 0 if TOKEN_DEPOSIT)
     uint256 saleProceeds; // USDC from inventory sell (SHORT only; position-committed)
+    uint256 borrowIndexSnapshot; // borrow index at last fee accrual (SHORT)
     uint256 openedAt;
     bool open;
 }
 
-/// @notice Caller-supplied swap bounds (required ≠ 0 — sandwich protection)
+/// @notice Caller-supplied swap bounds (sandwich protection).
+/// @dev Exact-in paths require `amountOutMin != 0`. Exact-out paths (short buyback) require `amountInMax != 0`.
 struct SlippageBound {
-    uint256 amountOutMin; // for sells of player tokens / buys for buyback
+    uint256 amountOutMin;
+    uint256 amountInMax;
     uint256 deadline;
 }
 
@@ -69,7 +72,8 @@ struct MarginParams {
 struct VaultInitParams {
     address playerToken;
     address collateral; // USDC
-    address swapRouter; // HP / V4 router — wired later
+    address swapRouter; // IVaultSwapRouter
+    address markSource; // IMarkSource (pool EMA input)
     address fundingController; // address(0) until Phase 2
     address pbrTreasury; // borrow-fee share destination (Phase 1)
     address owner; // LifecycleTimelock / governance

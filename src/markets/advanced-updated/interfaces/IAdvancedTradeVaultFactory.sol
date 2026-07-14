@@ -28,6 +28,7 @@ interface IAdvancedTradeVaultFactory {
         address playerToken,
         address collateral,
         address swapRouter,
+        address markSource,
         address fundingController,
         address pbrTreasury,
         uint256 seededInventory

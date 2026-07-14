@@ -41,8 +41,11 @@ interface IAdvancedTradeVault {
     );
     event BorrowFeeAccrued(uint256 indexed positionId, uint256 feeAmount, uint256 utilization);
     event InventoryExpanded(uint256 previousSize, uint256 newSize);
-    event MarkUpdated(uint256 mark, uint256 timestamp);
+    event InventoryWrittenOff(uint256 amount, uint256 remainingInventorySize);
+    event MarkUpdated(uint256 mark, uint256 spot, uint256 timestamp);
     event FundingControllerUpdated(address indexed previous, address indexed next);
+    event SwapRouterUpdated(address indexed previous, address indexed next);
+    event MarkSourceUpdated(address indexed previous, address indexed next);
     event ParamsUpdated();
 
     // --------------------------------------------
@@ -52,6 +55,7 @@ interface IAdvancedTradeVault {
     error ZeroAddress();
     error ZeroAmount();
     error ZeroSlippageBound();
+    error DeadlineExpired();
     error NotOwner();
     error NotPositionOwner();
     error PositionNotOpen();
@@ -62,7 +66,10 @@ interface IAdvancedTradeVault {
     error InsufficientMargin();
     error NotLiquidatable();
     error CloseImpactTooHigh();
-    error Wireframe(); // stub body — remove as logic lands
+    error MarkNotReady();
+    error SwapRouterNotSet();
+    error SlippageExceeded();
+    error Wireframe(); // residual stubs only
 
     // --------------------------------------------
     //  Views
@@ -139,6 +146,9 @@ interface IAdvancedTradeVault {
     function setBorrowCurve(BorrowCurve calldata curve) external;
     function setMarginParams(MarginParams calldata params) external;
     function setPbrTreasury(address pbrTreasury_) external;
+    function setSwapRouter(address swapRouter_) external;
+    function setMarkSource(address markSource_) external;
+    function setMarkHalfLife(uint256 halfLifeSeconds) external;
 
     /// @notice End-of-call invariant check (also invoked internally after state mutations).
     function assertInvariants() external view;

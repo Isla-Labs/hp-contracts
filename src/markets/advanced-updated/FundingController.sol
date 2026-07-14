@@ -107,12 +107,11 @@ contract FundingController is IFundingController, Ownable2Step, ReentrancyGuard 
     {
         if (!registered[vault]) revert MarketNotRegistered();
         if (msg.sender != vault) revert NotVault();
-        // Settle accrued from rewardPerToken delta × sizeBefore; update checkpoint; adjust side OI
+        // Phase 2 accrual lands here. Phase 1: acknowledge size changes without paying.
+        user;
+        isLong;
         sizeBefore;
         sizeAfter;
-        isLong;
-        user;
-        revert Wireframe();
     }
 
     /// @inheritdoc IFundingController

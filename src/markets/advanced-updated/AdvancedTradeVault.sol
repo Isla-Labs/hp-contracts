@@ -8,6 +8,11 @@ import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { IAdvancedTradeVault } from "./interfaces/IAdvancedTradeVault.sol";
 import { IFundingController } from "./interfaces/IFundingController.sol";
+import { IMarkSource } from "./interfaces/IMarkSource.sol";
+import { IVaultSwapRouter } from "./interfaces/IVaultSwapRouter.sol";
+import { BorrowMath } from "./libraries/BorrowMath.sol";
+import { MarginMath } from "./libraries/MarginMath.sol";
+import { MarkMath } from "./libraries/MarkMath.sol";
 import {
     BorrowCurve,
     INVENTORY_HARD_CAP,
@@ -24,15 +29,10 @@ import {
 /**
  * @title AdvancedTradeVault
  * @notice Per-market beacon implementation: escrowed longs, inventory-backed shorts, borrow fees, liquidations.
- * @dev Wireframe — storage, surface, and invariant hooks only. Swap / margin math lands next.
+ * @dev Phase 1 logic. Swaps go through `IVaultSwapRouter`; marks via EMA over `IMarkSource` spot.
  *
- *      Invariants (asserted after state-mutating calls):
- *        1. vaultTokenBalance + shortOI == inventorySize; shortOI ≤ INVENTORY_HARD_CAP
- *        2. No unbacked inventory sells
- *        3. Escrow decreases only via close / liquidation / borrow fee
- *        4. Opens satisfy IM (incl. modeled close impact)
- *        5. Short sale proceeds are position-committed
- *        6. Incentive exclusivity with PlayerVault (enforced at integration boundary)
+ *      Inventory invariant: `playerToken.balanceOf(this) + shortOI == inventorySize + longEscrowed`
+ *      (sold short tokens leave the vault; long escrow stays).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -41,39 +41,37 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     using SafeERC20 for IERC20;
 
     // --------------------------------------------
-    //  Immutables / config (set once in initialize)
+    //  Config
     // --------------------------------------------
 
     address public override playerToken;
     address public override collateral; // USDC
     address public swapRouter;
+    address public markSource;
     address public override fundingController;
     address public pbrTreasury;
     address public owner;
+
+    /// @notice EMA half-life in seconds (launch: 5 minutes)
+    uint256 public markHalfLife = 5 minutes;
 
     // --------------------------------------------
     //  Inventory / OI
     // --------------------------------------------
 
-    /// @notice Current inventory capacity (seeded ≤ size ≤ INVENTORY_HARD_CAP)
     uint256 public override inventorySize;
-
-    /// @notice Aggregate open short size in player tokens
     uint256 public override shortOpenInterest;
-
-    /// @notice Aggregate escrowed long size in player tokens (separate ledger from inventory)
     uint256 public longEscrowed;
-
-    /// @notice USDC insurance buffer (first-loss vs short bad debt)
     uint256 public override insuranceBuffer;
+    mapping(address account => uint256 size) public accountShortSize;
 
     // --------------------------------------------
-    //  Marks / rates
+    //  Marks / borrow index
     // --------------------------------------------
 
-    uint256 public override markPrice; // WAD
+    uint256 public override markPrice;
     uint256 public markUpdatedAt;
-    uint256 public borrowIndex; // cumulative borrow index (WAD)
+    uint256 public borrowIndex;
     uint256 public borrowIndexUpdatedAt;
 
     BorrowCurve public curve;
@@ -85,15 +83,19 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
 
     uint256 public override nextPositionId;
     mapping(uint256 positionId => Position position) internal _positions;
-    mapping(address owner => uint256[] ids) internal _positionsOf;
+    mapping(address account => uint256[] ids) internal _positionsOf;
 
     // --------------------------------------------
     //  Modifiers
     // --------------------------------------------
 
     modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
+        _onlyOwner();
         _;
+    }
+
+    function _onlyOwner() internal view {
+        if (msg.sender != owner) revert NotOwner();
     }
 
     // --------------------------------------------
@@ -118,6 +120,7 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         playerToken = params.playerToken;
         collateral = params.collateral;
         swapRouter = params.swapRouter;
+        markSource = params.markSource;
         fundingController = params.fundingController;
         pbrTreasury = params.pbrTreasury;
         owner = params.owner;
@@ -127,21 +130,24 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         borrowIndexUpdatedAt = block.timestamp;
         markUpdatedAt = block.timestamp;
 
-        // Launch placeholders (§3.6) — governance retunes via setters
-        curve = BorrowCurve({
-            r0: 5e16, // 5% APR
-            slope1: 25e16, // reaches ~25% at kink (illustrative; exact slope wiring TBD)
-            slope2: 125e16,
-            uKink: 8e17 // 80%
-        });
+        // r0=5%, slope1 → 25% at 80% util, slope2 → 150% at 100% util
+        curve = BorrowCurve({ r0: 5e16, slope1: 25e16, slope2: 625e16, uKink: 8e17 });
         margins = MarginParams({
-            initialMarginWad: 4e17, // 40%
-            maintenanceMarginWad: 2e17, // 20%
-            liquidationBountyWad: 5e16, // 5%
-            insuranceSliceWad: 25e15, // 2.5%
-            maxCloseImpactWad: 2e16, // 2%
-            perAccountShortCapWad: 1e17 // 10% of inventory
+            initialMarginWad: 4e17,
+            maintenanceMarginWad: 2e17,
+            liquidationBountyWad: 5e16,
+            insuranceSliceWad: 25e15,
+            maxCloseImpactWad: 2e16,
+            perAccountShortCapWad: 1e17
         });
+
+        if (params.markSource != address(0)) {
+            uint256 spot = IMarkSource(params.markSource).spotPriceWad();
+            if (MarkMath.isSaneMark(spot)) {
+                markPrice = spot;
+                emit MarkUpdated(spot, spot, block.timestamp);
+            }
+        }
 
         emit VaultInitialized(params.playerToken, params.collateral, params.seededInventory, params.owner);
     }
@@ -182,9 +188,11 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     }
 
     /// @inheritdoc IAdvancedTradeVault
-    function isLiquidatable(uint256 /* positionId */ ) public view override returns (bool) {
-        // Wireframe: margin equity vs MM at mark — implement with short equity formula (§3.5)
-        return false;
+    function isLiquidatable(uint256 positionId) public view override returns (bool) {
+        Position storage pos = _positions[positionId];
+        if (!pos.open || pos.side != Side.SHORT) return false;
+        if (markPrice == 0) return false;
+        return MarginMath.belowMaintenance(pos.collateral, pos.saleProceeds, pos.size, markPrice, margins);
     }
 
     // --------------------------------------------
@@ -199,18 +207,35 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         returns (uint256 positionId, uint256 size)
     {
         if (usdcIn == 0) revert ZeroAmount();
-        _requireSlippage(bound);
-        // Pull USDC → swap to playerToken → escrow → register LONG / USDC_IN
-        // Checkpoint fundingController if set
-        revert Wireframe();
+        _requireSlippageExactIn(bound);
+        _requireMark();
+        _accrueBorrowIndex();
+
+        IERC20(collateral).safeTransferFrom(msg.sender, address(this), usdcIn);
+        size = _swapExactIn(collateral, playerToken, usdcIn, bound);
+
+        longEscrowed += size;
+        positionId = _openPosition(msg.sender, Side.LONG, LongOpenMode.USDC_IN, size, markPrice);
+        _checkpointFunding(msg.sender, Side.LONG, 0, size);
+
+        emit LongOpened(positionId, msg.sender, size, markPrice, uint8(LongOpenMode.USDC_IN));
+        _assertInvariants();
     }
 
     /// @inheritdoc IAdvancedTradeVault
     function openLongTokens(uint256 tokenAmount) external override nonReentrant returns (uint256 positionId) {
         if (tokenAmount == 0) revert ZeroAmount();
-        // Pull playerToken → escrow → register LONG / TOKEN_DEPOSIT
-        // Must be exclusive with PlayerVault staking (§3.7.6)
-        revert Wireframe();
+        _requireMark();
+        _accrueBorrowIndex();
+
+        IERC20(playerToken).safeTransferFrom(msg.sender, address(this), tokenAmount);
+        longEscrowed += tokenAmount;
+
+        positionId = _openPosition(msg.sender, Side.LONG, LongOpenMode.TOKEN_DEPOSIT, tokenAmount, markPrice);
+        _checkpointFunding(msg.sender, Side.LONG, 0, tokenAmount);
+
+        emit LongOpened(positionId, msg.sender, tokenAmount, markPrice, uint8(LongOpenMode.TOKEN_DEPOSIT));
+        _assertInvariants();
     }
 
     /// @inheritdoc IAdvancedTradeVault
@@ -224,8 +249,25 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         if (!pos.open) revert PositionNotOpen();
         if (pos.owner != msg.sender) revert NotPositionOwner();
         if (pos.side != Side.LONG) revert InvalidSide();
-        if (mode == LongCloseMode.SELL_TO_USDC) _requireSlippage(bound);
-        revert Wireframe();
+
+        uint256 size = pos.size;
+        _checkpointFunding(msg.sender, Side.LONG, size, 0);
+
+        longEscrowed -= size;
+        pos.open = false;
+        pos.size = 0;
+
+        if (mode == LongCloseMode.RETURN_TOKENS) {
+            amountOut = size;
+            IERC20(playerToken).safeTransfer(msg.sender, size);
+        } else {
+            _requireSlippageExactIn(bound);
+            amountOut = _swapExactIn(playerToken, collateral, size, bound);
+            IERC20(collateral).safeTransfer(msg.sender, amountOut);
+        }
+
+        emit PositionClosed(positionId, msg.sender, Side.LONG, 0);
+        _assertInvariants();
     }
 
     // --------------------------------------------
@@ -240,12 +282,39 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         returns (uint256 positionId, uint256 saleProceeds)
     {
         if (size == 0 || collateralIn == 0) revert ZeroAmount();
-        _requireSlippage(bound);
+        _requireSlippageExactIn(bound);
+        _requireMark();
+        _accrueBorrowIndex();
+
         if (size > idleInventory()) revert InsufficientInventory();
         if (shortOpenInterest + size > INVENTORY_HARD_CAP) revert InventoryHardCap();
-        // IM check incl. modeled close impact; per-account short cap; sell inventory → pool;
-        // escrow collateral + commit saleProceeds; bump shortOI
-        revert Wireframe();
+        if (shortOpenInterest + size > inventorySize) revert InsufficientInventory();
+
+        uint256 maxAccount = (inventorySize * margins.perAccountShortCapWad) / WAD;
+        if (accountShortSize[msg.sender] + size > maxAccount) revert AccountShortCap();
+
+        IERC20(collateral).safeTransferFrom(msg.sender, address(this), collateralIn);
+
+        // Sell inventory into the pool (real sell pressure)
+        saleProceeds = _swapExactIn(playerToken, collateral, size, bound);
+
+        if (!MarginMath.meetsInitialMargin(collateralIn, saleProceeds, size, markPrice, margins)) {
+            revert InsufficientMargin();
+        }
+
+        shortOpenInterest += size;
+        accountShortSize[msg.sender] += size;
+
+        positionId = _openPosition(msg.sender, Side.SHORT, LongOpenMode.USDC_IN, size, markPrice);
+        Position storage pos = _positions[positionId];
+        pos.collateral = collateralIn;
+        pos.saleProceeds = saleProceeds;
+        pos.borrowIndexSnapshot = borrowIndex;
+
+        _checkpointFunding(msg.sender, Side.SHORT, 0, size);
+
+        emit ShortOpened(positionId, msg.sender, size, collateralIn, saleProceeds, markPrice);
+        _assertInvariants();
     }
 
     /// @inheritdoc IAdvancedTradeVault
@@ -259,9 +328,22 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         if (!pos.open) revert PositionNotOpen();
         if (pos.owner != msg.sender) revert NotPositionOwner();
         if (pos.side != Side.SHORT) revert InvalidSide();
-        _requireSlippage(bound);
-        // Accrue borrow fee → buy back size → settle → restore inventory / reduce shortOI
-        revert Wireframe();
+        _requireSlippageExactOut(bound);
+
+        _accrueBorrowIndex();
+        _accrueBorrowFee(positionId);
+
+        uint256 size = pos.size;
+        uint256 proceeds = pos.saleProceeds;
+        uint256 col = pos.collateral;
+        address account = pos.owner;
+
+        _checkpointFunding(account, Side.SHORT, size, 0);
+
+        uint256 buybackCost = _buybackShort(size, proceeds, col, bound);
+        pnl = _settleShortClose(positionId, account, size, proceeds, col, buybackCost, account);
+
+        _assertInvariants();
     }
 
     // --------------------------------------------
@@ -272,22 +354,82 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     function accrueBorrowFee(uint256 positionId) external override nonReentrant returns (uint256 feeAmount) {
         Position storage pos = _positions[positionId];
         if (!pos.open || pos.side != Side.SHORT) revert PositionNotOpen();
-        // Two-slope utilization curve (§3.4); fee from escrow → insurance / pbrTreasury [/ FRT]
-        revert Wireframe();
+        _accrueBorrowIndex();
+        feeAmount = _accrueBorrowFee(positionId);
     }
 
     /// @inheritdoc IAdvancedTradeVault
     function liquidate(uint256 positionId, SlippageBound calldata bound) external override nonReentrant {
+        _requireSlippageExactOut(bound);
+        _accrueBorrowIndex();
+
+        Position storage pos = _positions[positionId];
+        if (!pos.open || pos.side != Side.SHORT) revert PositionNotOpen();
+
+        _accrueBorrowFee(positionId);
         if (!isLiquidatable(positionId)) revert NotLiquidatable();
-        _requireSlippage(bound);
-        // Permissionless; bounty to msg.sender; insurance slice; restore inventory or socialize shortfall
-        revert Wireframe();
+
+        uint256 size = pos.size;
+        uint256 proceeds = pos.saleProceeds;
+        uint256 col = pos.collateral;
+        address account = pos.owner;
+        uint256 notional_ = MarginMath.notional(size, markPrice);
+
+        _checkpointFunding(account, Side.SHORT, size, 0);
+
+        uint256 budget = proceeds + col + insuranceBuffer;
+        uint256 amountInMax = bound.amountInMax;
+        if (amountInMax > budget) amountInMax = budget;
+
+        uint256 spent = _swapExactOut(collateral, playerToken, size, amountInMax, bound.deadline);
+
+        if (spent > proceeds + col) {
+            uint256 insuranceUsed = spent - proceeds - col;
+            insuranceBuffer -= insuranceUsed;
+            col = 0;
+            proceeds = 0;
+        } else if (spent > proceeds) {
+            col -= (spent - proceeds);
+            proceeds = 0;
+        } else {
+            proceeds -= spent;
+        }
+
+        shortOpenInterest -= size;
+        accountShortSize[account] -= size;
+
+        uint256 residual = col + proceeds;
+        uint256 bounty = (notional_ * margins.liquidationBountyWad) / WAD;
+        uint256 slice = (notional_ * margins.insuranceSliceWad) / WAD;
+        if (bounty > residual) bounty = residual;
+        residual -= bounty;
+        if (slice > residual) slice = residual;
+        residual -= slice;
+        insuranceBuffer += slice;
+
+        pos.open = false;
+        pos.size = 0;
+        pos.collateral = 0;
+        pos.saleProceeds = 0;
+
+        if (bounty > 0) IERC20(collateral).safeTransfer(msg.sender, bounty);
+        if (residual > 0) IERC20(collateral).safeTransfer(account, residual);
+
+        emit PositionLiquidated(positionId, account, msg.sender, bounty, slice);
+        _assertInvariants();
     }
 
     /// @inheritdoc IAdvancedTradeVault
     function updateMark() external override returns (uint256 mark) {
-        // EMA of pool price — never raw spot (§3.5)
-        revert Wireframe();
+        if (markSource == address(0)) revert ZeroAddress();
+        uint256 spot = IMarkSource(markSource).spotPriceWad();
+        if (!MarkMath.isSaneMark(spot)) revert MarkNotReady();
+
+        uint256 dt = block.timestamp - markUpdatedAt;
+        mark = MarkMath.emaUpdate(markPrice, spot, dt, markHalfLife);
+        markPrice = mark;
+        markUpdatedAt = block.timestamp;
+        emit MarkUpdated(mark, spot, block.timestamp);
     }
 
     // --------------------------------------------
@@ -335,16 +477,149 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     }
 
     /// @inheritdoc IAdvancedTradeVault
+    function setSwapRouter(address swapRouter_) external override onlyOwner {
+        address previous = swapRouter;
+        swapRouter = swapRouter_;
+        emit SwapRouterUpdated(previous, swapRouter_);
+    }
+
+    /// @inheritdoc IAdvancedTradeVault
+    function setMarkSource(address markSource_) external override onlyOwner {
+        address previous = markSource;
+        markSource = markSource_;
+        emit MarkSourceUpdated(previous, markSource_);
+    }
+
+    /// @inheritdoc IAdvancedTradeVault
+    function setMarkHalfLife(uint256 halfLifeSeconds) external override onlyOwner {
+        if (halfLifeSeconds == 0) revert ZeroAmount();
+        markHalfLife = halfLifeSeconds;
+        emit ParamsUpdated();
+    }
+
+    /// @inheritdoc IAdvancedTradeVault
     function assertInvariants() external view override {
         _assertInvariants();
     }
 
     // --------------------------------------------
-    //  Internals (wireframe helpers)
+    //  Internals
     // --------------------------------------------
 
-    function _requireSlippage(SlippageBound calldata bound) internal pure {
-        if (bound.amountOutMin == 0 || bound.deadline == 0) revert ZeroSlippageBound();
+    function _requireSlippageExactIn(SlippageBound calldata bound) internal view {
+        if (bound.amountOutMin == 0) revert ZeroSlippageBound();
+        if (bound.deadline == 0 || block.timestamp > bound.deadline) revert DeadlineExpired();
+    }
+
+    function _requireSlippageExactOut(SlippageBound calldata bound) internal view {
+        if (bound.amountInMax == 0) revert ZeroSlippageBound();
+        if (bound.deadline == 0 || block.timestamp > bound.deadline) revert DeadlineExpired();
+    }
+
+    function _requireMark() internal view {
+        if (markPrice == 0) revert MarkNotReady();
+    }
+
+    function _accrueBorrowIndex() internal {
+        uint256 dt = block.timestamp - borrowIndexUpdatedAt;
+        if (dt == 0) return;
+        uint256 apr = BorrowMath.borrowApr(utilization(), curve);
+        borrowIndex = BorrowMath.accrueIndex(borrowIndex, apr, dt);
+        borrowIndexUpdatedAt = block.timestamp;
+    }
+
+    function _accrueBorrowFee(uint256 positionId) internal returns (uint256 feeAmount) {
+        Position storage pos = _positions[positionId];
+        if (!pos.open || pos.side != Side.SHORT) return 0;
+
+        uint256 notional = MarginMath.notional(pos.size, markPrice == 0 ? pos.entryMark : markPrice);
+        feeAmount = BorrowMath.feeOnNotional(notional, pos.borrowIndexSnapshot, borrowIndex);
+        pos.borrowIndexSnapshot = borrowIndex;
+        if (feeAmount == 0) return 0;
+
+        if (feeAmount > pos.collateral) feeAmount = pos.collateral;
+        pos.collateral -= feeAmount;
+
+        uint256 toInsurance = feeAmount / 2;
+        uint256 toTreasury = feeAmount - toInsurance;
+        insuranceBuffer += toInsurance;
+        if (toTreasury > 0) IERC20(collateral).safeTransfer(pbrTreasury, toTreasury);
+
+        emit BorrowFeeAccrued(positionId, feeAmount, utilization());
+    }
+
+    function _swapExactIn(address tokenIn, address tokenOut, uint256 amountIn, SlippageBound calldata bound)
+        internal
+        returns (uint256 amountOut)
+    {
+        address router = swapRouter;
+        if (router == address(0)) revert SwapRouterNotSet();
+
+        IERC20(tokenIn).forceApprove(router, amountIn);
+        amountOut =
+            IVaultSwapRouter(router).swapExactIn(tokenIn, tokenOut, amountIn, bound.amountOutMin, bound.deadline);
+        IERC20(tokenIn).forceApprove(router, 0);
+
+        if (amountOut < bound.amountOutMin) revert SlippageExceeded();
+    }
+
+    /// @dev Buy back exact `size` tokens; spends proceeds then collateral. Returns USDC spent.
+    function _buybackShort(uint256 size, uint256 proceeds, uint256 col, SlippageBound calldata bound)
+        internal
+        returns (uint256 spent)
+    {
+        uint256 budget = proceeds + col;
+        uint256 amountInMax = bound.amountInMax;
+        if (amountInMax > budget) amountInMax = budget;
+        if (amountInMax == 0) revert ZeroSlippageBound();
+
+        spent = _swapExactOut(collateral, playerToken, size, amountInMax, bound.deadline);
+        if (spent > budget) revert InsufficientMargin();
+    }
+
+    function _swapExactOut(address tokenIn, address tokenOut, uint256 amountOut, uint256 amountInMax, uint256 deadline)
+        internal
+        returns (uint256 amountIn)
+    {
+        address router = swapRouter;
+        if (router == address(0)) revert SwapRouterNotSet();
+        if (deadline == 0 || block.timestamp > deadline) revert DeadlineExpired();
+
+        IERC20(tokenIn).forceApprove(router, amountInMax);
+        amountIn = IVaultSwapRouter(router).swapExactOut(tokenIn, tokenOut, amountOut, amountInMax, deadline);
+        IERC20(tokenIn).forceApprove(router, 0);
+
+        if (amountIn > amountInMax) revert SlippageExceeded();
+    }
+
+    function _settleShortClose(
+        uint256 positionId,
+        address account,
+        uint256 size,
+        uint256 proceeds,
+        uint256 col,
+        uint256 buybackCost,
+        address recipient
+    ) internal returns (int256 pnl) {
+        shortOpenInterest -= size;
+        accountShortSize[account] -= size;
+
+        Position storage pos = _positions[positionId];
+        pos.open = false;
+        pos.size = 0;
+        pos.collateral = 0;
+        pos.saleProceeds = 0;
+
+        uint256 assets = proceeds + col;
+        if (assets >= buybackCost) {
+            uint256 surplus = assets - buybackCost;
+            pnl = int256(surplus);
+            if (surplus > 0) IERC20(collateral).safeTransfer(recipient, surplus);
+        } else {
+            pnl = -int256(buybackCost - assets);
+        }
+
+        emit PositionClosed(positionId, account, Side.SHORT, pnl);
     }
 
     function _checkpointFunding(address account, Side side, uint256 sizeBefore, uint256 sizeAfter) internal {
@@ -366,23 +641,20 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
             entryMark: entryMark,
             collateral: 0,
             saleProceeds: 0,
+            borrowIndexSnapshot: borrowIndex,
             openedAt: block.timestamp,
             open: true
         });
         _positionsOf[account].push(positionId);
     }
 
-    /// @dev Inventory conservation + hard cap. Long escrow is a separate ledger.
     function _assertInvariants() internal view {
-        uint256 tokenBal = IERC20(playerToken).balanceOf(address(this));
-        // Idle inventory tokens + tokens backing open shorts conceptually:
-        // physical balance should cover idleInventory + longEscrowed (shorts already sold out).
-        // Full accounting lands with swap paths; hard cap always enforced.
         if (shortOpenInterest > inventorySize) revert InsufficientInventory();
         if (shortOpenInterest > INVENTORY_HARD_CAP) revert InventoryHardCap();
-        if (idleInventory() + longEscrowed > tokenBal) {
-            // Allow during wireframe before seed transfer / swaps are wired — tighten when live.
-        }
-        tokenBal; // silence until strict check enabled
+
+        uint256 tokenBal = IERC20(playerToken).balanceOf(address(this));
+        // Idle inventory tokens remain; long escrow remains; sold shorts have left.
+        // tokenBal == idleInventory + longEscrowed == inventorySize - shortOI + longEscrowed
+        if (tokenBal != inventorySize - shortOpenInterest + longEscrowed) revert InsufficientInventory();
     }
 }

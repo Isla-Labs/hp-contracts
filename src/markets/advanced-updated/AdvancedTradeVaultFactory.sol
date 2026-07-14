@@ -68,6 +68,7 @@ contract AdvancedTradeVaultFactory is IAdvancedTradeVaultFactory, Ownable2Step, 
         address playerToken,
         address collateral,
         address swapRouter,
+        address markSource,
         address fundingController,
         address pbrTreasury,
         uint256 seededInventory
@@ -84,6 +85,7 @@ contract AdvancedTradeVaultFactory is IAdvancedTradeVaultFactory, Ownable2Step, 
                     playerToken: playerToken,
                     collateral: collateral,
                     swapRouter: swapRouter,
+                    markSource: markSource,
                     fundingController: fundingController,
                     pbrTreasury: pbrTreasury,
                     owner: owner(),
@@ -95,7 +97,6 @@ contract AdvancedTradeVaultFactory is IAdvancedTradeVaultFactory, Ownable2Step, 
         vault = address(new BeaconProxy(address(vaultBeacon), initData));
         vaultOf[playerToken] = vault;
 
-        // Seed inventory into the vault (mint allocation path: pull from deployer / treasury)
         IERC20(playerToken).safeTransferFrom(msg.sender, vault, seededInventory);
 
         emit VaultCreated(playerToken, vault, address(vaultBeacon), seededInventory);

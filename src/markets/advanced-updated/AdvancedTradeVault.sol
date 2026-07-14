@@ -52,7 +52,7 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     address public markSource;
     address public override fundingController;
     address public pbrTreasury;
-    address public playerVault;
+    address public override playerVault;
     address public impactEstimator;
     address public owner;
 
@@ -68,7 +68,7 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     uint256 public longEscrowed;
     uint256 public override insuranceBuffer;
     mapping(address account => uint256 size) public accountShortSize;
-    mapping(address account => uint256 size) public accountLongSize;
+    mapping(address account => uint256 size) public override accountLongSize;
 
     // --------------------------------------------
     //  Marks / borrow index
@@ -164,6 +164,12 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     /// @inheritdoc IAdvancedTradeVault
     function idleInventory() public view override returns (uint256) {
         return inventorySize - shortOpenInterest;
+    }
+
+    /// @inheritdoc IAdvancedTradeVault
+    function inventoryHardCapHeadroom() public view override returns (uint256) {
+        if (inventorySize >= INVENTORY_HARD_CAP) return 0;
+        return INVENTORY_HARD_CAP - inventorySize;
     }
 
     /// @inheritdoc IAdvancedTradeVault

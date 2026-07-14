@@ -94,6 +94,11 @@ interface IAdvancedTradeVault {
     function marginParams() external view returns (MarginParams memory);
     function insuranceBuffer() external view returns (uint256);
     function isLiquidatable(uint256 positionId) external view returns (bool);
+    function accountLongSize(address account) external view returns (uint256);
+    function playerVault() external view returns (address);
+
+    /// @notice Remaining capacity under `INVENTORY_HARD_CAP` for governed inventory expansion.
+    function inventoryHardCapHeadroom() external view returns (uint256);
 
     // --------------------------------------------
     //  Lifecycle — Long
@@ -104,7 +109,7 @@ interface IAdvancedTradeVault {
         external
         returns (uint256 positionId, uint256 size);
 
-    /// @notice Open long: deposit already-held player tokens into escrow (rotation path).
+    /// @notice Open long: deposit already-held player tokens into escrow (manual directional path).
     function openLongTokens(uint256 tokenAmount) external returns (uint256 positionId);
 
     /// @notice Close long via sell-to-USDC or return-tokens.
@@ -146,7 +151,7 @@ interface IAdvancedTradeVault {
 
     function initialize(VaultInitParams calldata params) external;
 
-    /// @notice Expand inventorySize toward INVENTORY_HARD_CAP (Phase 3 lending; tokens pulled from `from`).
+    /// @notice Expand inventorySize toward INVENTORY_HARD_CAP (governance; tokens pulled from `from`).
     function expandInventory(uint256 amount, address from) external;
 
     function setFundingController(address fundingController_) external;

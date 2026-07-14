@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 /**
  * @title IVaultSwapRouter
- * @notice Minimal swap surface used by AdvancedTradeVault until HPSwapRouter is wired.
+ * @notice Minimal swap surface used by AdvancedTradeVault. Implemented by `HPSwapRouter`.
  * @dev Router pulls input tokens from the vault (via allowance) and returns output to the vault.
  */
 interface IVaultSwapRouter {

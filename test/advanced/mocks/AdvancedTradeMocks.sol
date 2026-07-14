@@ -7,6 +7,9 @@ import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { IVaultSwapRouter } from "../../../src/markets/advanced-updated/interfaces/IVaultSwapRouter.sol";
 import { IMarkSource } from "../../../src/markets/advanced-updated/interfaces/IMarkSource.sol";
+import { IPlayerVault } from "../../../src/markets/advanced-updated/interfaces/IPlayerVault.sol";
+import { IImpactEstimator } from "../../../src/markets/advanced-updated/interfaces/IImpactEstimator.sol";
+import { ILiquiditySource } from "../../../src/markets/advanced-updated/interfaces/ILiquiditySource.sol";
 
 /// @dev Simple mintable ERC20 for tests (18 decimals).
 contract MockERC20 is ERC20 {
@@ -31,6 +34,46 @@ contract MockMarkSource is IMarkSource {
 
     function spotPriceWad() external view returns (uint256) {
         return spot;
+    }
+}
+
+contract MockPlayerVault is IPlayerVault {
+    mapping(address => uint256) public stakes;
+
+    function setStaked(address account, uint256 amount) external {
+        stakes[account] = amount;
+    }
+
+    function stakedBalance(address account) external view returns (uint256) {
+        return stakes[account];
+    }
+}
+
+contract MockImpactEstimator is IImpactEstimator {
+    uint256 public impactWad;
+
+    constructor(uint256 impactWad_) {
+        impactWad = impactWad_;
+    }
+
+    function setImpact(uint256 impactWad_) external {
+        impactWad = impactWad_;
+    }
+
+    function estimateCloseImpactWad(address, uint256) external view returns (uint256) {
+        return impactWad;
+    }
+}
+
+contract MockLiquiditySource is ILiquiditySource {
+    mapping(address => uint256) public liq;
+
+    function setLiq(address playerToken, uint256 amount) external {
+        liq[playerToken] = amount;
+    }
+
+    function liquidityUsd(address playerToken) external view returns (uint256) {
+        return liq[playerToken];
     }
 }
 

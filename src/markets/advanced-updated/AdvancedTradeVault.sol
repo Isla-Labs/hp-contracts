@@ -8,7 +8,9 @@ import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { IAdvancedTradeVault } from "./interfaces/IAdvancedTradeVault.sol";
 import { IFundingController } from "./interfaces/IFundingController.sol";
+import { IImpactEstimator } from "./interfaces/IImpactEstimator.sol";
 import { IMarkSource } from "./interfaces/IMarkSource.sol";
+import { IPlayerVault } from "./interfaces/IPlayerVault.sol";
 import { IVaultSwapRouter } from "./interfaces/IVaultSwapRouter.sol";
 import { BorrowMath } from "./libraries/BorrowMath.sol";
 import { MarginMath } from "./libraries/MarginMath.sol";
@@ -50,6 +52,8 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     address public markSource;
     address public override fundingController;
     address public pbrTreasury;
+    address public playerVault;
+    address public impactEstimator;
     address public owner;
 
     /// @notice EMA half-life in seconds (launch: 5 minutes)
@@ -64,6 +68,7 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     uint256 public longEscrowed;
     uint256 public override insuranceBuffer;
     mapping(address account => uint256 size) public accountShortSize;
+    mapping(address account => uint256 size) public accountLongSize;
 
     // --------------------------------------------
     //  Marks / borrow index
@@ -214,9 +219,11 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         IERC20(collateral).safeTransferFrom(msg.sender, address(this), usdcIn);
         size = _swapExactIn(collateral, playerToken, usdcIn, bound);
 
+        uint256 sizeBefore = accountLongSize[msg.sender];
         longEscrowed += size;
+        accountLongSize[msg.sender] = sizeBefore + size;
         positionId = _openPosition(msg.sender, Side.LONG, LongOpenMode.USDC_IN, size, markPrice);
-        _checkpointFunding(msg.sender, Side.LONG, 0, size);
+        _checkpointFunding(msg.sender, Side.LONG, sizeBefore, sizeBefore + size);
 
         emit LongOpened(positionId, msg.sender, size, markPrice, uint8(LongOpenMode.USDC_IN));
         _assertInvariants();
@@ -226,13 +233,17 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     function openLongTokens(uint256 tokenAmount) external override nonReentrant returns (uint256 positionId) {
         if (tokenAmount == 0) revert ZeroAmount();
         _requireMark();
+        _requireNotStaked(msg.sender);
         _accrueBorrowIndex();
 
         IERC20(playerToken).safeTransferFrom(msg.sender, address(this), tokenAmount);
+
+        uint256 sizeBefore = accountLongSize[msg.sender];
         longEscrowed += tokenAmount;
+        accountLongSize[msg.sender] = sizeBefore + tokenAmount;
 
         positionId = _openPosition(msg.sender, Side.LONG, LongOpenMode.TOKEN_DEPOSIT, tokenAmount, markPrice);
-        _checkpointFunding(msg.sender, Side.LONG, 0, tokenAmount);
+        _checkpointFunding(msg.sender, Side.LONG, sizeBefore, sizeBefore + tokenAmount);
 
         emit LongOpened(positionId, msg.sender, tokenAmount, markPrice, uint8(LongOpenMode.TOKEN_DEPOSIT));
         _assertInvariants();
@@ -251,7 +262,10 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         if (pos.side != Side.LONG) revert InvalidSide();
 
         uint256 size = pos.size;
-        _checkpointFunding(msg.sender, Side.LONG, size, 0);
+        uint256 sizeBefore = accountLongSize[msg.sender];
+        uint256 sizeAfter = sizeBefore - size;
+        accountLongSize[msg.sender] = sizeAfter;
+        _checkpointFunding(msg.sender, Side.LONG, sizeBefore, sizeAfter);
 
         longEscrowed -= size;
         pos.open = false;
@@ -298,12 +312,14 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         // Sell inventory into the pool (real sell pressure)
         saleProceeds = _swapExactIn(playerToken, collateral, size, bound);
 
-        if (!MarginMath.meetsInitialMargin(collateralIn, saleProceeds, size, markPrice, margins)) {
+        uint256 impact = _closeImpactWad(size);
+        if (!MarginMath.meetsInitialMarginWithImpact(collateralIn, saleProceeds, size, markPrice, margins, impact)) {
             revert InsufficientMargin();
         }
 
+        uint256 sizeBefore = accountShortSize[msg.sender];
         shortOpenInterest += size;
-        accountShortSize[msg.sender] += size;
+        accountShortSize[msg.sender] = sizeBefore + size;
 
         positionId = _openPosition(msg.sender, Side.SHORT, LongOpenMode.USDC_IN, size, markPrice);
         Position storage pos = _positions[positionId];
@@ -311,7 +327,7 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         pos.saleProceeds = saleProceeds;
         pos.borrowIndexSnapshot = borrowIndex;
 
-        _checkpointFunding(msg.sender, Side.SHORT, 0, size);
+        _checkpointFunding(msg.sender, Side.SHORT, sizeBefore, sizeBefore + size);
 
         emit ShortOpened(positionId, msg.sender, size, collateralIn, saleProceeds, markPrice);
         _assertInvariants();
@@ -338,10 +354,14 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         uint256 col = pos.collateral;
         address account = pos.owner;
 
-        _checkpointFunding(account, Side.SHORT, size, 0);
+        uint256 sizeBefore = accountShortSize[account];
+        uint256 sizeAfter = sizeBefore - size;
+        accountShortSize[account] = sizeAfter;
+        _checkpointFunding(account, Side.SHORT, sizeBefore, sizeAfter);
 
         uint256 buybackCost = _buybackShort(size, proceeds, col, bound);
-        pnl = _settleShortClose(positionId, account, size, proceeds, col, buybackCost, account);
+        // accountShortSize already updated; _settleShortClose must not double-decrement
+        pnl = _settleShortClose(positionId, account, size, proceeds, col, buybackCost, account, false);
 
         _assertInvariants();
     }
@@ -375,16 +395,41 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         address account = pos.owner;
         uint256 notional_ = MarginMath.notional(size, markPrice);
 
-        _checkpointFunding(account, Side.SHORT, size, 0);
+        uint256 sizeBefore = accountShortSize[account];
+        uint256 sizeAfter = sizeBefore - size;
+        accountShortSize[account] = sizeAfter;
+        _checkpointFunding(account, Side.SHORT, sizeBefore, sizeAfter);
 
         uint256 budget = proceeds + col + insuranceBuffer;
         uint256 amountInMax = bound.amountInMax;
         if (amountInMax > budget) amountInMax = budget;
 
-        uint256 spent = _swapExactOut(collateral, playerToken, size, amountInMax, bound.deadline);
+        uint256 spent;
+        uint256 bought;
+        uint256 estCost = (MarginMath.buybackCost(size, markPrice) * 105) / 100;
+
+        if (estCost <= amountInMax) {
+            spent = _swapExactOut(collateral, playerToken, size, amountInMax, bound.deadline);
+            bought = size;
+        } else {
+            // Bad debt path: spend full budget exact-in for whatever inventory can be restored
+            if (budget == 0) {
+                bought = 0;
+                spent = 0;
+            } else {
+                SlippageBound memory inBound =
+                    SlippageBound({ amountOutMin: 1, amountInMax: 0, deadline: bound.deadline });
+                uint256 balBefore = IERC20(playerToken).balanceOf(address(this));
+                uint256 usdcBefore = IERC20(collateral).balanceOf(address(this));
+                _swapExactIn(collateral, playerToken, budget, inBound);
+                bought = IERC20(playerToken).balanceOf(address(this)) - balBefore;
+                spent = usdcBefore - IERC20(collateral).balanceOf(address(this));
+            }
+        }
 
         if (spent > proceeds + col) {
             uint256 insuranceUsed = spent - proceeds - col;
+            if (insuranceUsed > insuranceBuffer) insuranceUsed = insuranceBuffer;
             insuranceBuffer -= insuranceUsed;
             col = 0;
             proceeds = 0;
@@ -395,8 +440,13 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
             proceeds -= spent;
         }
 
+        uint256 shortfall = size - bought;
+        if (shortfall > 0) {
+            inventorySize -= shortfall;
+            emit InventoryWrittenOff(shortfall, inventorySize);
+        }
+
         shortOpenInterest -= size;
-        accountShortSize[account] -= size;
 
         uint256 residual = col + proceeds;
         uint256 bounty = (notional_ * margins.liquidationBountyWad) / WAD;
@@ -430,6 +480,14 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         markPrice = mark;
         markUpdatedAt = block.timestamp;
         emit MarkUpdated(mark, spot, block.timestamp);
+    }
+
+    /// @inheritdoc IAdvancedTradeVault
+    function claimFunding() external override nonReentrant returns (uint256 amount) {
+        address fc = fundingController;
+        if (fc == address(0)) revert ZeroAddress();
+        amount = IFundingController(payable(fc)).claim(address(this), msg.sender);
+        emit FundingClaimed(msg.sender, amount);
     }
 
     // --------------------------------------------
@@ -498,6 +556,20 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
     }
 
     /// @inheritdoc IAdvancedTradeVault
+    function setPlayerVault(address playerVault_) external override onlyOwner {
+        address previous = playerVault;
+        playerVault = playerVault_;
+        emit PlayerVaultUpdated(previous, playerVault_);
+    }
+
+    /// @inheritdoc IAdvancedTradeVault
+    function setImpactEstimator(address impactEstimator_) external override onlyOwner {
+        address previous = impactEstimator;
+        impactEstimator = impactEstimator_;
+        emit ImpactEstimatorUpdated(previous, impactEstimator_);
+    }
+
+    /// @inheritdoc IAdvancedTradeVault
     function assertInvariants() external view override {
         _assertInvariants();
     }
@@ -518,6 +590,19 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
 
     function _requireMark() internal view {
         if (markPrice == 0) revert MarkNotReady();
+    }
+
+    function _requireNotStaked(address account) internal view {
+        address pv = playerVault;
+        if (pv == address(0)) return;
+        if (IPlayerVault(pv).stakedBalance(account) > 0) revert StakedInPlayerVault();
+    }
+
+    function _closeImpactWad(uint256 size) internal view returns (uint256) {
+        address est = impactEstimator;
+        if (est == address(0)) return margins.maxCloseImpactWad;
+        uint256 impact = IImpactEstimator(est).estimateCloseImpactWad(playerToken, size);
+        return impact > margins.maxCloseImpactWad ? impact : margins.maxCloseImpactWad;
     }
 
     function _accrueBorrowIndex() internal {
@@ -548,7 +633,7 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         emit BorrowFeeAccrued(positionId, feeAmount, utilization());
     }
 
-    function _swapExactIn(address tokenIn, address tokenOut, uint256 amountIn, SlippageBound calldata bound)
+    function _swapExactIn(address tokenIn, address tokenOut, uint256 amountIn, SlippageBound memory bound)
         internal
         returns (uint256 amountOut)
     {
@@ -599,10 +684,13 @@ contract AdvancedTradeVault is IAdvancedTradeVault, Initializable, ReentrancyGua
         uint256 proceeds,
         uint256 col,
         uint256 buybackCost,
-        address recipient
+        address recipient,
+        bool decrementAccount
     ) internal returns (int256 pnl) {
         shortOpenInterest -= size;
-        accountShortSize[account] -= size;
+        if (decrementAccount) {
+            accountShortSize[account] -= size;
+        }
 
         Position storage pos = _positions[positionId];
         pos.open = false;

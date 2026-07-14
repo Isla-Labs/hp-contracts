@@ -53,7 +53,18 @@ library MarginMath {
         uint256 mark,
         MarginParams memory m
     ) internal pure returns (bool) {
-        int256 eq = equityAfterImpact(collateral, saleProceeds, size, mark, m.maxCloseImpactWad);
+        return meetsInitialMarginWithImpact(collateral, saleProceeds, size, mark, m, m.maxCloseImpactWad);
+    }
+
+    function meetsInitialMarginWithImpact(
+        uint256 collateral,
+        uint256 saleProceeds,
+        uint256 size,
+        uint256 mark,
+        MarginParams memory m,
+        uint256 closeImpactWad
+    ) internal pure returns (bool) {
+        int256 eq = equityAfterImpact(collateral, saleProceeds, size, mark, closeImpactWad);
         uint256 need = requiredMargin(size, mark, m.initialMarginWad);
         return eq >= int256(need);
     }

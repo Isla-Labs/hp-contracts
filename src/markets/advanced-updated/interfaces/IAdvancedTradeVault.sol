@@ -46,7 +46,10 @@ interface IAdvancedTradeVault {
     event FundingControllerUpdated(address indexed previous, address indexed next);
     event SwapRouterUpdated(address indexed previous, address indexed next);
     event MarkSourceUpdated(address indexed previous, address indexed next);
+    event PlayerVaultUpdated(address indexed previous, address indexed next);
+    event ImpactEstimatorUpdated(address indexed previous, address indexed next);
     event ParamsUpdated();
+    event FundingClaimed(address indexed user, uint256 amount);
 
     // --------------------------------------------
     //  Errors
@@ -69,6 +72,7 @@ interface IAdvancedTradeVault {
     error MarkNotReady();
     error SwapRouterNotSet();
     error SlippageExceeded();
+    error StakedInPlayerVault();
     error Wireframe(); // residual stubs only
 
     // --------------------------------------------
@@ -133,6 +137,9 @@ interface IAdvancedTradeVault {
     /// @notice Refresh EMA mark from pool (permissionless poke).
     function updateMark() external returns (uint256 mark);
 
+    /// @notice Claim accrued Phase 2 funding for caller via FundingController.
+    function claimFunding() external returns (uint256 amount);
+
     // --------------------------------------------
     //  Admin / governance
     // --------------------------------------------
@@ -149,6 +156,8 @@ interface IAdvancedTradeVault {
     function setSwapRouter(address swapRouter_) external;
     function setMarkSource(address markSource_) external;
     function setMarkHalfLife(uint256 halfLifeSeconds) external;
+    function setPlayerVault(address playerVault_) external;
+    function setImpactEstimator(address impactEstimator_) external;
 
     /// @notice End-of-call invariant check (also invoked internally after state mutations).
     function assertInvariants() external view;

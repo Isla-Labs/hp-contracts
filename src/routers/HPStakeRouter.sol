@@ -6,7 +6,7 @@ import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 
 import { AssetRegistry } from "../AssetRegistry.sol";
-import { AssetData } from "../base/global/types/AssetTypes.sol";
+import { AssetData } from "@base/global/types/AssetTypes.sol";
 import { IAdvancedTradeVault } from "../markets/advanced-updated/interfaces/IAdvancedTradeVault.sol";
 import { IPlayerVault } from "../vaults/interfaces/IPlayerVault.sol";
 import { IHPStakeRouter } from "./interfaces/IHPStakeRouter.sol";
@@ -75,9 +75,9 @@ contract HPStakeRouter is IHPStakeRouter, ReentrancyGuard {
     }
 
     function _requireNotEscrowed(IPlayerVault vault, address account) internal view {
-        address at = vault.advancedTradeVault();
-        if (at == address(0)) return;
-        if (IAdvancedTradeVault(at).accountLongSize(account) > 0) {
+        address atv = vault.advancedTradeVault();
+        if (atv == address(0)) return;
+        if (IAdvancedTradeVault(atv).accountLongSize(account) > 0) {
             revert IPlayerVault.EscrowedInAdvancedTrade();
         }
     }

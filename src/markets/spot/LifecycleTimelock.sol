@@ -4,8 +4,28 @@ pragma solidity ^0.8.34;
 import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Ownable2Step } from "@openzeppelin/access/Ownable2Step.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
+import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
+import { IPoolManager } from "@v4-core/interfaces/IPoolManager.sol";
+import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
-import { DN404CreateParams } from "../../base/global/types/AssetTypes.sol";
+import {
+    AdvancedTradeData,
+    AssetData,
+    DN404CreateParams,
+    MarketStatus,
+    PlayerVaultData,
+    RegistryData,
+    SpotMarketData
+} from "@base/global/types/AssetTypes.sol";
+import { AssetRegistry } from "../../AssetRegistry.sol";
+import { IAdvancedTradeVault } from "../advanced-updated/interfaces/IAdvancedTradeVault.sol";
+import { IAdvancedTradeVaultFactory } from "../advanced-updated/interfaces/IAdvancedTradeVaultFactory.sol";
+import { IFundingController } from "../advanced-updated/interfaces/IFundingController.sol";
+import { PoolMarkSource } from "../advanced-updated/oracles/PoolMarkSource.sol";
+import { SEEDED_INVENTORY } from "../advanced-updated/types/AdvancedTradeTypes.sol";
+import { IPlayerVault } from "../../vaults/interfaces/IPlayerVault.sol";
+import { IPlayerVaultFactory } from "../../vaults/interfaces/IPlayerVaultFactory.sol";
 import { FeeRouter } from "./FeeRouter.sol";
 import { FeeRouterFactory } from "./FeeRouterFactory.sol";
 
@@ -17,11 +37,19 @@ import { FeeRouterFactory } from "./FeeRouterFactory.sol";
  *      Remains the Ownable owner of each FeeRouter so `setPbrTreasury` can be executed from
  *      `transferQueue` after the waiting period.
  *
- *      Deploy order: LifecycleTimelock → FeeRouterFactory(this) → setFeeRouterFactory.
+ *      Deploy order: LifecycleTimelock → FeeRouterFactory(this) → setFeeRouterFactory
+ *      → AdvancedTradeVaultFactory(this) → setAdvancedTradeVaultFactory → set collateral /
+ *      poolManager / assetRegistry / swapRouter / impactEstimator → setAirlock.
+ *
+ *      Per-market execute path: Doppler → FeeRouter → PoolMarkSource → AdvancedTradeVault
+ *      (1M seed) → PlayerVault → vault wiring → FundingController.registerMarket → AssetRegistry.
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     // --------------------------------------------
     //  Constants
     // --------------------------------------------
@@ -36,17 +64,32 @@ contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
     /// @notice Factory that deploys per-market FeeRouters owned by this timelock
     FeeRouterFactory public feeRouterFactory;
 
-    /// @notice Platform FRTreasury passed through to each FeeRouter
+    /// @notice Platform FundingController / FRT — FeeRouter `atFunding` + vault fundingController
     address public immutable atFunding;
 
     /// @notice PlayerVaultFactory — wire once implemented
     address public playerVaultFactory;
 
-    /// @notice AdvancedTradeVaultFactory — wire once implemented
-    address public advancedTradeVaultFactory;
+    /// @notice AdvancedTradeVaultFactory (beacon owner = this timelock)
+    IAdvancedTradeVaultFactory public advancedTradeVaultFactory;
 
     /// @notice Doppler Airlock — wire once CreateParams encoding is finalized
     address public airlock;
+
+    /// @notice AssetRegistry for pool keys + AdvancedTrade discovery
+    AssetRegistry public assetRegistry;
+
+    /// @notice Uniswap V4 PoolManager (PoolMarkSource)
+    IPoolManager public poolManager;
+
+    /// @notice USDC (or launch collateral) for AdvancedTradeVault
+    address public collateral;
+
+    /// @notice Shared IVaultSwapRouter for AdvancedTradeVault
+    address public swapRouter;
+
+    /// @notice Shared PoolImpactEstimator (optional; address(0) skips wiring)
+    address public impactEstimator;
 
     // --------------------------------------------
     //  Queue types
@@ -96,7 +139,8 @@ contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
         address indexed market,
         address feeRouter,
         address playerVault,
-        address advancedTradeVault
+        address advancedTradeVault,
+        address markSource
     );
     event DeploymentCancelled(bytes32 indexed requestId);
 
@@ -114,6 +158,11 @@ contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
     event PlayerVaultFactoryUpdated(address indexed factory);
     event AdvancedTradeVaultFactoryUpdated(address indexed factory);
     event AirlockUpdated(address indexed airlock);
+    event AssetRegistryUpdated(address indexed registry);
+    event PoolManagerUpdated(address indexed poolManager);
+    event CollateralUpdated(address indexed collateral);
+    event SwapRouterUpdated(address indexed swapRouter);
+    event ImpactEstimatorUpdated(address indexed impactEstimator);
 
     error ZeroAddress();
     error AlreadyQueued();
@@ -122,6 +171,7 @@ contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
     error AlreadyCancelled();
     error DelayNotElapsed(uint256 eta, uint256 currentTimestamp);
     error FactoryNotConfigured();
+    error InsufficientSeedInventory(uint256 have, uint256 need);
 
     // --------------------------------------------
     //  Initialization
@@ -129,7 +179,7 @@ contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
 
     /**
      * @param initialOwner Admin that may queue/cancel requests (platform ops until trustless path lands).
-     * @param atFunding_ FRTreasury address forwarded into each FeeRouter.
+     * @param atFunding_ FundingController / FRT forwarded into each FeeRouter and AdvancedTradeVault.
      */
     constructor(address initialOwner, address atFunding_) Ownable(initialOwner) {
         if (atFunding_ == address(0)) revert ZeroAddress();
@@ -137,7 +187,7 @@ contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
     }
 
     // --------------------------------------------
-    //  Factory wiring
+    //  Factory / dependency wiring
     // --------------------------------------------
 
     function setFeeRouterFactory(address factory) external onlyOwner {
@@ -152,13 +202,42 @@ contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
     }
 
     function setAdvancedTradeVaultFactory(address factory) external onlyOwner {
-        advancedTradeVaultFactory = factory;
+        if (factory == address(0)) revert ZeroAddress();
+        advancedTradeVaultFactory = IAdvancedTradeVaultFactory(factory);
         emit AdvancedTradeVaultFactoryUpdated(factory);
     }
 
     function setAirlock(address airlock_) external onlyOwner {
         airlock = airlock_;
         emit AirlockUpdated(airlock_);
+    }
+
+    function setAssetRegistry(address registry) external onlyOwner {
+        if (registry == address(0)) revert ZeroAddress();
+        assetRegistry = AssetRegistry(registry);
+        emit AssetRegistryUpdated(registry);
+    }
+
+    function setPoolManager(address poolManager_) external onlyOwner {
+        if (poolManager_ == address(0)) revert ZeroAddress();
+        poolManager = IPoolManager(poolManager_);
+        emit PoolManagerUpdated(poolManager_);
+    }
+
+    function setCollateral(address collateral_) external onlyOwner {
+        if (collateral_ == address(0)) revert ZeroAddress();
+        collateral = collateral_;
+        emit CollateralUpdated(collateral_);
+    }
+
+    function setSwapRouter(address swapRouter_) external onlyOwner {
+        swapRouter = swapRouter_;
+        emit SwapRouterUpdated(swapRouter_);
+    }
+
+    function setImpactEstimator(address impactEstimator_) external onlyOwner {
+        impactEstimator = impactEstimator_;
+        emit ImpactEstimatorUpdated(impactEstimator_);
     }
 
     // --------------------------------------------
@@ -207,72 +286,137 @@ contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
     }
 
     /**
-     * @notice Executes a ready deployment: Doppler + AdvancedTradeVault + FeeRouter + PlayerVault.
-     * @dev Incomplete factories are left as commented integration points. FeeRouter ownership stays
-     *      with this timelock via FeeRouterFactory.
+     * @notice Executes a ready deployment: Doppler → FeeRouter → PoolMarkSource → AdvancedTradeVault
+     *         → PlayerVault → FundingController registration → AssetRegistry.
+     * @dev This timelock must hold `SEEDED_INVENTORY` (1M) of the new player token before
+     *      AdvancedTradeVaultFactory.create pulls the short-side seed (20:1:1 allocation).
      */
     function executeDeployment(bytes32 requestId)
         external
         nonReentrant
-        returns (address market, address feeRouter, address playerVault, address advancedTradeVault)
+        returns (
+            address market,
+            address feeRouter,
+            address playerVault,
+            address advancedTradeVault,
+            address markSource
+        )
     {
         DeploymentRequest storage request = deploymentQueue[requestId];
         _requireExecutable(request.exists, request.executed, request.cancelled, request.eta);
-
-        if (address(feeRouterFactory) == address(0)) revert FactoryNotConfigured();
-        // Doppler Airlock is required before a real market address exists for downstream factories.
-        if (airlock == address(0)) revert FactoryNotConfigured();
+        _requireDeployDeps();
 
         request.executed = true;
 
         DN404CreateParams memory metadata = request.metadata;
         address pbrTreasury = request.pbrTreasury;
+        PoolKey memory activePool;
 
         // --------------------------------------------------
-        // 1) Doppler (Airlock.create)
+        // 1) Doppler (Airlock.create) — returns market + pool
         // --------------------------------------------------
-        // `metadata` is the canonized DN404 / market identity portion of CreateParams
-        // (playerId, leagueId, name, symbol, salt). Full Airlock CreateParams — initializer,
-        // migrator data with buybackDst = feeRouter, governance factory, numeraire, etc. —
-        // will be assembled here once Doppler wiring is finalized.
+        // `metadata` is the canonized DN404 / market identity portion of CreateParams.
+        // Full Airlock CreateParams (initializer, migrator data with buybackDst = feeRouter
+        // predicted via CREATE2, governance factory, numeraire, etc.) will be assembled here
+        // once Doppler wiring is finalized. Prefer CREATE2-predict FeeRouter so buybackDst
+        // can be set at migrate time; otherwise attach FeeRouter via setDopplerHook after.
         //
-        // (market,,,,,,) = IAirlock(airlock).create(
-        //     CreateParams({
-        //         /* tokenFactoryData encodes metadata.name / symbol / salt / ... */
-        //         salt: metadata.salt,
-        //         ...
-        //     })
-        // );
-        metadata; // canonized onchain via deploymentQueue; used when Airlock create is wired
-
-        // --------------------------------------------------
-        // 2) AdvancedTradeVault
-        // --------------------------------------------------
-        // if (advancedTradeVaultFactory == address(0)) revert FactoryNotConfigured();
-        // advancedTradeVault = IAdvancedTradeVaultFactory(advancedTradeVaultFactory).create(market);
-
-        // --------------------------------------------------
-        // 3) FeeRouter — this timelock remains owner for transferQueue / setPbrTreasury
-        // --------------------------------------------------
-        // feeRouter = feeRouterFactory.create(market, atFunding, pbrTreasury);
-
-        // --------------------------------------------------
-        // 4) PlayerVault
-        // --------------------------------------------------
-        // if (playerVaultFactory == address(0)) revert FactoryNotConfigured();
-        // playerVault = IPlayerVaultFactory(playerVaultFactory).create(market);
-
-        // --------------------------------------------------
-        // 5) AssetRegistry.createAsset(...) — wire once registry auth is defined
-        // --------------------------------------------------
+        // (market, …, activePool) = IAirlock(airlock).create(CreateParams({ … salt: metadata.salt … }));
+        metadata; // held in deploymentQueue until Airlock create is wired
+        activePool; // assigned from Doppler create result
 
         if (market == address(0)) revert FactoryNotConfigured();
 
-        // Unreachable until Doppler create assigns `market`; keeps the intended call order explicit.
-        feeRouter = feeRouterFactory.create(market, atFunding, pbrTreasury);
-        pbrTreasury;
+        // --------------------------------------------------
+        // 2–7) Post-Doppler stack
+        // --------------------------------------------------
+        (feeRouter, playerVault, advancedTradeVault, markSource) =
+            _deployMarketStack(market, activePool, pbrTreasury, metadata);
 
-        emit DeploymentExecuted(requestId, market, feeRouter, playerVault, advancedTradeVault);
+        emit DeploymentExecuted(requestId, market, feeRouter, playerVault, advancedTradeVault, markSource);
+    }
+
+    /**
+     * @dev FeeRouter → PoolMarkSource → AdvancedTradeVault (seeded) → PlayerVault → wire →
+     *      FundingController.registerMarket → AssetRegistry.createAsset.
+     */
+    function _deployMarketStack(
+        address market,
+        PoolKey memory activePool,
+        address pbrTreasury,
+        DN404CreateParams memory metadata
+    )
+        internal
+        returns (address feeRouter, address playerVault, address advancedTradeVault, address markSource)
+    {
+        // 2) FeeRouter — this timelock remains owner for transferQueue / setPbrTreasury
+        feeRouter = feeRouterFactory.create(market, atFunding, pbrTreasury);
+
+        // 3) Per-market mark reader (registry pool key must be written before first spot read)
+        markSource = address(new PoolMarkSource(assetRegistry, poolManager, market));
+
+        // 4) AdvancedTradeVault — pull 1M short inventory from this timelock
+        uint256 seed = SEEDED_INVENTORY;
+        uint256 bal = IERC20(market).balanceOf(address(this));
+        if (bal < seed) revert InsufficientSeedInventory(bal, seed);
+
+        IERC20(market).forceApprove(address(advancedTradeVaultFactory), seed);
+        advancedTradeVault = advancedTradeVaultFactory.create(
+            market,
+            collateral,
+            swapRouter,
+            markSource,
+            atFunding, // FundingController
+            pbrTreasury,
+            seed
+        );
+        IERC20(market).forceApprove(address(advancedTradeVaultFactory), 0);
+
+        if (impactEstimator != address(0)) {
+            IAdvancedTradeVault(advancedTradeVault).setImpactEstimator(impactEstimator);
+        }
+
+        // 5) PlayerVault — bidirectional exclusivity wiring
+        if (playerVaultFactory != address(0)) {
+            playerVault = IPlayerVaultFactory(playerVaultFactory).create(market);
+            IAdvancedTradeVault(advancedTradeVault).setPlayerVault(playerVault);
+            IPlayerVault(playerVault).setAdvancedTradeVault(advancedTradeVault);
+        }
+
+        // 6) FundingController — register for Phase 2 checkpoints (grace until setGrace(false))
+        IFundingController(payable(atFunding)).registerMarket(advancedTradeVault, market);
+
+        // 7) AssetRegistry — canonize market discovery (pool key from Doppler)
+        assetRegistry.createAsset(
+            market,
+            AssetData({
+                playerId: metadata.playerId,
+                leagueId: metadata.leagueId,
+                token: market,
+                symbol: metadata.symbol,
+                registryData: RegistryData({
+                    spotMarketData: SpotMarketData({
+                        activePool: activePool,
+                        hookDoppler: address(0),
+                        hookMigrator: address(0),
+                        feeRouter: feeRouter
+                    }),
+                    advancedTradeData: AdvancedTradeData({
+                        advancedTradeVault: advancedTradeVault,
+                        markSource: markSource
+                    }),
+                    playerVaultData: PlayerVaultData({
+                        playerVault: playerVault,
+                        stToken: playerVault == address(0) ? address(0) : IPlayerVault(playerVault).stToken(),
+                        isUtilized: playerVault != address(0)
+                    }),
+                    deployedAt: block.timestamp,
+                    graduatedAt: 0,
+                    deactivatedAt: 0
+                }),
+                marketStatus: MarketStatus.BONDING
+            })
+        );
     }
 
     function cancelDeployment(bytes32 requestId) external onlyOwner {
@@ -342,6 +486,15 @@ contract LifecycleTimelock is Ownable2Step, ReentrancyGuard {
     // --------------------------------------------
     //  Views / helpers
     // --------------------------------------------
+
+    function _requireDeployDeps() internal view {
+        if (address(feeRouterFactory) == address(0)) revert FactoryNotConfigured();
+        if (airlock == address(0)) revert FactoryNotConfigured();
+        if (address(advancedTradeVaultFactory) == address(0)) revert FactoryNotConfigured();
+        if (address(assetRegistry) == address(0)) revert FactoryNotConfigured();
+        if (address(poolManager) == address(0)) revert FactoryNotConfigured();
+        if (collateral == address(0)) revert FactoryNotConfigured();
+    }
 
     function _deploymentId(DN404CreateParams calldata metadata, address pbrTreasury)
         internal

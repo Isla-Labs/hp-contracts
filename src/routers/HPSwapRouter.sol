@@ -13,7 +13,7 @@ import { Currency, CurrencyLibrary } from "@v4-core/types/Currency.sol";
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
 import { AssetRegistry } from "../AssetRegistry.sol";
-import { AssetData } from "../base/global/types/AssetTypes.sol";
+import { AssetData } from "@base/global/types/AssetTypes.sol";
 import { IVaultSwapRouter } from "../markets/advanced-updated/interfaces/IVaultSwapRouter.sol";
 import { PoolPricing } from "../markets/advanced-updated/oracles/libraries/PoolPricing.sol";
 

@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
+/**
+ * @title TournamentTypesSimple
+ * @notice Lighter league schema for UIs / offchain indexing that do not need full round trees.
+ * @dev Kept in sync with `TournamentTypes` on shared matchweek fields (`fixtureUuids`).
+ */
+
 struct LeagueData {
     bytes32 leagueId;
     address pbrTreasury;
@@ -39,4 +45,5 @@ struct ActiveMatchweek {
     uint16 activeMatchweek;
     uint256 unixStartTime;
     uint256 unixEndTime;
+    bytes32[] fixtureUuids;
 }

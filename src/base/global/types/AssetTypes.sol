@@ -3,6 +3,11 @@ pragma solidity ^0.8.34;
 
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
+/**
+ * @title AssetTypes
+ * @notice Onchain market discovery schema for `AssetRegistry`.
+ */
+
 struct AssetData {
     bytes32 playerId;
     bytes32 leagueId;

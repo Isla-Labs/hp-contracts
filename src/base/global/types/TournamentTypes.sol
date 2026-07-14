@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.34;
 
+/**
+ * @title TournamentTypes
+ * @notice Onchain league / season / matchweek schema for `TournamentRegistry`.
+ */
+
 struct LeagueData {
     bytes32 leagueId;
     address pbrTreasury;
@@ -22,6 +27,8 @@ struct ActiveMatchweek {
     uint16 activeMatchweek;
     uint256 unixStartTime;
     uint256 unixEndTime;
+    /// @notice Fixture set published at matchweek start (`trustlessPpm.md` MatchweekRegistry).
+    bytes32[] fixtureUuids;
 }
 
 // --------------------------------------------

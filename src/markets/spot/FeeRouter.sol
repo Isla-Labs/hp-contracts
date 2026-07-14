@@ -82,6 +82,31 @@ contract FeeRouter is Ownable, ReentrancyGuard {
     function _send(address treasury, uint256 amount) internal {
         if (amount == 0) return;
 
+        // IMPORTANT: this handles transfers out of supported leagues
+        // Effectively, a temporary solution for cross-league transfers.
+        // This actually needs to be more dynamic: if the transfer is out of top-5 leagues,
+        // fees should be split between all pbrTreasury contracts.
+        //
+        // However, this does not handle retirements or other OOF discontinuations.
+        // Those should not change anything. Any fees from trading the player can still
+        // contribute to the original pbrTreasury.
+        //
+        // CORRECTION:
+        // If the transfer is in a waitingRoom (retired, OOF, unsupported league), fees
+        // are split evenly between all pbrTreasury contracts that exist.
+        // 
+        // This is a catch-all solution which works permanently. Because adding a new league
+        // updates all playerId entries in AssetRegistry with the corresponding leagueId and
+        // its newly-deployed pbrTreasury. So we can recursively set any FeeRouter impls to
+        // that new pbrTreasury.
+        //
+        // This means that we should be able to set an array of pbrTreasury contracts to split
+        // fees between, in this contract. Just to handle that waitingRoom edge case.
+        if (treasury == address(0)) {
+            emit FeesQueued(playerToken, treasury, amount);
+            return;
+        }
+
         (bool success,) = treasury.call{ value: amount }("");
         if (success) {
             emit FeesRelayed(playerToken, treasury, amount);

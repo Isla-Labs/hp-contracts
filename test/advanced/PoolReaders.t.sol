@@ -15,7 +15,7 @@ import {
     SpotMarketData,
     AdvancedTradeData,
     PlayerVaultData
-} from "../../src/base/global/types/AssetTypes.sol";
+} from "@base/global/types/AssetTypes.sol";
 import { PoolMarkSource } from "../../src/markets/advanced-updated/oracles/PoolMarkSource.sol";
 import { PoolLiquiditySource } from "../../src/markets/advanced-updated/oracles/PoolLiquiditySource.sol";
 import { PoolImpactEstimator } from "../../src/markets/advanced-updated/oracles/PoolImpactEstimator.sol";
@@ -30,7 +30,7 @@ contract PoolReadersDeployTest is Test {
     address quoter = makeAddr("quoter");
 
     function setUp() public {
-        registry = new AssetRegistry();
+        registry = new AssetRegistry(address(this));
         // Ensure player > usdc for currency ordering if needed — wrap as currencies sorted
         if (uint160(player) < uint160(usdc)) {
             (player, usdc) = (usdc, player);

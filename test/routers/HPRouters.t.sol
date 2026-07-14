@@ -15,7 +15,7 @@ import {
     PlayerVaultData,
     RegistryData,
     SpotMarketData
-} from "../../src/base/global/types/AssetTypes.sol";
+} from "@base/global/types/AssetTypes.sol";
 import { HPSwapRouter } from "../../src/routers/HPSwapRouter.sol";
 import { HPStakeRouter } from "../../src/routers/HPStakeRouter.sol";
 import { IHPStakeRouter } from "../../src/routers/interfaces/IHPStakeRouter.sol";
@@ -41,7 +41,7 @@ contract HPStakeRouterTest is Test {
     function setUp() public {
         player = new MockERC20("Player", "PLY");
         usdc = new MockERC20("USDC", "USDC");
-        registry = new AssetRegistry();
+        registry = new AssetRegistry(address(this));
 
         PlayerVaultFactory pvFactory = new PlayerVaultFactory(owner);
         pv = PlayerVault(pvFactory.create(address(player)));
@@ -146,7 +146,7 @@ contract HPSwapRouterWireframeTest is Test {
     function setUp() public {
         player = new MockERC20("Player", "PLY");
         usdc = new MockERC20("USDC", "USDC");
-        registry = new AssetRegistry();
+        registry = new AssetRegistry(address(this));
         swapRouter = new HPSwapRouter(registry, IPoolManager(makeAddr("pm")));
 
         address t0 = address(usdc);
@@ -162,6 +162,8 @@ contract HPSwapRouterWireframeTest is Test {
         });
 
         AssetData memory data;
+        data.playerId = bytes32("player");
+        data.leagueId = bytes32("league");
         data.token = address(player);
         data.symbol = "PLY";
         data.marketStatus = MarketStatus.GRADUATED;

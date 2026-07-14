@@ -102,9 +102,9 @@ contract PlayerVault is IPlayerVault, ReentrancyGuard {
     }
 
     function _requireNotEscrowed(address account) internal view {
-        address at = advancedTradeVault;
-        if (at == address(0)) return;
-        if (IAdvancedTradeVault(at).accountLongSize(account) > 0) revert EscrowedInAdvancedTrade();
+        address atv = advancedTradeVault;
+        if (atv == address(0)) return;
+        if (IAdvancedTradeVault(atv).accountLongSize(account) > 0) revert EscrowedInAdvancedTrade();
     }
 
     function _safeSymbol(address token) internal view returns (string memory) {

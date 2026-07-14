@@ -66,7 +66,7 @@ contract AssetRegistryTest is Test {
         assertFalse(registry.getAssetData(token).registryData.playerVaultData.isUtilized);
     }
 
-    function _sampleAsset(address t, bytes32 playerId, bytes32 leagueId) internal view returns (AssetData memory data) {
+    function _sampleAsset(address t, bytes32 playerId, bytes32 leagueId) internal pure returns (AssetData memory data) {
         data.playerId = playerId;
         data.leagueId = leagueId;
         data.token = t;

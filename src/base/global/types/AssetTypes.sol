@@ -40,8 +40,7 @@ struct SpotMarketData {
 
 struct AdvancedTradeData {
     address advancedTradeVault;
-    address upToken; // double-check whether this is necessary
-    address dwnToken; // double-check whether this is necessary
+    address markSource;
 }
 
 struct PlayerVaultData {

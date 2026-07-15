@@ -1,18 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
+import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { League, Continental, International, Cup, Round } from "@base/global/types/TournamentTypes.sol";
 
 /**
  * @title TournamentRegistry
  * @notice Canonical onchain registry of domestic leagues, Continental, and International competitions.
- * @dev Nested dynamic arrays cannot be assigned wholesale from memory to storage; mutators write
- *      fields / push elements individually. Existence is keyed by `pbrTreasury != address(0)`.
+ * @dev Deployed behind `TransparentUpgradeableProxy`. Nested dynamic arrays cannot be assigned
+ *      wholesale from memory to storage; mutators write fields / push elements individually.
+ *      Existence is keyed by `pbrTreasury != address(0)`.
+ *
+ *      Access:
+ *      - `ADMIN_ROLE`: all privileged registry writes.
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TournamentRegistry is Ownable {
+contract TournamentRegistry is Initializable, AccessControl {
+    /// @notice Admin role for all privileged registry writes
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
     /// @notice leagueId => domestic league metadata and cup hierarchy
     mapping(bytes32 => League) private _leagues;
 
@@ -69,11 +78,18 @@ contract TournamentRegistry is Ownable {
     //  Initialization
     // --------------------------------------------
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     /**
-     * @param initialOwner Contract owner. Should be `LifecycleTimelock` at deployment.
+     * @notice Initializes proxy storage. Called once via TransparentUpgradeableProxy constructor data.
+     * @param admin Address granted `ADMIN_ROLE`. Should be `LifecycleTimelock` at deployment.
      */
-    constructor(address initialOwner) Ownable(initialOwner) {
-        if (initialOwner == address(0)) revert ZeroAddress();
+    function initialize(address admin) external initializer {
+        if (admin == address(0)) revert ZeroAddress();
+        _grantRole(ADMIN_ROLE, admin);
     }
 
     // --------------------------------------------
@@ -85,7 +101,7 @@ contract TournamentRegistry is Ownable {
      * @param leagueId Unique league identifier.
      * @param pbrTreasury Deployed PBRTreasury for this league.
      */
-    function createLeague(bytes32 leagueId, address pbrTreasury) external onlyOwner {
+    function createLeague(bytes32 leagueId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
         if (leagueId == bytes32(0)) revert ZeroId();
         if (pbrTreasury == address(0)) revert ZeroAddress();
         if (_leagues[leagueId].pbrTreasury != address(0)) revert LeagueAlreadyExists(leagueId);
@@ -99,7 +115,7 @@ contract TournamentRegistry is Ownable {
     /**
      * @notice Appends a domestic cup (empty round list) to an existing league.
      */
-    function addLeagueCup(bytes32 leagueId, bytes32 cupId) external onlyOwner {
+    function addLeagueCup(bytes32 leagueId, bytes32 cupId) external onlyRole(ADMIN_ROLE) {
         if (cupId == bytes32(0)) revert ZeroId();
         League storage league = _requireLeague(leagueId);
         if (_findCupIndex(league.cups, cupId) != type(uint256).max) {
@@ -116,7 +132,7 @@ contract TournamentRegistry is Ownable {
     /**
      * @notice Appends a round to an existing league cup.
      */
-    function addLeagueRound(bytes32 leagueId, uint256 cupIndex, Round calldata round) external onlyOwner {
+    function addLeagueRound(bytes32 leagueId, uint256 cupIndex, Round calldata round) external onlyRole(ADMIN_ROLE) {
         Cup storage cup = _requireLeagueCup(leagueId, cupIndex);
         _pushRound(leagueId, cupIndex, cup, round);
     }
@@ -130,7 +146,7 @@ contract TournamentRegistry is Ownable {
         uint256 roundIndex,
         uint256 roundStartTime,
         uint256 roundEndTime
-    ) external onlyOwner {
+    ) external onlyRole(ADMIN_ROLE) {
         _updateRoundTimes(leagueId, _requireLeagueCup(leagueId, cupIndex), cupIndex, roundIndex, roundStartTime, roundEndTime);
     }
 
@@ -141,7 +157,7 @@ contract TournamentRegistry is Ownable {
     /**
      * @notice Registers the singleton Continental competition and binds its PBR treasury.
      */
-    function createContinental(address pbrTreasury) external onlyOwner {
+    function createContinental(address pbrTreasury) external onlyRole(ADMIN_ROLE) {
         if (pbrTreasury == address(0)) revert ZeroAddress();
         if (_continental.pbrTreasury != address(0)) revert ContinentalAlreadyExists();
 
@@ -149,7 +165,7 @@ contract TournamentRegistry is Ownable {
         emit ContinentalCreated(pbrTreasury);
     }
 
-    function addContinentalCup(bytes32 cupId) external onlyOwner {
+    function addContinentalCup(bytes32 cupId) external onlyRole(ADMIN_ROLE) {
         if (cupId == bytes32(0)) revert ZeroId();
         if (_continental.pbrTreasury == address(0)) revert ContinentalDoesNotExist();
         if (_findCupIndex(_continental.cups, cupId) != type(uint256).max) {
@@ -163,14 +179,14 @@ contract TournamentRegistry is Ownable {
         emit CupAdded(CONTINENTAL_ID, cupId, cupIndex);
     }
 
-    function addContinentalRound(uint256 cupIndex, Round calldata round) external onlyOwner {
+    function addContinentalRound(uint256 cupIndex, Round calldata round) external onlyRole(ADMIN_ROLE) {
         Cup storage cup = _requireContinentalCup(cupIndex);
         _pushRound(CONTINENTAL_ID, cupIndex, cup, round);
     }
 
     function updateContinentalRoundTimes(uint256 cupIndex, uint256 roundIndex, uint256 roundStartTime, uint256 roundEndTime)
         external
-        onlyOwner
+        onlyRole(ADMIN_ROLE)
     {
         _updateRoundTimes(CONTINENTAL_ID, _requireContinentalCup(cupIndex), cupIndex, roundIndex, roundStartTime, roundEndTime);
     }
@@ -182,7 +198,7 @@ contract TournamentRegistry is Ownable {
     /**
      * @notice Registers the singleton International competition and binds its PBR treasury.
      */
-    function createInternational(address pbrTreasury) external onlyOwner {
+    function createInternational(address pbrTreasury) external onlyRole(ADMIN_ROLE) {
         if (pbrTreasury == address(0)) revert ZeroAddress();
         if (_international.pbrTreasury != address(0)) revert InternationalAlreadyExists();
 
@@ -190,7 +206,7 @@ contract TournamentRegistry is Ownable {
         emit InternationalCreated(pbrTreasury);
     }
 
-    function addInternationalCup(bytes32 cupId) external onlyOwner {
+    function addInternationalCup(bytes32 cupId) external onlyRole(ADMIN_ROLE) {
         if (cupId == bytes32(0)) revert ZeroId();
         if (_international.pbrTreasury == address(0)) revert InternationalDoesNotExist();
         if (_findCupIndex(_international.cups, cupId) != type(uint256).max) {
@@ -204,7 +220,7 @@ contract TournamentRegistry is Ownable {
         emit CupAdded(INTERNATIONAL_ID, cupId, cupIndex);
     }
 
-    function addInternationalRound(uint256 cupIndex, Round calldata round) external onlyOwner {
+    function addInternationalRound(uint256 cupIndex, Round calldata round) external onlyRole(ADMIN_ROLE) {
         Cup storage cup = _requireInternationalCup(cupIndex);
         _pushRound(INTERNATIONAL_ID, cupIndex, cup, round);
     }
@@ -214,7 +230,7 @@ contract TournamentRegistry is Ownable {
         uint256 roundIndex,
         uint256 roundStartTime,
         uint256 roundEndTime
-    ) external onlyOwner {
+    ) external onlyRole(ADMIN_ROLE) {
         _updateRoundTimes(
             INTERNATIONAL_ID, _requireInternationalCup(cupIndex), cupIndex, roundIndex, roundStartTime, roundEndTime
         );

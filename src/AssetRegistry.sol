@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-import { Ownable2Step } from "@openzeppelin/access/Ownable2Step.sol";
+import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
 import {
@@ -17,14 +17,25 @@ import {
 /**
  * @title AssetRegistry
  * @notice Canonizes per-market discovery data keyed by `playerId`.
- * @dev Owner should be LifecycleTimelock. Identity (`AssetData`) and each subsystem set
- *      (`SpotMarketData`, `AdvancedTradeData`, `PlayerVaultData`, `ActiveTournament`) live in
- *      independent mappings so deployments can land in any order after `createAsset`.
+ * @dev Deployed behind `TransparentUpgradeableProxy`. Admin should be LifecycleTimelock.
+ *      Identity (`AssetData`) and each subsystem set (`SpotMarketData`, `AdvancedTradeData`,
+ *      `PlayerVaultData`, `ActiveTournament`) live in independent mappings so deployments can
+ *      land in any order after `createAsset`.
+ *
+ *      Access:
+ *      - `ADMIN_ROLE`: all privileged registry writes.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract AssetRegistry is Ownable2Step {
+contract AssetRegistry is Initializable, AccessControl {
+    // --------------------------------------------
+    //  Roles
+    // --------------------------------------------
+
+    /// @notice Admin role for all privileged registry writes
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -68,11 +79,18 @@ contract AssetRegistry is Ownable2Step {
     //  Init
     // --------------------------------------------
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     /**
-     * @param initialOwner Contract owner. Should be `LifecycleTimelock` at deployment.
+     * @notice Initializes proxy storage. Called once via TransparentUpgradeableProxy constructor data.
+     * @param admin Address granted `ADMIN_ROLE`. Should be `LifecycleTimelock` at deployment.
      */
-    constructor(address initialOwner) Ownable(initialOwner) {
-        if (initialOwner == address(0)) revert ZeroAddress();
+    function initialize(address admin) external initializer {
+        if (admin == address(0)) revert ZeroAddress();
+        _grantRole(ADMIN_ROLE, admin);
     }
 
     // --------------------------------------------
@@ -88,7 +106,7 @@ contract AssetRegistry is Ownable2Step {
      */
     function createAsset(bytes32 playerId, bytes32 leagueId, address token, string calldata symbol)
         external
-        onlyOwner
+        onlyRole(ADMIN_ROLE)
     {
         if (playerId == bytes32(0) || leagueId == bytes32(0)) revert ZeroId();
         if (token == address(0)) revert ZeroAddress();
@@ -113,7 +131,7 @@ contract AssetRegistry is Ownable2Step {
         emit AssetCreated(playerId, token, leagueId, symbol);
     }
 
-    function setMarketStatus(bytes32 playerId, MarketStatus status) external onlyOwner {
+    function setMarketStatus(bytes32 playerId, MarketStatus status) external onlyRole(ADMIN_ROLE) {
         AssetData storage asset = _requireAsset(playerId);
         asset.marketStatus = status;
         if (status == MarketStatus.GRADUATED && asset.graduatedAt == 0) {
@@ -126,7 +144,7 @@ contract AssetRegistry is Ownable2Step {
     }
 
     /// @notice Updates league binding on identity and active tournament (e.g. domestic transfer).
-    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyOwner {
+    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyRole(ADMIN_ROLE) {
         if (leagueId == bytes32(0)) revert ZeroId();
         _requireAsset(playerId).leagueId = leagueId;
         _activeTournaments[playerId].leagueId = leagueId;
@@ -142,7 +160,7 @@ contract AssetRegistry is Ownable2Step {
      * @dev Cup membership is independent of TournamentRegistry calendar writes; LifecycleTimelock
      *      is expected to keep both in sync.
      */
-    function addCupId(bytes32 playerId, bytes32 cupId) external onlyOwner {
+    function addCupId(bytes32 playerId, bytes32 cupId) external onlyRole(ADMIN_ROLE) {
         if (cupId == bytes32(0)) revert ZeroId();
         _requireAsset(playerId);
 
@@ -156,7 +174,7 @@ contract AssetRegistry is Ownable2Step {
     /**
      * @notice Removes a cup from the player's active tournament set (swap-and-pop).
      */
-    function removeCupId(bytes32 playerId, bytes32 cupId) external onlyOwner {
+    function removeCupId(bytes32 playerId, bytes32 cupId) external onlyRole(ADMIN_ROLE) {
         if (cupId == bytes32(0)) revert ZeroId();
         _requireAsset(playerId);
 
@@ -177,31 +195,31 @@ contract AssetRegistry is Ownable2Step {
     //  Writes — independently deployable sets
     // --------------------------------------------
 
-    function setSpotMarketData(bytes32 playerId, SpotMarketData calldata spot) external onlyOwner {
+    function setSpotMarketData(bytes32 playerId, SpotMarketData calldata spot) external onlyRole(ADMIN_ROLE) {
         _requireAsset(playerId);
         _spotMarketData[playerId] = spot;
         emit SpotMarketDataUpdated(playerId, spot.feeRouter);
     }
 
-    function setActivePool(bytes32 playerId, PoolKey calldata activePool) external onlyOwner {
+    function setActivePool(bytes32 playerId, PoolKey calldata activePool) external onlyRole(ADMIN_ROLE) {
         _requireAsset(playerId);
         _spotMarketData[playerId].activePool = activePool;
         emit SpotMarketDataUpdated(playerId, _spotMarketData[playerId].feeRouter);
     }
 
-    function setAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data) external onlyOwner {
+    function setAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data) external onlyRole(ADMIN_ROLE) {
         _requireAsset(playerId);
         _advancedTradeData[playerId] = data;
         emit AdvancedTradeDataUpdated(playerId, data.advancedTradeVault, data.markSource);
     }
 
-    function setPlayerVaultData(bytes32 playerId, PlayerVaultData calldata data) external onlyOwner {
+    function setPlayerVaultData(bytes32 playerId, PlayerVaultData calldata data) external onlyRole(ADMIN_ROLE) {
         _requireAsset(playerId);
         _playerVaultData[playerId] = data;
         emit PlayerVaultDataUpdated(playerId, data.playerVault, data.stToken, data.isUtilized);
     }
 
-    function setUtilized(bytes32 playerId, bool isUtilized) external onlyOwner {
+    function setUtilized(bytes32 playerId, bool isUtilized) external onlyRole(ADMIN_ROLE) {
         PlayerVaultData storage vaultData = _playerVaultData[playerId];
         _requireAsset(playerId);
         vaultData.isUtilized = isUtilized;

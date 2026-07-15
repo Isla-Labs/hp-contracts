@@ -6,20 +6,38 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
-/// @notice Emitted when `pbrTreasury` is updated
-event PbrTreasuryUpdated(address indexed market, address indexed previousTreasury, address indexed newTreasury);
+import { TournamentRegistry } from "../TournamentRegistry.sol";
 
-/// @notice Emitted when ETH is successfully relayed to the PBRTreasury
-event FeesRelayed(address indexed market, address indexed treasury, uint256 amount);
+/// @notice Emitted when `domesticPbrTreasury` is updated
+event DomesticPbrTreasuryUpdated(
+    bytes32 indexed playerId, address indexed previousTreasury, address indexed newTreasury
+);
+
+/// @notice Emitted when `internationalPbrTreasury` is updated
+event InternationalPbrTreasuryUpdated(
+    bytes32 indexed playerId, address indexed previousTreasury, address indexed newTreasury
+);
+
+/// @notice Emitted when `isInternational` is updated
+event IsInternationalUpdated(bytes32 indexed playerId, bool isInternational);
+
+/// @notice Emitted when `isActive` is updated
+event IsActiveUpdated(bytes32 indexed playerId, bool isActive);
+
+/// @notice Emitted when ETH is successfully relayed to a treasury
+event FeesRelayed(bytes32 indexed playerId, address indexed treasury, uint256 amount);
 
 /// @notice Emitted when a relay attempt fails and ETH remains queued on this contract
-event FeesQueued(address indexed market, address indexed treasury, uint256 amount);
+event FeesQueued(bytes32 indexed playerId, address indexed treasury, uint256 amount);
 
 /// @notice Emitted when ERC20 dust is rescued
 event TokenRescued(address indexed token, address indexed to, uint256 amount);
 
 /// @notice Thrown when a required address is zero
 error ZeroAddress();
+
+/// @notice Thrown when a required id is zero
+error ZeroId();
 
 /// @notice Thrown when the treasury address is this contract
 error InvalidTreasury();
@@ -30,45 +48,84 @@ error TreasuryNotContract();
 /**
  * @title FeeRouter
  * @notice Relays ETH trading fees to PBRTreasury (yield) and ATFunding (funding rate).
- * @dev LifecycleTimelock is contract owner. PBRTreasury updates are part of the zk flow
+ * @dev LifecycleTimelock is contract owner. Domestic treasury updates are part of the zk flow
  *      for player transfers between domestic leagues.
+ *
+ *      PBR routing:
+ *      - `isActive == false` (OOF / retirement / waiting room): split evenly across all domestic
+ *        league treasuries from TournamentRegistry.
+ *      - `isInternational == true` and `internationalPbrTreasury != 0`: all PBR to international.
+ *      - otherwise: all PBR to `domesticPbrTreasury`.
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract FeeRouter is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    /// @notice Market that this FeeRouter is associated with
-    address public immutable playerToken;
+    /// @notice Player identity associated with this FeeRouter
+    bytes32 public immutable playerId;
 
     /// @notice Destination for relayed FR fees
     address public immutable atFunding;
 
-    /// @notice Destination for relayed ETH fees
-    address public pbrTreasury;
+    /// @notice Registry used to enumerate domestic PBR treasuries when inactive
+    TournamentRegistry public immutable tournamentRegistry;
+
+    /// @notice Destination for relayed domestic PBR fees
+    address public domesticPbrTreasury;
+
+    /// @notice Destination for relayed international PBR fees (optional)
+    address public internationalPbrTreasury;
+
+    /// @notice When true and `internationalPbrTreasury` is set, PBR fees route there
+    bool public isInternational;
+
+    /// @notice When false, PBR fees are split evenly across all domestic league treasuries
+    bool public isActive;
 
     /**
      * @param initialOwner Contract owner. Should be `LifecycleTimelock` at deployment.
-     * @param playerToken_ Player token associated with this FeeRouter.
-     * @param atFunding_ Initial ATFunding that receives relayed FR fees.
-     * @param pbrTreasury_ Initial PBRTreasury that receives relayed ETH fees.
+     * @param playerId_ Player identity associated with this FeeRouter.
+     * @param atFunding_ ATFunding that receives relayed FR fees.
+     * @param tournamentRegistry_ TournamentRegistry for inactive OOF splits.
+     * @param domesticPbrTreasury_ Initial domestic PBRTreasury.
+     * @param internationalPbrTreasury_ Optional international PBRTreasury (may be zero).
+     * @param isInternational_ Whether this market currently routes to international treasury.
+     * @param isActive_ Whether the player is active (false = OOF / retirement waiting room).
      */
-    constructor(address initialOwner, address playerToken_, address atFunding_, address pbrTreasury_) Ownable(initialOwner) {
-        if (playerToken_ == address(0) || atFunding_ == address(0) || pbrTreasury_ == address(0)) revert ZeroAddress();
+    constructor(
+        address initialOwner,
+        bytes32 playerId_,
+        address atFunding_,
+        address tournamentRegistry_,
+        address domesticPbrTreasury_,
+        address internationalPbrTreasury_,
+        bool isInternational_,
+        bool isActive_
+    ) Ownable(initialOwner) {
+        if (playerId_ == bytes32(0)) revert ZeroId();
+        if (atFunding_ == address(0) || tournamentRegistry_ == address(0)) revert ZeroAddress();
 
-        playerToken = playerToken_;
+        playerId = playerId_;
         atFunding = atFunding_;
-        _setPbrTreasury(pbrTreasury_);
+        tournamentRegistry = TournamentRegistry(tournamentRegistry_);
+        isInternational = isInternational_;
+        isActive = isActive_;
+
+        _setDomesticPbrTreasury(domesticPbrTreasury_);
+        if (internationalPbrTreasury_ != address(0)) {
+            _setInternationalPbrTreasury(internationalPbrTreasury_);
+        }
     }
 
-    /// @notice Accepts ETH and best-effort relays the 89:11 split to PBRTreasury and FRTreasury
+    /// @notice Accepts ETH and best-effort relays the 89:11 split to PBR and FR destinations
     /// @dev Never reverts on treasury failure so Rehype buyback transfers cannot be bricked.
     receive() external payable nonReentrant {
         _relay(msg.value);
     }
 
-    /// @dev Best-effort 89:11 split to PBRTreasury and FRTreasury (`atFunding`).
-    ///      Remainder from rounding goes to PBR. Failed legs stay queued for `forward()`.
+    /// @dev Best-effort 89:11 split. Remainder from rounding goes to PBR. Failed legs stay queued.
     function _relay(uint256 amount) internal {
         if (amount == 0) return;
 
@@ -76,42 +133,55 @@ contract FeeRouter is Ownable, ReentrancyGuard {
         uint256 pbrAmount = amount - frAmount;
 
         _send(atFunding, frAmount);
-        _send(pbrTreasury, pbrAmount);
+        _relayPbr(pbrAmount);
+    }
+
+    function _relayPbr(uint256 amount) internal {
+        if (amount == 0) return;
+
+        // OOF / retirement / unsupported league: split evenly across all domestic treasuries
+        if (!isActive) {
+            address[] memory treasuries = tournamentRegistry.getAllDomesticPbrTreasuries();
+            uint256 count = treasuries.length;
+            if (count == 0) {
+                emit FeesQueued(playerId, address(0), amount);
+                return;
+            }
+
+            uint256 share = amount / count;
+            uint256 distributed;
+            for (uint256 i; i < count; ++i) {
+                uint256 leg = share;
+                // Dust remainder from integer division goes to the last treasury
+                if (i == count - 1) leg = amount - distributed;
+                distributed += leg;
+                _send(treasuries[i], leg);
+            }
+            return;
+        }
+
+        // International window: route all PBR to the international treasury when configured
+        if (isInternational && internationalPbrTreasury != address(0)) {
+            _send(internationalPbrTreasury, amount);
+            return;
+        }
+
+        _send(domesticPbrTreasury, amount);
     }
 
     function _send(address treasury, uint256 amount) internal {
         if (amount == 0) return;
 
-        // IMPORTANT: this handles transfers out of supported leagues
-        // Effectively, a temporary solution for cross-league transfers.
-        // This actually needs to be more dynamic: if the transfer is out of top-5 leagues,
-        // fees should be split between all pbrTreasury contracts.
-        //
-        // However, this does not handle retirements or other OOF discontinuations.
-        // Those should not change anything. Any fees from trading the player can still
-        // contribute to the original pbrTreasury.
-        //
-        // CORRECTION:
-        // If the transfer is in a waitingRoom (retired, OOF, unsupported league), fees
-        // are split evenly between all pbrTreasury contracts that exist.
-        // 
-        // This is a catch-all solution which works permanently. Because adding a new league
-        // updates all playerId entries in AssetRegistry with the corresponding leagueId and
-        // its newly-deployed pbrTreasury. So we can recursively set any FeeRouter impls to
-        // that new pbrTreasury.
-        //
-        // This means that we should be able to set an array of pbrTreasury contracts to split
-        // fees between, in this contract. Just to handle that waitingRoom edge case.
         if (treasury == address(0)) {
-            emit FeesQueued(playerToken, treasury, amount);
+            emit FeesQueued(playerId, treasury, amount);
             return;
         }
 
         (bool success,) = treasury.call{ value: amount }("");
         if (success) {
-            emit FeesRelayed(playerToken, treasury, amount);
+            emit FeesRelayed(playerId, treasury, amount);
         } else {
-            emit FeesQueued(playerToken, treasury, amount);
+            emit FeesQueued(playerId, treasury, amount);
         }
     }
 
@@ -136,22 +206,62 @@ contract FeeRouter is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Updates the PBRTreasury that receives relayed fees and sweeps any queued ETH.
-     * @dev This function is part of the zk flow for player transfers between domestic leagues.
-     * @param newTreasury New treasury address. Must be a non-zero contract other than this router.
+     * @notice Updates the domestic PBRTreasury and sweeps any queued ETH.
+     * @dev Part of the zk flow for player transfers between domestic leagues.
      */
-    function setPbrTreasury(address newTreasury) external onlyOwner nonReentrant {
-        _setPbrTreasury(newTreasury);
+    function setDomesticPbrTreasury(address newTreasury) external onlyOwner nonReentrant {
+        _setDomesticPbrTreasury(newTreasury);
         _relay(address(this).balance);
     }
 
-    function _setPbrTreasury(address newTreasury) internal {
+    /**
+     * @notice Updates the international PBRTreasury (pass zero to clear).
+     */
+    function setInternationalPbrTreasury(address newTreasury) external onlyOwner nonReentrant {
+        address previous = internationalPbrTreasury;
+        if (newTreasury == address(0)) {
+            internationalPbrTreasury = address(0);
+            emit InternationalPbrTreasuryUpdated(playerId, previous, address(0));
+        } else {
+            _setInternationalPbrTreasury(newTreasury);
+        }
+        _relay(address(this).balance);
+    }
+
+    /**
+     * @notice Toggles international PBR routing and sweeps any queued ETH.
+     */
+    function setIsInternational(bool isInternational_) external onlyOwner nonReentrant {
+        isInternational = isInternational_;
+        emit IsInternationalUpdated(playerId, isInternational_);
+        _relay(address(this).balance);
+    }
+
+    /**
+     * @notice Toggles active status. When false, PBR fees split across all domestic treasuries.
+     */
+    function setIsActive(bool isActive_) external onlyOwner nonReentrant {
+        isActive = isActive_;
+        emit IsActiveUpdated(playerId, isActive_);
+        _relay(address(this).balance);
+    }
+
+    function _setDomesticPbrTreasury(address newTreasury) internal {
         if (newTreasury == address(0)) revert ZeroAddress();
         if (newTreasury == address(this)) revert InvalidTreasury();
         if (newTreasury.code.length == 0) revert TreasuryNotContract();
 
-        address previous = pbrTreasury;
-        pbrTreasury = newTreasury;
-        emit PbrTreasuryUpdated(playerToken, previous, newTreasury);
+        address previous = domesticPbrTreasury;
+        domesticPbrTreasury = newTreasury;
+        emit DomesticPbrTreasuryUpdated(playerId, previous, newTreasury);
+    }
+
+    function _setInternationalPbrTreasury(address newTreasury) internal {
+        if (newTreasury == address(this)) revert InvalidTreasury();
+        if (newTreasury.code.length == 0) revert TreasuryNotContract();
+
+        address previous = internationalPbrTreasury;
+        internationalPbrTreasury = newTreasury;
+        emit InternationalPbrTreasuryUpdated(playerId, previous, newTreasury);
     }
 }

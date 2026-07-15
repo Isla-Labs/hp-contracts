@@ -20,9 +20,9 @@ struct AssetData {
     address token;
     string symbol;
     MarketStatus marketStatus;
-    uint64 deployedAt;
-    uint64 graduatedAt;
-    uint64 deactivatedAt;
+    uint256 deployedAt;
+    uint256 graduatedAt;
+    uint256 deactivatedAt;
 }
 
 enum MarketStatus {

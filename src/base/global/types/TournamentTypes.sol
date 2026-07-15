@@ -1,21 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-struct Tournament {
+// --------------------------------------------
+//  Domestic Events
+// --------------------------------------------
+
+struct League {
     address pbrTreasury;
-    Season[] seasons;
-}
-
-struct Season {
-    uint32 startYear;
-    Matchweek[] matchweeks;
-    Cup[] domesticCups;
-}
-
-struct Matchweek {
-    uint32 mwNumber;
-    uint64 mwStartTime;
-    uint64 mwEndTime;
+    Cup[] cups;
 }
 
 struct Cup {
@@ -25,6 +17,20 @@ struct Cup {
 
 struct Round {
     uint32 roundNumber;
-    uint64 roundStartTime;
-    uint64 roundEndTime;
+    uint256 roundStartTime;
+    uint256 roundEndTime;
+}
+
+// --------------------------------------------
+//  International Events
+// --------------------------------------------
+
+struct Continental {
+    address pbrTreasury;
+    Cup[] cups;
+}
+
+struct International {
+    address pbrTreasury;
+    Cup[] cups;
 }

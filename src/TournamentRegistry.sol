@@ -8,14 +8,18 @@ import { Tournament, Season, Matchweek, Cup, Round } from "@base/global/types/To
  * @title TournamentRegistry
  * @notice Canonical onchain registry of supported tournaments for data collection and calendar windows.
  * @dev Nested dynamic arrays cannot be assigned wholesale from memory to storage; mutators write
- *      fields / push elements individually. Public `tournaments` getter returns scalar fields only —
- *      use the typed view helpers for seasons, matchweeks, cups, and rounds.
+ *      fields / push elements individually. Existence is keyed by `pbrTreasury != address(0)`.
+ *      Use the typed view helpers for seasons, matchweeks, cups, and rounds.
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract TournamentRegistry is Ownable {
     /// @notice leagueId => tournament metadata and calendar hierarchy
     mapping(bytes32 => Tournament) private _tournaments;
+
+    // --------------------------------------------
+    //  Events
+    // --------------------------------------------
 
     /// @notice Emitted when a league is registered with its PBR treasury
     event TournamentCreated(bytes32 indexed leagueId, address indexed pbrTreasury);
@@ -31,8 +35,8 @@ contract TournamentRegistry is Ownable {
         bytes32 indexed leagueId,
         uint256 indexed seasonIndex,
         uint256 indexed mwIndex,
-        uint256 mwStartTime,
-        uint256 mwEndTime
+        uint64 mwStartTime,
+        uint64 mwEndTime
     );
 
     /// @notice Emitted when a domestic cup is appended to a season
@@ -49,9 +53,13 @@ contract TournamentRegistry is Ownable {
         uint256 indexed seasonIndex,
         uint256 cupIndex,
         uint256 roundIndex,
-        uint256 roundStartTime,
-        uint256 roundEndTime
+        uint64 roundStartTime,
+        uint64 roundEndTime
     );
+
+    // --------------------------------------------
+    //  Errors
+    // --------------------------------------------
 
     error ZeroAddress();
     error ZeroId();
@@ -65,7 +73,11 @@ contract TournamentRegistry is Ownable {
     error CupDoesNotExist(bytes32 leagueId, uint256 seasonIndex, uint256 cupIndex);
     error RoundAlreadyExists(bytes32 leagueId, uint256 seasonIndex, uint256 cupIndex, uint32 roundNumber);
     error RoundDoesNotExist(bytes32 leagueId, uint256 seasonIndex, uint256 cupIndex, uint256 roundIndex);
-    error InvalidTimeRange(uint256 startTime, uint256 endTime);
+    error InvalidTimeRange(uint64 startTime, uint64 endTime);
+
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
 
     /**
      * @param initialOwner Contract owner. Should be `LifecycleTimelock` at deployment.
@@ -75,7 +87,7 @@ contract TournamentRegistry is Ownable {
     }
 
     // --------------------------------------------
-    //  Mutations
+    //  Writes
     // --------------------------------------------
 
     /**
@@ -86,14 +98,16 @@ contract TournamentRegistry is Ownable {
     function createTournament(bytes32 leagueId, address pbrTreasury) external onlyOwner {
         if (leagueId == bytes32(0)) revert ZeroId();
         if (pbrTreasury == address(0)) revert ZeroAddress();
-        if (_tournaments[leagueId].leagueId != bytes32(0)) revert TournamentAlreadyExists(leagueId);
+        if (_tournaments[leagueId].pbrTreasury != address(0)) revert TournamentAlreadyExists(leagueId);
 
-        Tournament storage tournament = _tournaments[leagueId];
-        tournament.leagueId = leagueId;
-        tournament.pbrTreasury = pbrTreasury;
+        _tournaments[leagueId].pbrTreasury = pbrTreasury;
 
         emit TournamentCreated(leagueId, pbrTreasury);
     }
+
+    // --------------------------------------------
+    //  Domestic League
+    // --------------------------------------------
 
     /**
      * @notice Appends a season (with optional initial matchweeks) to an existing league.
@@ -128,14 +142,29 @@ contract TournamentRegistry is Ownable {
     }
 
     /**
+     * @notice Appends multiple matchweeks to an existing season in one call.
+     */
+    function addMatchweeks(bytes32 leagueId, uint256 seasonIndex, Matchweek[] calldata matchweeks) external onlyOwner {
+        Season storage season = _requireSeason(leagueId, seasonIndex);
+        uint256 matchweekCount = matchweeks.length;
+        for (uint256 i; i < matchweekCount; ++i) {
+            _pushMatchweek(leagueId, seasonIndex, season, matchweeks[i]);
+        }
+    }
+
+    // --------------------------------------------
+    //  Update mwStartTime / mwEndTime
+    // --------------------------------------------
+
+    /**
      * @notice Updates only `mwStartTime` / `mwEndTime` for a registered matchweek.
      */
     function updateMatchweekTimes(
         bytes32 leagueId,
         uint256 seasonIndex,
         uint256 mwIndex,
-        uint256 mwStartTime,
-        uint256 mwEndTime
+        uint64 mwStartTime,
+        uint64 mwEndTime
     ) external onlyOwner {
         _validateTimeRange(mwStartTime, mwEndTime);
         Matchweek storage matchweek = _requireMatchweek(leagueId, seasonIndex, mwIndex);
@@ -145,6 +174,10 @@ contract TournamentRegistry is Ownable {
 
         emit MatchweekTimesUpdated(leagueId, seasonIndex, mwIndex, mwStartTime, mwEndTime);
     }
+
+    // --------------------------------------------
+    //  Domestic Cups
+    // --------------------------------------------
 
     /**
      * @notice Appends a domestic cup (empty round list) to an existing season.
@@ -188,8 +221,8 @@ contract TournamentRegistry is Ownable {
         uint256 seasonIndex,
         uint256 cupIndex,
         uint256 roundIndex,
-        uint256 roundStartTime,
-        uint256 roundEndTime
+        uint64 roundStartTime,
+        uint64 roundEndTime
     ) external onlyOwner {
         _validateTimeRange(roundStartTime, roundEndTime);
         Round storage round = _requireRound(leagueId, seasonIndex, cupIndex, roundIndex);
@@ -205,9 +238,9 @@ contract TournamentRegistry is Ownable {
     // --------------------------------------------
 
     /// @notice Returns scalar tournament fields (`seasons` excluded — use typed helpers).
-    function getTournament(bytes32 leagueId) external view returns (bytes32 id, address pbrTreasury, uint256 seasonCount) {
+    function getTournament(bytes32 leagueId) external view returns (address pbrTreasury, uint256 seasonCount) {
         Tournament storage tournament = _requireTournament(leagueId);
-        return (tournament.leagueId, tournament.pbrTreasury, tournament.seasons.length);
+        return (tournament.pbrTreasury, tournament.seasons.length);
     }
 
     function getSeasonCount(bytes32 leagueId) external view returns (uint256) {
@@ -249,7 +282,7 @@ contract TournamentRegistry is Ownable {
     }
 
     function tournamentExists(bytes32 leagueId) external view returns (bool) {
-        return _tournaments[leagueId].leagueId != bytes32(0);
+        return _tournaments[leagueId].pbrTreasury != address(0);
     }
 
     // --------------------------------------------
@@ -258,7 +291,7 @@ contract TournamentRegistry is Ownable {
 
     function _requireTournament(bytes32 leagueId) internal view returns (Tournament storage tournament) {
         tournament = _tournaments[leagueId];
-        if (tournament.leagueId == bytes32(0)) revert TournamentDoesNotExist(leagueId);
+        if (tournament.pbrTreasury == address(0)) revert TournamentDoesNotExist(leagueId);
     }
 
     function _requireSeason(bytes32 leagueId, uint256 seasonIndex) internal view returns (Season storage season) {
@@ -340,7 +373,7 @@ contract TournamentRegistry is Ownable {
         return type(uint256).max;
     }
 
-    function _validateTimeRange(uint256 startTime, uint256 endTime) internal pure {
+    function _validateTimeRange(uint64 startTime, uint64 endTime) internal pure {
         if (endTime <= startTime) revert InvalidTimeRange(startTime, endTime);
     }
 }

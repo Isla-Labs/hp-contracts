@@ -2,7 +2,6 @@
 pragma solidity ^0.8.34;
 
 struct Tournament {
-    bytes32 leagueId;
     address pbrTreasury;
     Season[] seasons;
 }
@@ -15,8 +14,8 @@ struct Season {
 
 struct Matchweek {
     uint32 mwNumber;
-    uint256 mwStartTime;
-    uint256 mwEndTime;
+    uint64 mwStartTime;
+    uint64 mwEndTime;
 }
 
 struct Cup {
@@ -26,6 +25,6 @@ struct Cup {
 
 struct Round {
     uint32 roundNumber;
-    uint256 roundStartTime;
-    uint256 roundEndTime;
+    uint64 roundStartTime;
+    uint64 roundEndTime;
 }

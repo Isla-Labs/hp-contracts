@@ -6,6 +6,7 @@ import { Ownable2Step } from "@openzeppelin/access/Ownable2Step.sol";
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
 import {
+    ActiveTournament,
     AdvancedTradeData,
     AssetData,
     MarketStatus,
@@ -17,8 +18,8 @@ import {
  * @title AssetRegistry
  * @notice Canonizes per-market discovery data keyed by `playerId`.
  * @dev Owner should be LifecycleTimelock. Identity (`AssetData`) and each subsystem set
- *      (`SpotMarketData`, `AdvancedTradeData`, `PlayerVaultData`) live in independent mappings
- *      so deployments can land in any order after `createAsset`.
+ *      (`SpotMarketData`, `AdvancedTradeData`, `PlayerVaultData`, `ActiveTournament`) live in
+ *      independent mappings so deployments can land in any order after `createAsset`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -32,6 +33,7 @@ contract AssetRegistry is Ownable2Step {
     mapping(bytes32 playerId => SpotMarketData) private _spotMarketData;
     mapping(bytes32 playerId => AdvancedTradeData) private _advancedTradeData;
     mapping(bytes32 playerId => PlayerVaultData) private _playerVaultData;
+    mapping(bytes32 playerId => ActiveTournament) private _activeTournaments;
 
     mapping(address token => bytes32 playerId) public playerIdOfToken;
 
@@ -47,6 +49,8 @@ contract AssetRegistry is Ownable2Step {
     event AdvancedTradeDataUpdated(bytes32 indexed playerId, address advancedTradeVault, address markSource);
     event PlayerVaultDataUpdated(bytes32 indexed playerId, address playerVault, address stToken, bool isUtilized);
     event LeagueIdUpdated(bytes32 indexed playerId, bytes32 indexed leagueId);
+    event CupIdAdded(bytes32 indexed playerId, bytes32 indexed cupId, uint256 cupIndex);
+    event CupIdRemoved(bytes32 indexed playerId, bytes32 indexed cupId);
 
     // --------------------------------------------
     //  Errors
@@ -57,6 +61,8 @@ contract AssetRegistry is Ownable2Step {
     error AssetAlreadyExists(bytes32 playerId);
     error UnknownAsset(bytes32 playerId);
     error TokenTaken(address token, bytes32 existingPlayerId);
+    error CupIdAlreadyActive(bytes32 playerId, bytes32 cupId);
+    error CupIdNotActive(bytes32 playerId, bytes32 cupId);
 
     // --------------------------------------------
     //  Init
@@ -100,6 +106,7 @@ contract AssetRegistry is Ownable2Step {
             graduatedAt: 0,
             deactivatedAt: 0
         });
+        _activeTournaments[playerId].leagueId = leagueId;
         playerIdOfToken[token] = playerId;
         _playerIds.push(playerId);
 
@@ -118,11 +125,52 @@ contract AssetRegistry is Ownable2Step {
         emit MarketStatusUpdated(playerId, status);
     }
 
-    /// @notice Updates league binding (e.g. transfer / new league treasury routing).
+    /// @notice Updates league binding on identity and active tournament (e.g. domestic transfer).
     function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyOwner {
         if (leagueId == bytes32(0)) revert ZeroId();
         _requireAsset(playerId).leagueId = leagueId;
+        _activeTournaments[playerId].leagueId = leagueId;
         emit LeagueIdUpdated(playerId, leagueId);
+    }
+
+    // --------------------------------------------
+    //  Writes — active tournament cups
+    // --------------------------------------------
+
+    /**
+     * @notice Appends a cup to the player's active tournament set.
+     * @dev Cup membership is independent of TournamentRegistry calendar writes; LifecycleTimelock
+     *      is expected to keep both in sync.
+     */
+    function addCupId(bytes32 playerId, bytes32 cupId) external onlyOwner {
+        if (cupId == bytes32(0)) revert ZeroId();
+        _requireAsset(playerId);
+
+        ActiveTournament storage active = _activeTournaments[playerId];
+        if (_findCupIndex(active, cupId) != type(uint256).max) revert CupIdAlreadyActive(playerId, cupId);
+
+        active.cupIds.push(cupId);
+        emit CupIdAdded(playerId, cupId, active.cupIds.length - 1);
+    }
+
+    /**
+     * @notice Removes a cup from the player's active tournament set (swap-and-pop).
+     */
+    function removeCupId(bytes32 playerId, bytes32 cupId) external onlyOwner {
+        if (cupId == bytes32(0)) revert ZeroId();
+        _requireAsset(playerId);
+
+        ActiveTournament storage active = _activeTournaments[playerId];
+        uint256 index = _findCupIndex(active, cupId);
+        if (index == type(uint256).max) revert CupIdNotActive(playerId, cupId);
+
+        uint256 lastIndex = active.cupIds.length - 1;
+        if (index != lastIndex) {
+            active.cupIds[index] = active.cupIds[lastIndex];
+        }
+        active.cupIds.pop();
+
+        emit CupIdRemoved(playerId, cupId);
     }
 
     // --------------------------------------------
@@ -183,6 +231,11 @@ contract AssetRegistry is Ownable2Step {
         return _playerVaultData[playerId];
     }
 
+    function getActiveTournament(bytes32 playerId) external view returns (ActiveTournament memory) {
+        _requireAsset(playerId);
+        return _activeTournaments[playerId];
+    }
+
     function exists(bytes32 playerId) external view returns (bool) {
         return _assets[playerId].token != address(0);
     }
@@ -206,5 +259,13 @@ contract AssetRegistry is Ownable2Step {
     function _requireAsset(bytes32 playerId) internal view returns (AssetData storage asset) {
         asset = _assets[playerId];
         if (asset.token == address(0)) revert UnknownAsset(playerId);
+    }
+
+    function _findCupIndex(ActiveTournament storage active, bytes32 cupId) internal view returns (uint256) {
+        uint256 length = active.cupIds.length;
+        for (uint256 i; i < length; ++i) {
+            if (active.cupIds[i] == cupId) return i;
+        }
+        return type(uint256).max;
     }
 }

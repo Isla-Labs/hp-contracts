@@ -9,6 +9,7 @@ import { PoolKey } from "@v4-core/types/PoolKey.sol";
  * @dev `playerId` is the registry primary key and is not stored inside these structs.
  */
 
+/// @notice Per-player domestic league binding plus currently entered cup competitions.
 struct ActiveTournament {
     bytes32 leagueId;
     bytes32[] cupIds;

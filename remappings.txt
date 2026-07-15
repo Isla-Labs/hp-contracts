@@ -1,5 +1,6 @@
 forge-std/=lib/forge-std/src/
 
+@src/=src/
 @base/=src/base/
 @markets/=src/markets/
 @vaults/=src/vaults/

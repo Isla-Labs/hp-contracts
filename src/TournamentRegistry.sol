@@ -6,7 +6,7 @@ import { League, Continental, International, Cup, Round } from "@base/global/typ
 
 /**
  * @title TournamentRegistry
- * @notice Canonical onchain registry of domestic leagues, Europe, and International competitions.
+ * @notice Canonical onchain registry of domestic leagues, Continental, and International competitions.
  * @dev Nested dynamic arrays cannot be assigned wholesale from memory to storage; mutators write
  *      fields / push elements individually. Existence is keyed by `pbrTreasury != address(0)`.
  * @custom:experimental Learn more at https://docs.highpotential.io/
@@ -19,7 +19,7 @@ contract TournamentRegistry is Ownable {
     /// @notice Ordered list of registered domestic league ids (for OOF fee splits)
     bytes32[] private _leagueIds;
 
-    /// @notice Singleton Europe competition entry
+    /// @notice Singleton Continental competition entry
     Continental private _continental;
 
     /// @notice Singleton International competition entry
@@ -61,7 +61,7 @@ contract TournamentRegistry is Ownable {
     error RoundDoesNotExist(bytes32 competitionId, uint256 cupIndex, uint256 roundIndex);
     error InvalidTimeRange(uint256 startTime, uint256 endTime);
 
-    /// @dev Sentinel competition ids for Europe / International cup events and lookups
+    /// @dev Sentinel competition ids for Continental / International cup events and lookups
     bytes32 public constant CONTINENTAL_ID = keccak256("CONTINENTAL");
     bytes32 public constant INTERNATIONAL_ID = keccak256("INTERNATIONAL");
 
@@ -135,11 +135,11 @@ contract TournamentRegistry is Ownable {
     }
 
     // --------------------------------------------
-    //  Writes — Europe
+    //  Writes — Continental
     // --------------------------------------------
 
     /**
-     * @notice Registers the singleton Europe competition and binds its PBR treasury.
+     * @notice Registers the singleton Continental competition and binds its PBR treasury.
      */
     function createContinental(address pbrTreasury) external onlyOwner {
         if (pbrTreasury == address(0)) revert ZeroAddress();
@@ -266,12 +266,12 @@ contract TournamentRegistry is Ownable {
         return (_continental.pbrTreasury, _continental.cups.length);
     }
 
-    function getEuropeCup(uint256 cupIndex) external view returns (bytes32 cupId, uint256 roundCount) {
+    function getContinentalCup(uint256 cupIndex) external view returns (bytes32 cupId, uint256 roundCount) {
         Cup storage cup = _requireContinentalCup(cupIndex);
         return (cup.cupId, cup.rounds.length);
     }
 
-    function getEuropeRound(uint256 cupIndex, uint256 roundIndex) external view returns (Round memory) {
+    function getContinentalRound(uint256 cupIndex, uint256 roundIndex) external view returns (Round memory) {
         Cup storage cup = _requireContinentalCup(cupIndex);
         if (roundIndex >= cup.rounds.length) revert RoundDoesNotExist(CONTINENTAL_ID, cupIndex, roundIndex);
         return cup.rounds[roundIndex];

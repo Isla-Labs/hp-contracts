@@ -58,7 +58,7 @@ error TreasuryNotContract();
  *
  *      Access:
  *      - `LIFECYCLE_ROLE` (LifecycleTimelock): `setDomesticPbrTreasury` for transfer zk flow.
- *      - `ADMIN_ROLE` (multisig): international treasury, ATFunding, flags, and token rescue.
+ *      - `ADMIN_ROLE` (Admin): international treasury, ATFunding, flags, and token rescue.
  *
  *      Fee split:
  *      - If `atFunding == address(0)`, 100% of fees take the PBR route.
@@ -79,7 +79,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     /// @notice LifecycleTimelock role for domestic treasury updates during transfers
     bytes32 public constant LIFECYCLE_ROLE = keccak256("LIFECYCLE_ROLE");
 
-    /// @notice Multisig role for international treasury, ATFunding, flags, and rescue
+    /// @notice Admin role for international treasury, ATFunding, flags, and rescue
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     /// @notice Registry used to enumerate domestic PBR treasuries when inactive (shared by all proxies)
@@ -113,7 +113,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     /**
      * @notice Initializes per-market proxy storage. Called once via BeaconProxy constructor data.
      * @param lifecycleTimelock_ Address granted `LIFECYCLE_ROLE`.
-     * @param multisig_ Address granted `ADMIN_ROLE`.
+     * @param admin_ Address granted `ADMIN_ROLE`.
      * @param playerId_ Player identity associated with this FeeRouter.
      * @param atFunding_ Optional ATFunding for the 11% FR share (zero = all fees via PBR).
      * @param domesticPbrTreasury_ Initial domestic PBRTreasury.
@@ -123,7 +123,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
      */
     function initialize(
         address lifecycleTimelock_,
-        address multisig_,
+        address admin_,
         bytes32 playerId_,
         address atFunding_,
         address domesticPbrTreasury_,
@@ -132,13 +132,13 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
         bool isActive_
     ) external initializer {
         if (playerId_ == bytes32(0)) revert ZeroId();
-        if (lifecycleTimelock_ == address(0) || multisig_ == address(0)) revert ZeroAddress();
+        if (lifecycleTimelock_ == address(0) || admin_ == address(0)) revert ZeroAddress();
 
         playerId = playerId_;
         isInternational = isInternational_;
         isActive = isActive_;
 
-        _grantRole(ADMIN_ROLE, multisig_);
+        _grantRole(ADMIN_ROLE, admin_);
         _grantRole(LIFECYCLE_ROLE, lifecycleTimelock_);
 
         if (atFunding_ != address(0)) {

@@ -22,7 +22,7 @@ contract FeeRouterFactory {
     address public immutable lifecycleTimelock;
 
     /// @notice Granted `ADMIN_ROLE` on every deployed FeeRouter; also owns the beacon
-    address public immutable multisig;
+    address public immutable admin;
 
     /// @notice Emitted when a FeeRouter beacon proxy is deployed for a player
     event FeeRouterCreated(
@@ -43,19 +43,19 @@ contract FeeRouterFactory {
 
     /**
      * @param lifecycleTimelock_ Address granted `LIFECYCLE_ROLE` on each FeeRouter.
-     * @param multisig_ Address granted `ADMIN_ROLE` on each FeeRouter and ownership of the beacon.
+     * @param admin_ Address granted `ADMIN_ROLE` on each FeeRouter and ownership of the beacon.
      * @param tournamentRegistry_ TournamentRegistry baked into the FeeRouter implementation.
      */
-    constructor(address lifecycleTimelock_, address multisig_, address tournamentRegistry_) {
-        if (lifecycleTimelock_ == address(0) || multisig_ == address(0) || tournamentRegistry_ == address(0)) {
+    constructor(address lifecycleTimelock_, address admin_, address tournamentRegistry_) {
+        if (lifecycleTimelock_ == address(0) || admin_ == address(0) || tournamentRegistry_ == address(0)) {
             revert ZeroAddress();
         }
 
         lifecycleTimelock = lifecycleTimelock_;
-        multisig = multisig_;
+        admin = admin_;
 
         address impl = address(new FeeRouter(tournamentRegistry_));
-        beacon = new UpgradeableBeacon(impl, multisig_);
+        beacon = new UpgradeableBeacon(impl, admin_);
     }
 
     /**
@@ -82,7 +82,7 @@ contract FeeRouterFactory {
             FeeRouter.initialize,
             (
                 lifecycleTimelock,
-                multisig,
+                admin,
                 playerId,
                 atFunding,
                 domesticPbrTreasury,

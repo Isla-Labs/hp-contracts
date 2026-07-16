@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import {
@@ -19,14 +20,26 @@ import {
  *        - `FACUP`: DOMESTIC, feeHubs = [{EPL, hub}], treasury = FA Cup pot
  *        - `UCL`: CONTINENTAL, feeHubs = all domestic hubs, treasury = UCL pot
  *
+ *      Access:
+ *      - `DEPLOYER_ROLE` (TournamentTimelock): hubs, tournaments, seasons / rounds.
+ *      - `ADMIN_ROLE` (multisig initially): hub / treasury address updates.
+ *
  *      Domestic hubs are also registered globally so `FeeRouter` can even-split when a
  *      market has no league (`getAllDomesticPbrFeeHubs`).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TournamentRegistry is Initializable {
-    address public admin;
+contract TournamentRegistry is Initializable, AccessControl {
+    /// @notice TournamentTimelock — hub / tournament / calendar deployment
+    bytes32 public constant DEPLOYER_ROLE = keccak256("DEPLOYER_ROLE");
+
+    /// @notice Admin (multisig) — sensitive destination updates
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    // --------------------------------------------
+    //  Storage
+    // --------------------------------------------
 
     /// @notice Globally registered domestic hubs (`leagueId` → hub). Used by FeeRouter OOF split.
     mapping(bytes32 leagueId => address) public pbrFeeHubOf;
@@ -35,7 +48,10 @@ contract TournamentRegistry is Initializable {
     mapping(bytes32 tournamentId => Tournament) private _tournaments;
     bytes32[] private _tournamentIds;
 
-    event AdminSet(address indexed admin);
+    // --------------------------------------------
+    //  Events
+    // --------------------------------------------
+
     event HubRegistered(bytes32 indexed leagueId, address indexed pbrFeeHub);
     event HubUpdated(bytes32 indexed leagueId, address indexed previous, address indexed pbrFeeHub);
     event TournamentCreated(
@@ -47,9 +63,12 @@ contract TournamentRegistry is Initializable {
     event SeasonOpened(bytes32 indexed tournamentId, uint16 indexed seasonStartYear, uint32 finalRound);
     event RoundUpserted(bytes32 indexed tournamentId, uint16 indexed seasonStartYear, uint32 roundNumber);
 
+    // --------------------------------------------
+    //  Errors
+    // --------------------------------------------
+
     error ZeroAddress();
     error ZeroId();
-    error NotAuthorized();
     error Exists();
     error NotFound();
     error HubAlreadyRegistered(bytes32 leagueId);
@@ -63,20 +82,25 @@ contract TournamentRegistry is Initializable {
     error InvalidRoundNumber(uint32 roundNumber, uint32 finalRound);
     error InvalidTimeRange(uint64 startTime, uint64 endTime);
 
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert NotAuthorized();
-        _;
-    }
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(address admin_) external initializer {
-        if (admin_ == address(0)) revert ZeroAddress();
-        admin = admin_;
-        emit AdminSet(admin_);
+    /**
+     * @param admin_ Multisig granted `ADMIN_ROLE` (+ `DEFAULT_ADMIN_ROLE` for role management).
+     * @param deployer_ TournamentTimelock granted `DEPLOYER_ROLE`.
+     */
+    function initialize(address admin_, address deployer_) external initializer {
+        if (admin_ == address(0) || deployer_ == address(0)) revert ZeroAddress();
+
+        _grantRole(DEFAULT_ADMIN_ROLE, admin_);
+        _grantRole(ADMIN_ROLE, admin_);
+        _grantRole(DEPLOYER_ROLE, deployer_);
     }
 
     // --------------------------------------------
@@ -87,7 +111,7 @@ contract TournamentRegistry is Initializable {
      * @notice Registers a domestic league hub (`leagueId` + `PbrFeeHub` address).
      * @dev Must exist before tournaments can link that hub.
      */
-    function registerHub(Hub calldata hub) external onlyAdmin {
+    function registerHub(Hub calldata hub) external onlyRole(DEPLOYER_ROLE) {
         if (hub.leagueId == bytes32(0)) revert ZeroId();
         if (hub.pbrFeeHub == address(0)) revert ZeroAddress();
         if (pbrFeeHubOf[hub.leagueId] != address(0)) revert HubAlreadyRegistered(hub.leagueId);
@@ -97,7 +121,7 @@ contract TournamentRegistry is Initializable {
         emit HubRegistered(hub.leagueId, hub.pbrFeeHub);
     }
 
-    function setHub(bytes32 leagueId, address pbrFeeHub) external onlyAdmin {
+    function setHub(bytes32 leagueId, address pbrFeeHub) external onlyRole(ADMIN_ROLE) {
         if (pbrFeeHubOf[leagueId] == address(0)) revert HubNotRegistered(leagueId);
         if (pbrFeeHub == address(0)) revert ZeroAddress();
 
@@ -122,7 +146,7 @@ contract TournamentRegistry is Initializable {
         TournamentType tournamentType,
         Hub[] calldata feeHubs,
         address pbrTreasury
-    ) external onlyAdmin {
+    ) external onlyRole(DEPLOYER_ROLE) {
         if (tournamentId == bytes32(0)) revert ZeroId();
         if (_tournaments[tournamentId].tournamentId != bytes32(0)) revert Exists();
 
@@ -140,12 +164,12 @@ contract TournamentRegistry is Initializable {
         emit TournamentCreated(tournamentId, tournamentType, pbrTreasury);
     }
 
-    function addHub(bytes32 tournamentId, Hub calldata hub) external onlyAdmin {
+    function addHub(bytes32 tournamentId, Hub calldata hub) external onlyRole(DEPLOYER_ROLE) {
         Tournament storage t = _requireTournament(tournamentId);
         _linkHub(t, tournamentId, hub);
     }
 
-    function removeHub(bytes32 tournamentId, bytes32 leagueId) external onlyAdmin {
+    function removeHub(bytes32 tournamentId, bytes32 leagueId) external onlyRole(DEPLOYER_ROLE) {
         Tournament storage t = _requireTournament(tournamentId);
 
         uint256 length = t.feeHubs.length;
@@ -164,7 +188,7 @@ contract TournamentRegistry is Initializable {
         emit HubRemovedFromTournament(tournamentId, leagueId);
     }
 
-    function setPbrTreasury(bytes32 tournamentId, address pbrTreasury) external onlyAdmin {
+    function setPbrTreasury(bytes32 tournamentId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
         Tournament storage t = _requireTournament(tournamentId);
         address previous = t.pbrTreasury;
         t.pbrTreasury = pbrTreasury;
@@ -175,7 +199,10 @@ contract TournamentRegistry is Initializable {
     //  Season calendar
     // --------------------------------------------
 
-    function openSeason(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound) external onlyAdmin {
+    function openSeason(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound)
+        external
+        onlyRole(DEPLOYER_ROLE)
+    {
         if (seasonStartYear == 0) revert ZeroId();
         if (finalRound == 0) revert InvalidFinalRound();
 
@@ -194,7 +221,7 @@ contract TournamentRegistry is Initializable {
 
     function upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round)
         external
-        onlyAdmin
+        onlyRole(DEPLOYER_ROLE)
     {
         Tournament storage t = _requireTournament(tournamentId);
         uint256 sIndex = _seasonIndex(t, seasonStartYear);

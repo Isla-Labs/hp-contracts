@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import {
@@ -11,20 +12,29 @@ import {
     TokenData,
     TournamentData,
     VaultData
-} from "@base/global/types/latest/PlayerSetTypes.sol";
+} from "@base/global/types/PlayerSetTypes.sol";
 
 /**
  * @title PlayerSetRegistry
  * @notice Canonical per-player market discovery set (`playerId` → `PlayerSet`).
- * @dev Simple registration pattern (cf. legacy `VaultRegistry`): factory writes the set,
- *      vaults may update utilization, views are permissionless.
+ * @dev Access:
+ *      - `DEPLOYER_ROLE` (LifecycleTimelock): register new player sets.
+ *      - `ADMIN_ROLE` (multisig initially): status / league / tournament / subsystem updates.
+ *      - Registered vaults: `updateUtilization` via `onlyVault`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerSetRegistry is Initializable {
-    address public playerVaultFactory;
-    address public admin;
+contract PlayerSetRegistry is Initializable, AccessControl {
+    /// @notice LifecycleTimelock — market deployment / player-set registration
+    bytes32 public constant DEPLOYER_ROLE = keccak256("DEPLOYER_ROLE");
+
+    /// @notice Admin (multisig) — registry upkeep
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    // --------------------------------------------
+    //  Storage
+    // --------------------------------------------
 
     mapping(bytes32 playerId => PlayerSet) private _playerSets;
     mapping(address token => bytes32 playerId) public playerIdOfToken;
@@ -32,8 +42,10 @@ contract PlayerSetRegistry is Initializable {
 
     bytes32[] private _playerIds;
 
-    event FactorySet(address indexed factory);
-    event AdminSet(address indexed admin);
+    // --------------------------------------------
+    //  Events
+    // --------------------------------------------
+
     event PlayerRegistered(bytes32 indexed playerId, address indexed token, address indexed vault);
     event StatusUpdated(bytes32 indexed playerId, PlayerStatus status);
     event LeagueIdUpdated(bytes32 indexed playerId, bytes32 indexed leagueId);
@@ -43,6 +55,10 @@ contract PlayerSetRegistry is Initializable {
     event DopplerDataUpdated(bytes32 indexed playerId, address feeRouter);
     event AdvancedTradeDataUpdated(bytes32 indexed playerId, address advancedTradeVault, address markSource);
 
+    // --------------------------------------------
+    //  Errors
+    // --------------------------------------------
+
     error ZeroAddress();
     error ZeroId();
     error NotAuthorized();
@@ -51,32 +67,38 @@ contract PlayerSetRegistry is Initializable {
     error TournamentAlreadyActive(bytes32 tournamentId);
     error TournamentNotActive(bytes32 tournamentId);
 
-    modifier onlyFactory() {
-        if (msg.sender != playerVaultFactory) revert NotAuthorized();
-        _;
-    }
-
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert NotAuthorized();
-        _;
-    }
+    // --------------------------------------------
+    //  Access Control
+    // --------------------------------------------
 
     modifier onlyVault() {
-        if (playerIdOfVault[msg.sender] == bytes32(0)) revert NotAuthorized();
+        _onlyVault();
         _;
     }
+
+    function _onlyVault() internal view {
+        if (playerIdOfVault[msg.sender] == bytes32(0)) revert NotAuthorized();
+    }
+
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(address admin_, address playerVaultFactory_) external initializer {
-        if (admin_ == address(0) || playerVaultFactory_ == address(0)) revert ZeroAddress();
-        admin = admin_;
-        playerVaultFactory = playerVaultFactory_;
-        emit AdminSet(admin_);
-        emit FactorySet(playerVaultFactory_);
+    /**
+     * @param admin_ Multisig granted `ADMIN_ROLE` (+ `DEFAULT_ADMIN_ROLE` for role management).
+     * @param deployer_ LifecycleTimelock granted `DEPLOYER_ROLE`.
+     */
+    function initialize(address admin_, address deployer_) external initializer {
+        if (admin_ == address(0) || deployer_ == address(0)) revert ZeroAddress();
+
+        _grantRole(DEFAULT_ADMIN_ROLE, admin_);
+        _grantRole(ADMIN_ROLE, admin_);
+        _grantRole(DEPLOYER_ROLE, deployer_);
     }
 
     // --------------------------------------------
@@ -84,15 +106,15 @@ contract PlayerSetRegistry is Initializable {
     // --------------------------------------------
 
     /**
-     * @notice Registers a new player market set. Called by `PlayerVaultFactory`.
-     * @dev Subsystem addresses may be zero at first registration and filled in later by admin.
+     * @notice Registers a new player market set.
+     * @dev LifecycleTimelock (`DEPLOYER_ROLE`). Subsystem addresses may be filled in later by admin.
      */
     function addPlayerSet(
         bytes32 playerId,
         TokenData calldata tokenData,
         bytes32 leagueId,
         VaultData calldata vaultData
-    ) external onlyFactory {
+    ) external onlyRole(DEPLOYER_ROLE) {
         if (playerId == bytes32(0)) revert ZeroId();
         if (tokenData.token == address(0) || vaultData.playerVault == address(0) || vaultData.stToken == address(0)) {
             revert ZeroAddress();
@@ -128,19 +150,19 @@ contract PlayerSetRegistry is Initializable {
         emit VaultDataUpdated(playerId, set.vaultData.playerVault, set.vaultData.stToken, isUtilized);
     }
 
-    function setStatus(bytes32 playerId, PlayerStatus status) external onlyAdmin {
+    function setStatus(bytes32 playerId, PlayerStatus status) external onlyRole(ADMIN_ROLE) {
         _requirePlayer(playerId);
         _playerSets[playerId].status = status;
         emit StatusUpdated(playerId, status);
     }
 
-    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyAdmin {
+    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyRole(ADMIN_ROLE) {
         _requirePlayer(playerId);
         _playerSets[playerId].tournamentData.leagueId = leagueId;
         emit LeagueIdUpdated(playerId, leagueId);
     }
 
-    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyAdmin {
+    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(ADMIN_ROLE) {
         _requirePlayer(playerId);
         if (tournamentId == bytes32(0)) revert ZeroId();
 
@@ -154,7 +176,7 @@ contract PlayerSetRegistry is Initializable {
         emit ActiveTournamentAdded(playerId, tournamentId);
     }
 
-    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyAdmin {
+    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(ADMIN_ROLE) {
         _requirePlayer(playerId);
 
         bytes32[] storage active = _playerSets[playerId].tournamentData.activeTournaments;
@@ -174,22 +196,16 @@ contract PlayerSetRegistry is Initializable {
         emit ActiveTournamentRemoved(playerId, tournamentId);
     }
 
-    function setDopplerData(bytes32 playerId, DopplerData calldata data) external onlyAdmin {
+    function setDopplerData(bytes32 playerId, DopplerData calldata data) external onlyRole(ADMIN_ROLE) {
         _requirePlayer(playerId);
         _playerSets[playerId].dopplerData = data;
         emit DopplerDataUpdated(playerId, data.feeRouter);
     }
 
-    function setAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data) external onlyAdmin {
+    function setAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data) external onlyRole(ADMIN_ROLE) {
         _requirePlayer(playerId);
         _playerSets[playerId].advancedTradeData = data;
         emit AdvancedTradeDataUpdated(playerId, data.advancedTradeVault, data.markSource);
-    }
-
-    function setPlayerVaultFactory(address factory) external onlyAdmin {
-        if (factory == address(0)) revert ZeroAddress();
-        playerVaultFactory = factory;
-        emit FactorySet(factory);
     }
 
     // --------------------------------------------

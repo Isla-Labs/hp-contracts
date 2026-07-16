@@ -8,5 +8,5 @@ pragma solidity ^0.8.34;
  *       up-to-date values (single source of truth per tournament).
  * 
  * Weekly:
- * - Needs to maintain the vaultRegistry in each PBRTreasury with activity statuses.
+ * - Needs to maintain the vaultRegistry in each PBRTreasury with activity statuses per tournament.
  */

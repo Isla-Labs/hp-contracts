@@ -24,6 +24,9 @@ event AtFundingUpdated(bytes32 indexed playerId, address indexed previousFunding
 /// @notice Emitted when ERC20 dust is rescued
 event TokenRescued(address indexed token, address indexed to, uint256 amount);
 
+/// @notice Emitted when the minimum relay threshold is updated
+event MinRelayUpdated(bytes32 indexed playerId, uint256 previous, uint256 minRelay);
+
 /// @notice Thrown when a required address is zero
 error ZeroAddress();
 
@@ -45,11 +48,16 @@ error DestinationNotContract();
  *
  *      Access:
  *      - `LIFECYCLE_ROLE` (LifecycleTimelock): `setPbrFeeHub` for league transfers / delisting.
- *      - `ADMIN_ROLE`: ATFunding and token rescue.
+ *      - `ADMIN_ROLE`: ATFunding, `minRelay`, and token rescue.
  *
  *      Fee split:
  *      - If `atFunding == address(0)`, 100% of fees take the PBR route.
  *      - Otherwise 89:11 PBR:FR (remainder from rounding goes to PBR).
+ *
+ *      Relay threshold:
+ *      - On `receive`, ETH accrues until `balance >= minRelay` (default at init: 0.0001 ether),
+ *        then the full balance is relayed. Admin may update via `setMinRelay`.
+ *      - `forward` and destination updates always attempt a full-balance relay (bypass gate).
  *
  *      PBR routing:
  *      - `pbrFeeHub != 0`: all PBR to that league hub.
@@ -82,6 +90,9 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     /// @notice League `PbrFeeHub` for PBR fees; zero = unsupported (even-split across all hubs)
     address public pbrFeeHub;
 
+    /// @notice Minimum ETH balance before auto-relay on `receive` (default 0.0001 ether at init)
+    uint256 public minRelay;
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address tournamentRegistry_) {
         if (tournamentRegistry_ == address(0)) revert ZeroAddress();
@@ -108,6 +119,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
         if (lifecycleTimelock_ == address(0) || admin_ == address(0)) revert ZeroAddress();
 
         playerId = playerId_;
+        minRelay = 0.0001 ether;
 
         _grantRole(ADMIN_ROLE, admin_);
         _grantRole(LIFECYCLE_ROLE, lifecycleTimelock_);
@@ -120,12 +132,21 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
 
     /// @notice Accepts ETH and best-effort relays fees to PBR and (optionally) FR destinations
     /// @dev Never reverts on destination failure so Rehype buyback transfers cannot be bricked.
+    ///      Accrues until `balance >= minRelay`, then relays the full balance.
     receive() external payable nonReentrant {
-        _relay(msg.value);
+        _tryRelay();
+    }
+
+    /// @dev Auto-path gate for `receive`: only relay once balance meets `minRelay`.
+    ///      Uses full contract balance so previously accrued dust is included.
+    function _tryRelay() internal {
+        uint256 bal = address(this).balance;
+        if (bal == 0 || bal < minRelay) return;
+        _relay(bal);
     }
 
     /// @dev If `atFunding` is unset, 100% takes the PBR route. Otherwise 89:11 PBR:FR.
-    ///      Remainder from rounding goes to PBR. Failed legs stay queued.
+    ///      Remainder from rounding goes to PBR. Failed legs stay queued on this contract.
     function _relay(uint256 amount) internal {
         if (amount == 0) return;
 
@@ -185,8 +206,8 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     }
 
     /**
-     * @notice Relays any ETH balance held by this contract.
-     * @dev Permissionless sweeper for queued balances after a failed relay or hub update.
+     * @notice Relays the full ETH balance held by this contract (bypasses `minRelay`).
+     * @dev Permissionless sweeper for accrued dust below threshold, failed relays, or hub updates.
      */
     function forward() external nonReentrant {
         _relay(address(this).balance);
@@ -205,12 +226,22 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     }
 
     /**
+     * @notice Updates the minimum ETH balance required before auto-relay on `receive`.
+     * @dev Lowering the threshold immediately attempts a gated relay if the balance qualifies.
+     */
+    function setMinRelay(uint256 minRelay_) external onlyRole(ADMIN_ROLE) nonReentrant {
+        uint256 previous = minRelay;
+        minRelay = minRelay_;
+        emit MinRelayUpdated(playerId, previous, minRelay_);
+        _tryRelay();
+    }
+
+    /**
      * @notice Updates the league `PbrFeeHub` and sweeps any queued ETH.
      * @dev LifecycleTimelock-only. Pass zero when the market is unsupported / has no league.
      */
     function setPbrFeeHub(address newHub) external onlyRole(LIFECYCLE_ROLE) nonReentrant {
         _setPbrFeeHub(newHub);
-        _relay(address(this).balance);
     }
 
     /**

@@ -266,46 +266,6 @@ contract TournamentRegistry is Initializable, AccessControl {
         }
     }
 
-    function getAllHubs() external view returns (Hub[] memory hubs) {
-        uint256 length = _leagueIds.length;
-        hubs = new Hub[](length);
-        for (uint256 i; i < length; ++i) {
-            bytes32 leagueId = _leagueIds[i];
-            hubs[i] = Hub({ leagueId: leagueId, pbrFeeHub: pbrFeeHubOf[leagueId] });
-        }
-    }
-
-    function getLeagueIds() external view returns (bytes32[] memory) {
-        return _leagueIds;
-    }
-
-    function getTournament(bytes32 tournamentId) external view returns (Tournament memory) {
-        _requireTournament(tournamentId);
-        return _tournaments[tournamentId];
-    }
-
-    function getFeeHubs(bytes32 tournamentId) external view returns (Hub[] memory) {
-        _requireTournament(tournamentId);
-        return _tournaments[tournamentId].feeHubs;
-    }
-
-    function getPbrTreasury(bytes32 tournamentId) external view returns (address) {
-        _requireTournament(tournamentId);
-        return _tournaments[tournamentId].pbrTreasury;
-    }
-
-    function tournamentExists(bytes32 tournamentId) external view returns (bool) {
-        return _tournaments[tournamentId].tournamentId != bytes32(0);
-    }
-
-    function allTournamentIds() external view returns (bytes32[] memory) {
-        return _tournamentIds;
-    }
-
-    function tournamentCount() external view returns (uint256) {
-        return _tournamentIds.length;
-    }
-
     /// @notice Tournaments that list a hub for `leagueId`
     function getTournamentsForLeague(bytes32 leagueId) external view returns (bytes32[] memory ids) {
         uint256 length = _tournamentIds.length;
@@ -331,32 +291,6 @@ contract TournamentRegistry is Initializable, AccessControl {
         for (uint256 i; i < count; ++i) {
             ids[i] = tmp[i];
         }
-    }
-
-    function getSeason(bytes32 tournamentId, uint16 seasonStartYear) external view returns (Season memory) {
-        Tournament storage t = _requireTournament(tournamentId);
-        uint256 sIndex = _seasonIndex(t, seasonStartYear);
-        if (sIndex == type(uint256).max) revert SeasonNotFound(tournamentId, seasonStartYear);
-        return t.seasons[sIndex];
-    }
-
-    function isRoundPublished(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)
-        external
-        view
-        returns (bool)
-    {
-        Tournament storage t = _tournaments[tournamentId];
-        if (t.tournamentId == bytes32(0)) return false;
-
-        uint256 sIndex = _seasonIndex(t, seasonStartYear);
-        if (sIndex == type(uint256).max) return false;
-
-        Season storage season = t.seasons[sIndex];
-        uint256 rIndex = _roundIndex(season, roundNumber);
-        if (rIndex == type(uint256).max) return false;
-
-        RoundSchedule storage round = season.rounds[rIndex];
-        return round.startTime != 0 && round.endTime > round.startTime && round.fixtureIds.length > 0;
     }
 
     // --------------------------------------------

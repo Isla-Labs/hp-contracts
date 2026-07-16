@@ -4,8 +4,9 @@ pragma solidity ^0.8.34;
 /**
  * @title TournamentTypes
  * @notice Competition topology + season-keyed round schedules.
- * @dev Fee path: FeeRouter → `pbrFeeHub` → per-cup `PbrTreasury`.
- *      Calendars / fixtures are per `(cupId, seasonId)` on `TournamentRegistry`.
+ * @dev Fee path: FeeRouter → per-league `PbrFeeHub` → per-cup `PbrTreasury`.
+ *      Only domestic leagues own a fee hub. Continental / international cups are
+ *      destination treasuries configured on each hub (and registered here for calendars).
  */
 
 // --------------------------------------------
@@ -18,13 +19,15 @@ struct League {
     bytes32[] cupIds;
 }
 
+/// @notice Continental cup topology only (no fee hub — destinations live on each league hub)
 struct Continental {
-    address pbrFeeHub;
+    bool registered;
     bytes32[] cupIds;
 }
 
+/// @notice International cup topology only (no fee hub — destination lives on each league hub)
 struct International {
-    address pbrFeeHub;
+    bool registered;
     bytes32[] cupIds;
 }
 

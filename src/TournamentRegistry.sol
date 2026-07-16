@@ -15,7 +15,9 @@ import {
 /**
  * @title TournamentRegistry
  * @notice Competition topology, cup→treasury bindings, and season-keyed round schedules.
- * @dev Fee path: FeeRouter → `pbrFeeHub` → per-cup `PbrTreasury` (see `cupPbrTreasury`).
+ * @dev Fee path: FeeRouter → per-league `pbrFeeHub` → typed `PbrTreasury` destinations
+ *      (domestic / continental / international cups). Continental and international
+ *      topology here is calendar-only — they do not own fee hubs.
  *
  *      A round is **published** (lockable) only when:
  *        `startTime != 0 && endTime > startTime && fixtureIds.length > 0`.
@@ -50,8 +52,8 @@ contract TournamentRegistry is Initializable, AccessControl {
     ) private _rounds;
 
     event LeagueCreated(bytes32 indexed leagueId, address indexed pbrFeeHub);
-    event ContinentalCreated(address indexed pbrFeeHub);
-    event InternationalCreated(address indexed pbrFeeHub);
+    event ContinentalCreated();
+    event InternationalCreated();
 
     event CupAdded(
         bytes32 indexed competitionId, bytes32 indexed cupId, address indexed pbrTreasury, uint256 cupIndex
@@ -125,27 +127,25 @@ contract TournamentRegistry is Initializable, AccessControl {
         _addCup(leagueId, league.cupIds, cupId, pbrTreasury);
     }
 
-    function createContinental(address pbrFeeHub) external onlyRole(ADMIN_ROLE) {
-        if (pbrFeeHub == address(0)) revert ZeroAddress();
-        if (_continental.pbrFeeHub != address(0)) revert ContinentalAlreadyExists();
-        _continental.pbrFeeHub = pbrFeeHub;
-        emit ContinentalCreated(pbrFeeHub);
+    function createContinental() external onlyRole(ADMIN_ROLE) {
+        if (_continental.registered) revert ContinentalAlreadyExists();
+        _continental.registered = true;
+        emit ContinentalCreated();
     }
 
     function addContinentalCup(bytes32 cupId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
-        if (_continental.pbrFeeHub == address(0)) revert ContinentalDoesNotExist();
+        if (!_continental.registered) revert ContinentalDoesNotExist();
         _addCup(CONTINENTAL_ID, _continental.cupIds, cupId, pbrTreasury);
     }
 
-    function createInternational(address pbrFeeHub) external onlyRole(ADMIN_ROLE) {
-        if (pbrFeeHub == address(0)) revert ZeroAddress();
-        if (_international.pbrFeeHub != address(0)) revert InternationalAlreadyExists();
-        _international.pbrFeeHub = pbrFeeHub;
-        emit InternationalCreated(pbrFeeHub);
+    function createInternational() external onlyRole(ADMIN_ROLE) {
+        if (_international.registered) revert InternationalAlreadyExists();
+        _international.registered = true;
+        emit InternationalCreated();
     }
 
     function addInternationalCup(bytes32 cupId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
-        if (_international.pbrFeeHub == address(0)) revert InternationalDoesNotExist();
+        if (!_international.registered) revert InternationalDoesNotExist();
         _addCup(INTERNATIONAL_ID, _international.cupIds, cupId, pbrTreasury);
     }
 
@@ -267,22 +267,22 @@ contract TournamentRegistry is Initializable, AccessControl {
         return _leagues[leagueId].pbrFeeHub != address(0);
     }
 
-    function getContinental() external view returns (address pbrFeeHub, bytes32[] memory cupIds) {
-        if (_continental.pbrFeeHub == address(0)) revert ContinentalDoesNotExist();
-        return (_continental.pbrFeeHub, _continental.cupIds);
+    function getContinental() external view returns (bytes32[] memory cupIds) {
+        if (!_continental.registered) revert ContinentalDoesNotExist();
+        return _continental.cupIds;
     }
 
     function continentalExists() external view returns (bool) {
-        return _continental.pbrFeeHub != address(0);
+        return _continental.registered;
     }
 
-    function getInternational() external view returns (address pbrFeeHub, bytes32[] memory cupIds) {
-        if (_international.pbrFeeHub == address(0)) revert InternationalDoesNotExist();
-        return (_international.pbrFeeHub, _international.cupIds);
+    function getInternational() external view returns (bytes32[] memory cupIds) {
+        if (!_international.registered) revert InternationalDoesNotExist();
+        return _international.cupIds;
     }
 
     function internationalExists() external view returns (bool) {
-        return _international.pbrFeeHub != address(0);
+        return _international.registered;
     }
 
     function getCupPbrTreasury(bytes32 cupId) external view returns (address) {

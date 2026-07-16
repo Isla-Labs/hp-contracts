@@ -5,6 +5,7 @@ forge-std/=lib/forge-std/src/
 @markets/=src/markets/
 @vaults/=src/vaults/
 @routers/=src/routers/
+@governance/=src/governance/
 
 @doppler/=lib/doppler/src/
 @chainlink/=lib/chainlink-evm/contracts/src/v0.8/

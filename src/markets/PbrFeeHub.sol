@@ -17,7 +17,8 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
  *
  *      Domestic sub-split: `leagueShareBps` → league treasury; remainder even across cups
  *      (if no cups, 100% → league). Continental / international: even split.
- *      `internationalActive` routes 100% evenly across international treasuries.
+ *      `internationalActive`: `internationalActiveShareBps` of gross → `internationalActiveTreasury`;
+ *      remainder continues through the normal cascade.
  *
  *      Failed legs are tracked in `pending` and retried via `forward` / `forwardPending`.
  *
@@ -60,8 +61,14 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     address[] private _continental;
     address[] private _international;
 
-    /// @notice When true, all incoming fees go evenly to international treasuries
+    /// @notice When true, `internationalActiveShareBps` of gross → `internationalActiveTreasury`
     bool public internationalActive;
+
+    /// @notice Temporary override destination while `internationalActive`; cleared on deactivate
+    address public internationalActiveTreasury;
+
+    /// @notice Share of gross paid to `internationalActiveTreasury` when active (remainder → cascade)
+    uint16 public internationalActiveShareBps;
 
     mapping(address treasury => uint256) public pending;
 
@@ -78,7 +85,8 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     event DomesticCupsUpdated(address[] cups);
     event ContinentalUpdated(address[] treasuries);
     event InternationalUpdated(address[] treasuries);
-    event InternationalActiveUpdated(bool active);
+    event InternationalActiveUpdated(bool active, address indexed treasury);
+    event InternationalActiveShareUpdated(uint16 internationalActiveShareBps);
 
     // --------------------------------------------
     //  Errors
@@ -117,9 +125,11 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         continentalBps = 900;
         internationalBps = 100;
         leagueShareBps = 8900;
+        internationalActiveShareBps = 9000;
 
         emit TopLevelSplitUpdated(domesticBps, continentalBps, internationalBps);
         emit LeagueShareUpdated(leagueShareBps);
+        emit InternationalActiveShareUpdated(internationalActiveShareBps);
         emit LeagueTreasuryUpdated(address(0), leagueTreasury_);
     }
 
@@ -144,6 +154,8 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         for (uint256 i; i < cont; ++i) {
             _forward(KIND_CONTINENTAL, _continental[i]);
         }
+
+        _forward(KIND_INTERNATIONAL, internationalActiveTreasury);
 
         uint256 intl = _international.length;
         for (uint256 i; i < intl; ++i) {
@@ -198,16 +210,35 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     }
 
     function setInternational(address[] calldata treasuries_) external onlyRole(ADMIN_ROLE) {
-        if (internationalActive && treasuries_.length == 0) revert InternationalNotConfigured();
         _setAddressList(_international, treasuries_);
         emit InternationalUpdated(treasuries_);
     }
 
-    /// @notice Toggle World Cup / international window: when true, 100% → international pots
-    function setInternationalActive(bool active) external onlyRole(ADMIN_ROLE) {
-        if (active && _international.length == 0) revert InternationalNotConfigured();
-        internationalActive = active;
-        emit InternationalActiveUpdated(active);
+    /**
+     * @notice Toggle temporary international override window.
+     * @dev When `active` is true, `treasury` receives `internationalActiveShareBps` of gross and
+     *      the remainder uses the normal cascade. When false, `treasury` is ignored and
+     *      `internationalActiveTreasury` is cleared to `address(0)`.
+     */
+    function setInternationalActive(bool active, address treasury) external onlyRole(ADMIN_ROLE) {
+        if (active) {
+            if (treasury == address(0)) revert ZeroAddress();
+            internationalActiveTreasury = treasury;
+            internationalActive = true;
+            emit InternationalActiveUpdated(true, treasury);
+            return;
+        }
+
+        internationalActive = false;
+        internationalActiveTreasury = address(0);
+        emit InternationalActiveUpdated(false, address(0));
+    }
+
+    /// @notice Share of gross routed to `internationalActiveTreasury` while the override is active
+    function setInternationalActiveShareBps(uint16 shareBps_) external onlyRole(ADMIN_ROLE) {
+        if (shareBps_ > BPS_DENOMINATOR) revert InvalidBpsTotal(shareBps_);
+        internationalActiveShareBps = shareBps_;
+        emit InternationalActiveShareUpdated(shareBps_);
     }
 
     // --------------------------------------------
@@ -236,14 +267,23 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         emit FeesReceived(amount);
 
         if (internationalActive) {
-            if (_international.length == 0) revert InternationalNotConfigured();
-            _payEven(KIND_INTERNATIONAL, _international, amount);
-            return;
+            address dest = internationalActiveTreasury;
+            if (dest == address(0)) revert InternationalNotConfigured();
+
+            uint256 overrideAmt = (amount * internationalActiveShareBps) / BPS_DENOMINATOR;
+            _pay(KIND_INTERNATIONAL, dest, overrideAmt);
+            amount -= overrideAmt;
+            if (amount == 0) return;
         }
 
+        _splitCascade(amount);
+    }
+
+    /// @dev Normal top-level cascade: live continental / international take fixed BPS; domestic engulfs rest.
+    function _splitCascade(uint256 amount) internal {
+        if (amount == 0) return;
         if (leagueTreasury == address(0)) revert NoLiveDestination();
 
-        // Live non-domestic buckets take their fixed BPS; domestic engulfs the rest.
         uint256 continentalAmt;
         if (_continental.length != 0) {
             continentalAmt = (amount * continentalBps) / BPS_DENOMINATOR;

@@ -28,13 +28,15 @@ contract PbrFeeHubFactory {
     }
 
     /**
-     * @notice Deploys a league hub with default 90/9/1 top-level split and 89:11 domestic sub-split.
+     * @notice Deploys a league hub with default 90/9/1 weights and 89:11 domestic sub-split.
+     * @dev Zero / empty continental or international destinations are skipped at relay time;
+     *      weights renormalize onto live treasuries (EPL-only day one → 100% league pot).
      * @param leagueId Domestic league id.
-     * @param leagueTreasury Primary domestic league `PbrTreasury`.
-     * @param domesticCups Domestic cup treasuries (even split of the 11% domestic cup share).
-     * @param continentalTreasuries Continental destinations (e.g. UCL, UEL, UECL).
-     * @param continentalWeights Relative weights (e.g. 5, 3, 1).
-     * @param internationalTreasury International pot treasury.
+     * @param leagueTreasury Primary domestic league `PbrTreasury` (required).
+     * @param domesticCups Domestic cup treasuries (`address(0)` slots ignored).
+     * @param continentalTreasuries Continental destinations (zeros / empty = inactive).
+     * @param continentalWeights Relative weights aligned with treasuries.
+     * @param internationalTreasury International pot (zero until configured).
      */
     function create(
         bytes32 leagueId,

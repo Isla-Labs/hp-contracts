@@ -209,8 +209,9 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
                 continue;
             }
 
-            uint256 at = IStakedToken(stToken).balanceOfAt(user, snapIdOf[key.cupId][key.seasonId][key.roundNumber]);
-            if (at > locked) locked = at;
+            uint256 snapBal =
+                IStakedToken(stToken).balanceOfAt(user, snapIdOf[key.cupId][key.seasonId][key.roundNumber]);
+            if (snapBal > locked) locked = snapBal;
         }
     }
 

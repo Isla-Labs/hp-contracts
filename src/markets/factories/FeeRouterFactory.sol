@@ -4,12 +4,12 @@ pragma solidity ^0.8.34;
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 
-import { FeeRouter } from "./FeeRouter.sol";
+import { FeeRouter } from "@markets/FeeRouter.sol";
 
 /**
  * @title FeeRouterFactory
  * @notice Deploys per-market `BeaconProxy` FeeRouters sharing one `UpgradeableBeacon`.
- * @dev Beacon ownership (logic upgrades) is assigned to `multisig`. Each `create` call deploys a
+ * @dev Beacon ownership (logic upgrades) is assigned to `admin`. Each `create` call deploys a
  *      thin proxy with player-specific storage initialized via `FeeRouter.initialize`.
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -26,13 +26,7 @@ contract FeeRouterFactory {
 
     /// @notice Emitted when a FeeRouter beacon proxy is deployed for a player
     event FeeRouterCreated(
-        bytes32 indexed playerId,
-        address indexed feeRouter,
-        address indexed domesticPbrTreasury,
-        address atFunding,
-        address internationalPbrTreasury,
-        bool isInternational,
-        bool isActive
+        bytes32 indexed playerId, address indexed feeRouter, address indexed pbrFeeHub, address atFunding
     );
 
     /// @notice Thrown when a required address is zero
@@ -61,42 +55,19 @@ contract FeeRouterFactory {
     /**
      * @notice Deploys a BeaconProxy FeeRouter for `playerId` and initializes per-market state.
      * @param playerId Player identity associated with the FeeRouter.
-     * @param atFunding Optional FRTreasury for the 11% fee share (zero = 100% PBR until set).
-     * @param domesticPbrTreasury Domestic PBRTreasury that receives the 89% fee share by default.
-     * @param internationalPbrTreasury Optional international PBRTreasury (may be zero).
-     * @param isInternational Whether PBR should route to the international treasury when set.
-     * @param isActive Whether the player is active (false triggers even split across domestic treasuries).
+     * @param atFunding Optional ATFunding for the 11% fee share (zero = 100% PBR until set).
+     * @param pbrFeeHub League `PbrFeeHub` for the 89% PBR share (zero = unsupported even-split).
      * @return feeRouter Address of the newly deployed BeaconProxy.
      */
-    function create(
-        bytes32 playerId,
-        address atFunding,
-        address domesticPbrTreasury,
-        address internationalPbrTreasury,
-        bool isInternational,
-        bool isActive
-    ) external returns (address feeRouter) {
+    function create(bytes32 playerId, address atFunding, address pbrFeeHub) external returns (address feeRouter) {
         if (playerId == bytes32(0)) revert ZeroId();
 
-        bytes memory initData = abi.encodeCall(
-            FeeRouter.initialize,
-            (
-                lifecycleTimelock,
-                admin,
-                playerId,
-                atFunding,
-                domesticPbrTreasury,
-                internationalPbrTreasury,
-                isInternational,
-                isActive
-            )
-        );
+        bytes memory initData =
+            abi.encodeCall(FeeRouter.initialize, (lifecycleTimelock, admin, playerId, atFunding, pbrFeeHub));
 
         feeRouter = address(new BeaconProxy(address(beacon), initData));
 
-        emit FeeRouterCreated(
-            playerId, feeRouter, domesticPbrTreasury, atFunding, internationalPbrTreasury, isInternational, isActive
-        );
+        emit FeeRouterCreated(playerId, feeRouter, pbrFeeHub, atFunding);
     }
 
     /// @notice Current FeeRouter implementation pointed to by the shared beacon

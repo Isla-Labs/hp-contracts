@@ -9,27 +9,14 @@ import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { TournamentRegistry } from "../TournamentRegistry.sol";
 
-/// @notice Emitted when `domesticPbrTreasury` is updated
-event DomesticPbrTreasuryUpdated(
-    bytes32 indexed playerId, address indexed previousTreasury, address indexed newTreasury
-);
+/// @notice Emitted when `pbrFeeHub` is updated
+event PbrFeeHubUpdated(bytes32 indexed playerId, address indexed previousHub, address indexed newHub);
 
-/// @notice Emitted when `internationalPbrTreasury` is updated
-event InternationalPbrTreasuryUpdated(
-    bytes32 indexed playerId, address indexed previousTreasury, address indexed newTreasury
-);
-
-/// @notice Emitted when `isInternational` is updated
-event IsInternationalUpdated(bytes32 indexed playerId, bool isInternational);
-
-/// @notice Emitted when `isActive` is updated
-event IsActiveUpdated(bytes32 indexed playerId, bool isActive);
-
-/// @notice Emitted when ETH is successfully relayed to a treasury
-event FeesRelayed(bytes32 indexed playerId, address indexed treasury, uint256 amount);
+/// @notice Emitted when ETH is successfully relayed to a destination
+event FeesRelayed(bytes32 indexed playerId, address indexed to, uint256 amount);
 
 /// @notice Emitted when a relay attempt fails and ETH remains queued on this contract
-event FeesQueued(bytes32 indexed playerId, address indexed treasury, uint256 amount);
+event FeesQueued(bytes32 indexed playerId, address indexed to, uint256 amount);
 
 /// @notice Emitted when `atFunding` is updated
 event AtFundingUpdated(bytes32 indexed playerId, address indexed previousFunding, address indexed newFunding);
@@ -43,32 +30,33 @@ error ZeroAddress();
 /// @notice Thrown when a required id is zero
 error ZeroId();
 
-/// @notice Thrown when the treasury address is this contract
-error InvalidTreasury();
+/// @notice Thrown when the destination address is this contract
+error InvalidDestination();
 
-/// @notice Thrown when the treasury is not a deployed contract
-error TreasuryNotContract();
+/// @notice Thrown when the destination is not a deployed contract
+error DestinationNotContract();
 
 /**
  * @title FeeRouter
- * @notice Relays ETH trading fees to PBRTreasury (yield) and ATFunding (funding rate).
+ * @notice Per-market fee relay: ETH → 89% PBR (`PbrFeeHub`) + 11% FR (`atFunding`).
  * @dev Deployed behind `BeaconProxy` instances (one per market). Logic upgrades are atomic via
  *      a shared `UpgradeableBeacon`. Per-market state lives in each proxy; `tournamentRegistry`
  *      is immutable on the implementation and shared by all proxies.
  *
  *      Access:
- *      - `LIFECYCLE_ROLE` (LifecycleTimelock): `setDomesticPbrTreasury` for transfer zk flow.
- *      - `ADMIN_ROLE` (Admin): international treasury, ATFunding, flags, and token rescue.
+ *      - `LIFECYCLE_ROLE` (LifecycleTimelock): `setPbrFeeHub` for league transfers / delisting.
+ *      - `ADMIN_ROLE`: ATFunding and token rescue.
  *
  *      Fee split:
  *      - If `atFunding == address(0)`, 100% of fees take the PBR route.
  *      - Otherwise 89:11 PBR:FR (remainder from rounding goes to PBR).
  *
  *      PBR routing:
- *      - `isActive == false` (OOF / retirement / waiting room): split evenly across all domestic
- *        league treasuries from TournamentRegistry.
- *      - `isInternational == true` and `internationalPbrTreasury != 0`: all PBR to international.
- *      - otherwise: all PBR to `domesticPbrTreasury`.
+ *      - `pbrFeeHub != 0`: all PBR to that league hub.
+ *      - `pbrFeeHub == 0` (unsupported / no league): split evenly across all domestic hubs
+ *        from TournamentRegistry.
+ *
+ *      Cup / continental / international splits live on each `PbrFeeHub`, not here.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -76,13 +64,13 @@ error TreasuryNotContract();
 contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    /// @notice LifecycleTimelock role for domestic treasury updates during transfers
+    /// @notice LifecycleTimelock role for hub updates during transfers / delisting
     bytes32 public constant LIFECYCLE_ROLE = keccak256("LIFECYCLE_ROLE");
 
-    /// @notice Admin role for international treasury, ATFunding, flags, and rescue
+    /// @notice Admin role for ATFunding and rescue
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
-    /// @notice Registry used to enumerate domestic PBR treasuries when inactive (shared by all proxies)
+    /// @notice Registry used to enumerate domestic PBR fee hubs when unsupported
     TournamentRegistry public immutable tournamentRegistry;
 
     /// @notice Player identity associated with this FeeRouter proxy
@@ -91,17 +79,8 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     /// @notice Destination for relayed FR fees; zero routes 100% via PBR
     address public atFunding;
 
-    /// @notice Destination for relayed domestic PBR fees
-    address public domesticPbrTreasury;
-
-    /// @notice Destination for relayed international PBR fees (optional)
-    address public internationalPbrTreasury;
-
-    /// @notice When true and `internationalPbrTreasury` is set, PBR fees route there
-    bool public isInternational;
-
-    /// @notice When false, PBR fees are split evenly across all domestic league treasuries
-    bool public isActive;
+    /// @notice League `PbrFeeHub` for PBR fees; zero = unsupported (even-split across all hubs)
+    address public pbrFeeHub;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address tournamentRegistry_) {
@@ -116,27 +95,19 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
      * @param admin_ Address granted `ADMIN_ROLE`.
      * @param playerId_ Player identity associated with this FeeRouter.
      * @param atFunding_ Optional ATFunding for the 11% FR share (zero = all fees via PBR).
-     * @param domesticPbrTreasury_ Initial domestic PBRTreasury.
-     * @param internationalPbrTreasury_ Optional international PBRTreasury (may be zero).
-     * @param isInternational_ Whether this market currently routes to international treasury.
-     * @param isActive_ Whether the player is active (false = OOF / retirement waiting room).
+     * @param pbrFeeHub_ Initial league `PbrFeeHub` (zero = unsupported / OOF even-split).
      */
     function initialize(
         address lifecycleTimelock_,
         address admin_,
         bytes32 playerId_,
         address atFunding_,
-        address domesticPbrTreasury_,
-        address internationalPbrTreasury_,
-        bool isInternational_,
-        bool isActive_
+        address pbrFeeHub_
     ) external initializer {
         if (playerId_ == bytes32(0)) revert ZeroId();
         if (lifecycleTimelock_ == address(0) || admin_ == address(0)) revert ZeroAddress();
 
         playerId = playerId_;
-        isInternational = isInternational_;
-        isActive = isActive_;
 
         _grantRole(ADMIN_ROLE, admin_);
         _grantRole(LIFECYCLE_ROLE, lifecycleTimelock_);
@@ -144,14 +115,11 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
         if (atFunding_ != address(0)) {
             _setAtFunding(atFunding_);
         }
-        _setDomesticPbrTreasury(domesticPbrTreasury_);
-        if (internationalPbrTreasury_ != address(0)) {
-            _setInternationalPbrTreasury(internationalPbrTreasury_);
-        }
+        _setPbrFeeHub(pbrFeeHub_);
     }
 
     /// @notice Accepts ETH and best-effort relays fees to PBR and (optionally) FR destinations
-    /// @dev Never reverts on treasury failure so Rehype buyback transfers cannot be bricked.
+    /// @dev Never reverts on destination failure so Rehype buyback transfers cannot be bricked.
     receive() external payable nonReentrant {
         _relay(msg.value);
     }
@@ -176,10 +144,10 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     function _relayPbr(uint256 amount) internal {
         if (amount == 0) return;
 
-        // OOF / retirement / unsupported league: split evenly across all domestic treasuries
-        if (!isActive) {
-            address[] memory treasuries = tournamentRegistry.getAllDomesticPbrTreasuries();
-            uint256 count = treasuries.length;
+        // Unsupported / no league: split evenly across all domestic fee hubs
+        if (pbrFeeHub == address(0)) {
+            address[] memory hubs = tournamentRegistry.getAllDomesticPbrFeeHubs();
+            uint256 count = hubs.length;
             if (count == 0) {
                 emit FeesQueued(playerId, address(0), amount);
                 return;
@@ -189,42 +157,36 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
             uint256 distributed;
             for (uint256 i; i < count; ++i) {
                 uint256 leg = share;
-                // Dust remainder from integer division goes to the last treasury
+                // Dust remainder from integer division goes to the last hub
                 if (i == count - 1) leg = amount - distributed;
                 distributed += leg;
-                _send(treasuries[i], leg);
+                _send(hubs[i], leg);
             }
             return;
         }
 
-        // International window: route all PBR to the international treasury when configured
-        if (isInternational && internationalPbrTreasury != address(0)) {
-            _send(internationalPbrTreasury, amount);
-            return;
-        }
-
-        _send(domesticPbrTreasury, amount);
+        _send(pbrFeeHub, amount);
     }
 
-    function _send(address treasury, uint256 amount) internal {
+    function _send(address to, uint256 amount) internal {
         if (amount == 0) return;
 
-        if (treasury == address(0)) {
-            emit FeesQueued(playerId, treasury, amount);
+        if (to == address(0)) {
+            emit FeesQueued(playerId, to, amount);
             return;
         }
 
-        (bool success,) = treasury.call{ value: amount }("");
+        (bool success,) = to.call{ value: amount }("");
         if (success) {
-            emit FeesRelayed(playerId, treasury, amount);
+            emit FeesRelayed(playerId, to, amount);
         } else {
-            emit FeesQueued(playerId, treasury, amount);
+            emit FeesQueued(playerId, to, amount);
         }
     }
 
     /**
      * @notice Relays any ETH balance held by this contract.
-     * @dev Permissionless sweeper for queued balances after a failed relay or treasury update.
+     * @dev Permissionless sweeper for queued balances after a failed relay or hub update.
      */
     function forward() external nonReentrant {
         _relay(address(this).balance);
@@ -243,11 +205,11 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     }
 
     /**
-     * @notice Updates the domestic PBRTreasury and sweeps any queued ETH.
-     * @dev LifecycleTimelock-only. Part of the zk flow for player transfers between domestic leagues.
+     * @notice Updates the league `PbrFeeHub` and sweeps any queued ETH.
+     * @dev LifecycleTimelock-only. Pass zero when the market is unsupported / has no league.
      */
-    function setDomesticPbrTreasury(address newTreasury) external onlyRole(LIFECYCLE_ROLE) nonReentrant {
-        _setDomesticPbrTreasury(newTreasury);
+    function setPbrFeeHub(address newHub) external onlyRole(LIFECYCLE_ROLE) nonReentrant {
+        _setPbrFeeHub(newHub);
         _relay(address(this).balance);
     }
 
@@ -266,63 +228,23 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
         _relay(address(this).balance);
     }
 
-    /**
-     * @notice Updates the international PBRTreasury (pass zero to clear).
-     */
-    function setInternationalPbrTreasury(address newTreasury) external onlyRole(ADMIN_ROLE) nonReentrant {
-        address previous = internationalPbrTreasury;
-        if (newTreasury == address(0)) {
-            internationalPbrTreasury = address(0);
-            emit InternationalPbrTreasuryUpdated(playerId, previous, address(0));
-        } else {
-            _setInternationalPbrTreasury(newTreasury);
+    function _setPbrFeeHub(address newHub) internal {
+        if (newHub != address(0)) {
+            if (newHub == address(this)) revert InvalidDestination();
+            if (newHub.code.length == 0) revert DestinationNotContract();
         }
-        _relay(address(this).balance);
-    }
 
-    /**
-     * @notice Toggles international PBR routing and sweeps any queued ETH.
-     */
-    function setIsInternational(bool isInternational_) external onlyRole(ADMIN_ROLE) nonReentrant {
-        isInternational = isInternational_;
-        emit IsInternationalUpdated(playerId, isInternational_);
-        _relay(address(this).balance);
-    }
-
-    /**
-     * @notice Toggles active status. When false, PBR fees split across all domestic treasuries.
-     */
-    function setIsActive(bool isActive_) external onlyRole(ADMIN_ROLE) nonReentrant {
-        isActive = isActive_;
-        emit IsActiveUpdated(playerId, isActive_);
-        _relay(address(this).balance);
-    }
-
-    function _setDomesticPbrTreasury(address newTreasury) internal {
-        if (newTreasury == address(0)) revert ZeroAddress();
-        if (newTreasury == address(this)) revert InvalidTreasury();
-        if (newTreasury.code.length == 0) revert TreasuryNotContract();
-
-        address previous = domesticPbrTreasury;
-        domesticPbrTreasury = newTreasury;
-        emit DomesticPbrTreasuryUpdated(playerId, previous, newTreasury);
+        address previous = pbrFeeHub;
+        pbrFeeHub = newHub;
+        emit PbrFeeHubUpdated(playerId, previous, newHub);
     }
 
     function _setAtFunding(address newFunding) internal {
-        if (newFunding == address(this)) revert InvalidTreasury();
-        if (newFunding.code.length == 0) revert TreasuryNotContract();
+        if (newFunding == address(this)) revert InvalidDestination();
+        if (newFunding.code.length == 0) revert DestinationNotContract();
 
         address previous = atFunding;
         atFunding = newFunding;
         emit AtFundingUpdated(playerId, previous, newFunding);
-    }
-
-    function _setInternationalPbrTreasury(address newTreasury) internal {
-        if (newTreasury == address(this)) revert InvalidTreasury();
-        if (newTreasury.code.length == 0) revert TreasuryNotContract();
-
-        address previous = internationalPbrTreasury;
-        internationalPbrTreasury = newTreasury;
-        emit InternationalPbrTreasuryUpdated(playerId, previous, newTreasury);
     }
 }

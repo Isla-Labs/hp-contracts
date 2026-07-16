@@ -3,58 +3,80 @@ pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
-import { League, Continental, International, Cup, Round } from "@base/global/types/TournamentTypes.sol";
+
+import {
+    League,
+    Continental,
+    International,
+    RoundSchedule,
+    CupSeasonMeta
+} from "@base/global/types/TournamentTypes.sol";
 
 /**
  * @title TournamentRegistry
- * @notice Canonical onchain registry of domestic leagues, Continental, and International competitions.
- * @dev Deployed behind `TransparentUpgradeableProxy`. Nested dynamic arrays cannot be assigned
- *      wholesale from memory to storage; mutators write fields / push elements individually.
- *      Existence is keyed by `pbrTreasury != address(0)`.
+ * @notice Competition topology, cup→treasury bindings, and season-keyed round schedules.
+ * @dev Fee path: FeeRouter → `pbrFeeHub` → per-cup `PbrTreasury` (see `cupPbrTreasury`).
  *
- *      Access:
- *      - `ADMIN_ROLE`: all privileged registry writes.
+ *      A round is **published** (lockable) only when:
+ *        `startTime != 0 && endTime > startTime && fixtureIds.length > 0`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract TournamentRegistry is Initializable, AccessControl {
-    /// @notice Admin role for all privileged registry writes
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
-    /// @notice leagueId => domestic league metadata and cup hierarchy
-    mapping(bytes32 => League) private _leagues;
+    bytes32 public constant CONTINENTAL_ID = keccak256("CONTINENTAL");
+    bytes32 public constant INTERNATIONAL_ID = keccak256("INTERNATIONAL");
 
-    /// @notice Ordered list of registered domestic league ids (for OOF fee splits)
+    mapping(bytes32 leagueId => League) private _leagues;
     bytes32[] private _leagueIds;
 
-    /// @notice Singleton Continental competition entry
     Continental private _continental;
-
-    /// @notice Singleton International competition entry
     International private _international;
 
-    // --------------------------------------------
-    //  Events
-    // --------------------------------------------
+    /// @notice Globally unique cupId → PbrTreasury
+    mapping(bytes32 cupId => address) public cupPbrTreasury;
 
-    event LeagueCreated(bytes32 indexed leagueId, address indexed pbrTreasury);
-    event ContinentalCreated(address indexed pbrTreasury);
-    event InternationalCreated(address indexed pbrTreasury);
+    /// @notice cupId → competition root (leagueId / CONTINENTAL_ID / INTERNATIONAL_ID)
+    mapping(bytes32 cupId => bytes32) public cupCompetitionId;
 
-    event CupAdded(bytes32 indexed competitionId, bytes32 indexed cupId, uint256 cupIndex);
-    event RoundAdded(bytes32 indexed competitionId, uint256 indexed cupIndex, uint32 roundNumber, uint256 roundIndex);
+    mapping(bytes32 competitionId => mapping(bytes32 cupId => mapping(uint16 seasonId => CupSeasonMeta))) private
+        _seasonMeta;
+
+    mapping(
+        bytes32 competitionId
+            => mapping(bytes32 cupId => mapping(uint16 seasonId => mapping(uint32 roundNumber => RoundSchedule)))
+    ) private _rounds;
+
+    event LeagueCreated(bytes32 indexed leagueId, address indexed pbrFeeHub);
+    event ContinentalCreated(address indexed pbrFeeHub);
+    event InternationalCreated(address indexed pbrFeeHub);
+
+    event CupAdded(
+        bytes32 indexed competitionId, bytes32 indexed cupId, address indexed pbrTreasury, uint256 cupIndex
+    );
+    event CupTreasuryUpdated(bytes32 indexed cupId, address indexed previous, address indexed pbrTreasury);
+
+    event SeasonOpened(bytes32 indexed competitionId, bytes32 indexed cupId, uint16 indexed seasonId, uint32 finalRound);
+    event RoundUpserted(
+        bytes32 indexed competitionId, bytes32 indexed cupId, uint16 indexed seasonId, uint32 roundNumber
+    );
     event RoundTimesUpdated(
         bytes32 indexed competitionId,
-        uint256 indexed cupIndex,
-        uint256 roundIndex,
-        uint256 roundStartTime,
-        uint256 roundEndTime
+        bytes32 indexed cupId,
+        uint16 indexed seasonId,
+        uint32 roundNumber,
+        uint64 startTime,
+        uint64 endTime
     );
-
-    // --------------------------------------------
-    //  Errors
-    // --------------------------------------------
+    event RoundFixturesUpdated(
+        bytes32 indexed competitionId,
+        bytes32 indexed cupId,
+        uint16 indexed seasonId,
+        uint32 roundNumber,
+        uint256 fixtureCount
+    );
 
     error ZeroAddress();
     error ZeroId();
@@ -65,187 +87,170 @@ contract TournamentRegistry is Initializable, AccessControl {
     error InternationalAlreadyExists();
     error InternationalDoesNotExist();
     error CupAlreadyExists(bytes32 competitionId, bytes32 cupId);
-    error CupDoesNotExist(bytes32 competitionId, uint256 cupIndex);
-    error RoundAlreadyExists(bytes32 competitionId, uint256 cupIndex, uint32 roundNumber);
-    error RoundDoesNotExist(bytes32 competitionId, uint256 cupIndex, uint256 roundIndex);
-    error InvalidTimeRange(uint256 startTime, uint256 endTime);
-
-    /// @dev Sentinel competition ids for Continental / International cup events and lookups
-    bytes32 public constant CONTINENTAL_ID = keccak256("CONTINENTAL");
-    bytes32 public constant INTERNATIONAL_ID = keccak256("INTERNATIONAL");
-
-    // --------------------------------------------
-    //  Initialization
-    // --------------------------------------------
+    error CupIdNotFound(bytes32 competitionId, bytes32 cupId);
+    error CupTreasuryAlreadySet(bytes32 cupId, address treasury);
+    error SeasonNotOpen(bytes32 competitionId, bytes32 cupId, uint16 seasonId);
+    error SeasonAlreadyOpen(bytes32 competitionId, bytes32 cupId, uint16 seasonId);
+    error InvalidFinalRound();
+    error InvalidRoundNumber(uint32 roundNumber, uint32 finalRound);
+    error InvalidTimeRange(uint64 startTime, uint64 endTime);
+    error RoundDoesNotExist(bytes32 competitionId, bytes32 cupId, uint16 seasonId, uint32 roundNumber);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    /**
-     * @notice Initializes proxy storage. Called once via TransparentUpgradeableProxy constructor data.
-     * @param admin Address granted `ADMIN_ROLE`. Should be `LifecycleTimelock` at deployment.
-     */
     function initialize(address admin) external initializer {
         if (admin == address(0)) revert ZeroAddress();
         _grantRole(ADMIN_ROLE, admin);
     }
 
     // --------------------------------------------
-    //  Writes — Domestic Leagues
+    //  Topology
     // --------------------------------------------
 
-    /**
-     * @notice Registers a new domestic league and binds its PBR treasury deployment.
-     * @param leagueId Unique league identifier.
-     * @param pbrTreasury Deployed PBRTreasury for this league.
-     */
-    function createLeague(bytes32 leagueId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
+    function createLeague(bytes32 leagueId, address pbrFeeHub) external onlyRole(ADMIN_ROLE) {
         if (leagueId == bytes32(0)) revert ZeroId();
-        if (pbrTreasury == address(0)) revert ZeroAddress();
-        if (_leagues[leagueId].pbrTreasury != address(0)) revert LeagueAlreadyExists(leagueId);
+        if (pbrFeeHub == address(0)) revert ZeroAddress();
+        if (_leagues[leagueId].pbrFeeHub != address(0)) revert LeagueAlreadyExists(leagueId);
 
-        _leagues[leagueId].pbrTreasury = pbrTreasury;
+        _leagues[leagueId].pbrFeeHub = pbrFeeHub;
         _leagueIds.push(leagueId);
-
-        emit LeagueCreated(leagueId, pbrTreasury);
+        emit LeagueCreated(leagueId, pbrFeeHub);
     }
 
-    /**
-     * @notice Appends a domestic cup (empty round list) to an existing league.
-     */
-    function addLeagueCup(bytes32 leagueId, bytes32 cupId) external onlyRole(ADMIN_ROLE) {
-        if (cupId == bytes32(0)) revert ZeroId();
+    function addLeagueCup(bytes32 leagueId, bytes32 cupId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
         League storage league = _requireLeague(leagueId);
-        if (_findCupIndex(league.cups, cupId) != type(uint256).max) {
-            revert CupAlreadyExists(leagueId, cupId);
-        }
-
-        uint256 cupIndex = league.cups.length;
-        Cup storage cup = league.cups.push();
-        cup.cupId = cupId;
-
-        emit CupAdded(leagueId, cupId, cupIndex);
+        _addCup(leagueId, league.cupIds, cupId, pbrTreasury);
     }
 
-    /**
-     * @notice Appends a round to an existing league cup.
-     */
-    function addLeagueRound(bytes32 leagueId, uint256 cupIndex, Round calldata round) external onlyRole(ADMIN_ROLE) {
-        Cup storage cup = _requireLeagueCup(leagueId, cupIndex);
-        _pushRound(leagueId, cupIndex, cup, round);
+    function createContinental(address pbrFeeHub) external onlyRole(ADMIN_ROLE) {
+        if (pbrFeeHub == address(0)) revert ZeroAddress();
+        if (_continental.pbrFeeHub != address(0)) revert ContinentalAlreadyExists();
+        _continental.pbrFeeHub = pbrFeeHub;
+        emit ContinentalCreated(pbrFeeHub);
     }
 
-    /**
-     * @notice Updates only `roundStartTime` / `roundEndTime` for a league cup round.
-     */
-    function updateLeagueRoundTimes(
-        bytes32 leagueId,
-        uint256 cupIndex,
-        uint256 roundIndex,
-        uint256 roundStartTime,
-        uint256 roundEndTime
-    ) external onlyRole(ADMIN_ROLE) {
-        _updateRoundTimes(leagueId, _requireLeagueCup(leagueId, cupIndex), cupIndex, roundIndex, roundStartTime, roundEndTime);
+    function addContinentalCup(bytes32 cupId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
+        if (_continental.pbrFeeHub == address(0)) revert ContinentalDoesNotExist();
+        _addCup(CONTINENTAL_ID, _continental.cupIds, cupId, pbrTreasury);
     }
 
-    // --------------------------------------------
-    //  Writes — Continental
-    // --------------------------------------------
-
-    /**
-     * @notice Registers the singleton Continental competition and binds its PBR treasury.
-     */
-    function createContinental(address pbrTreasury) external onlyRole(ADMIN_ROLE) {
-        if (pbrTreasury == address(0)) revert ZeroAddress();
-        if (_continental.pbrTreasury != address(0)) revert ContinentalAlreadyExists();
-
-        _continental.pbrTreasury = pbrTreasury;
-        emit ContinentalCreated(pbrTreasury);
+    function createInternational(address pbrFeeHub) external onlyRole(ADMIN_ROLE) {
+        if (pbrFeeHub == address(0)) revert ZeroAddress();
+        if (_international.pbrFeeHub != address(0)) revert InternationalAlreadyExists();
+        _international.pbrFeeHub = pbrFeeHub;
+        emit InternationalCreated(pbrFeeHub);
     }
 
-    function addContinentalCup(bytes32 cupId) external onlyRole(ADMIN_ROLE) {
+    function addInternationalCup(bytes32 cupId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
+        if (_international.pbrFeeHub == address(0)) revert InternationalDoesNotExist();
+        _addCup(INTERNATIONAL_ID, _international.cupIds, cupId, pbrTreasury);
+    }
+
+    function setCupPbrTreasury(bytes32 cupId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
         if (cupId == bytes32(0)) revert ZeroId();
-        if (_continental.pbrTreasury == address(0)) revert ContinentalDoesNotExist();
-        if (_findCupIndex(_continental.cups, cupId) != type(uint256).max) {
-            revert CupAlreadyExists(CONTINENTAL_ID, cupId);
-        }
+        if (pbrTreasury == address(0)) revert ZeroAddress();
+        if (cupCompetitionId[cupId] == bytes32(0)) revert CupIdNotFound(bytes32(0), cupId);
 
-        uint256 cupIndex = _continental.cups.length;
-        Cup storage cup = _continental.cups.push();
-        cup.cupId = cupId;
-
-        emit CupAdded(CONTINENTAL_ID, cupId, cupIndex);
+        address previous = cupPbrTreasury[cupId];
+        cupPbrTreasury[cupId] = pbrTreasury;
+        emit CupTreasuryUpdated(cupId, previous, pbrTreasury);
     }
 
-    function addContinentalRound(uint256 cupIndex, Round calldata round) external onlyRole(ADMIN_ROLE) {
-        Cup storage cup = _requireContinentalCup(cupIndex);
-        _pushRound(CONTINENTAL_ID, cupIndex, cup, round);
-    }
+    // --------------------------------------------
+    //  Season calendar
+    // --------------------------------------------
 
-    function updateContinentalRoundTimes(uint256 cupIndex, uint256 roundIndex, uint256 roundStartTime, uint256 roundEndTime)
+    function openSeason(bytes32 competitionId, bytes32 cupId, uint16 seasonId, uint32 finalRound)
         external
         onlyRole(ADMIN_ROLE)
     {
-        _updateRoundTimes(CONTINENTAL_ID, _requireContinentalCup(cupIndex), cupIndex, roundIndex, roundStartTime, roundEndTime);
+        _requireCup(competitionId, cupId);
+        if (seasonId == 0 || finalRound == 0) revert InvalidFinalRound();
+
+        CupSeasonMeta storage meta = _seasonMeta[competitionId][cupId][seasonId];
+        if (meta.finalRound != 0) revert SeasonAlreadyOpen(competitionId, cupId, seasonId);
+
+        meta.finalRound = finalRound;
+        emit SeasonOpened(competitionId, cupId, seasonId, finalRound);
     }
 
-    // --------------------------------------------
-    //  Writes — International
-    // --------------------------------------------
-
-    /**
-     * @notice Registers the singleton International competition and binds its PBR treasury.
-     */
-    function createInternational(address pbrTreasury) external onlyRole(ADMIN_ROLE) {
-        if (pbrTreasury == address(0)) revert ZeroAddress();
-        if (_international.pbrTreasury != address(0)) revert InternationalAlreadyExists();
-
-        _international.pbrTreasury = pbrTreasury;
-        emit InternationalCreated(pbrTreasury);
-    }
-
-    function addInternationalCup(bytes32 cupId) external onlyRole(ADMIN_ROLE) {
-        if (cupId == bytes32(0)) revert ZeroId();
-        if (_international.pbrTreasury == address(0)) revert InternationalDoesNotExist();
-        if (_findCupIndex(_international.cups, cupId) != type(uint256).max) {
-            revert CupAlreadyExists(INTERNATIONAL_ID, cupId);
+    function upsertRound(bytes32 competitionId, bytes32 cupId, uint16 seasonId, RoundSchedule calldata round)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        CupSeasonMeta storage meta = _requireSeason(competitionId, cupId, seasonId);
+        if (round.roundNumber == 0 || round.roundNumber > meta.finalRound) {
+            revert InvalidRoundNumber(round.roundNumber, meta.finalRound);
+        }
+        if (round.startTime != 0 || round.endTime != 0) {
+            _validateTimeRange(round.startTime, round.endTime);
         }
 
-        uint256 cupIndex = _international.cups.length;
-        Cup storage cup = _international.cups.push();
-        cup.cupId = cupId;
+        RoundSchedule storage stored = _rounds[competitionId][cupId][seasonId][round.roundNumber];
+        if (stored.roundNumber == 0) {
+            unchecked {
+                ++meta.roundCount;
+            }
+        }
 
-        emit CupAdded(INTERNATIONAL_ID, cupId, cupIndex);
+        stored.roundNumber = round.roundNumber;
+        stored.startTime = round.startTime;
+        stored.endTime = round.endTime;
+        delete stored.fixtureIds;
+        uint256 n = round.fixtureIds.length;
+        for (uint256 i; i < n; ++i) {
+            stored.fixtureIds.push(round.fixtureIds[i]);
+        }
+
+        emit RoundUpserted(competitionId, cupId, seasonId, round.roundNumber);
     }
 
-    function addInternationalRound(uint256 cupIndex, Round calldata round) external onlyRole(ADMIN_ROLE) {
-        Cup storage cup = _requireInternationalCup(cupIndex);
-        _pushRound(INTERNATIONAL_ID, cupIndex, cup, round);
-    }
-
-    function updateInternationalRoundTimes(
-        uint256 cupIndex,
-        uint256 roundIndex,
-        uint256 roundStartTime,
-        uint256 roundEndTime
+    function updateRoundTimes(
+        bytes32 competitionId,
+        bytes32 cupId,
+        uint16 seasonId,
+        uint32 roundNumber,
+        uint64 startTime,
+        uint64 endTime
     ) external onlyRole(ADMIN_ROLE) {
-        _updateRoundTimes(
-            INTERNATIONAL_ID, _requireInternationalCup(cupIndex), cupIndex, roundIndex, roundStartTime, roundEndTime
-        );
+        RoundSchedule storage round = _requireRound(competitionId, cupId, seasonId, roundNumber);
+        if (startTime != 0 || endTime != 0) {
+            _validateTimeRange(startTime, endTime);
+        }
+        round.startTime = startTime;
+        round.endTime = endTime;
+        emit RoundTimesUpdated(competitionId, cupId, seasonId, roundNumber, startTime, endTime);
+    }
+
+    function setRoundFixtures(
+        bytes32 competitionId,
+        bytes32 cupId,
+        uint16 seasonId,
+        uint32 roundNumber,
+        bytes32[] calldata fixtureIds
+    ) external onlyRole(ADMIN_ROLE) {
+        RoundSchedule storage round = _requireRound(competitionId, cupId, seasonId, roundNumber);
+        delete round.fixtureIds;
+        uint256 n = fixtureIds.length;
+        for (uint256 i; i < n; ++i) {
+            round.fixtureIds.push(fixtureIds[i]);
+        }
+        emit RoundFixturesUpdated(competitionId, cupId, seasonId, roundNumber, n);
     }
 
     // --------------------------------------------
-    //  Views
+    //  Views — topology
     // --------------------------------------------
 
-    /// @notice Returns every registered domestic league PBR treasury (ordered by creation).
-    function getAllDomesticPbrTreasuries() external view returns (address[] memory treasuries) {
+    /// @notice Domestic fee hubs for unsupported-market even-split (`FeeRouter`)
+    function getAllDomesticPbrFeeHubs() external view returns (address[] memory hubs) {
         uint256 length = _leagueIds.length;
-        treasuries = new address[](length);
+        hubs = new address[](length);
         for (uint256 i; i < length; ++i) {
-            treasuries[i] = _leagues[_leagueIds[i]].pbrTreasury;
+            hubs[i] = _leagues[_leagueIds[i]].pbrFeeHub;
         }
     }
 
@@ -253,143 +258,129 @@ contract TournamentRegistry is Initializable, AccessControl {
         return _leagueIds;
     }
 
-    function getLeague(bytes32 leagueId) external view returns (address pbrTreasury, uint256 cupCount) {
+    function getLeague(bytes32 leagueId) external view returns (address pbrFeeHub, bytes32[] memory cupIds) {
         League storage league = _requireLeague(leagueId);
-        return (league.pbrTreasury, league.cups.length);
-    }
-
-    function getLeagueCup(bytes32 leagueId, uint256 cupIndex) external view returns (bytes32 cupId, uint256 roundCount) {
-        Cup storage cup = _requireLeagueCup(leagueId, cupIndex);
-        return (cup.cupId, cup.rounds.length);
-    }
-
-    function getLeagueRound(bytes32 leagueId, uint256 cupIndex, uint256 roundIndex)
-        external
-        view
-        returns (Round memory)
-    {
-        Cup storage cup = _requireLeagueCup(leagueId, cupIndex);
-        if (roundIndex >= cup.rounds.length) revert RoundDoesNotExist(leagueId, cupIndex, roundIndex);
-        return cup.rounds[roundIndex];
+        return (league.pbrFeeHub, league.cupIds);
     }
 
     function leagueExists(bytes32 leagueId) external view returns (bool) {
-        return _leagues[leagueId].pbrTreasury != address(0);
+        return _leagues[leagueId].pbrFeeHub != address(0);
     }
 
-    function getContinental() external view returns (address pbrTreasury, uint256 cupCount) {
-        if (_continental.pbrTreasury == address(0)) revert ContinentalDoesNotExist();
-        return (_continental.pbrTreasury, _continental.cups.length);
-    }
-
-    function getContinentalCup(uint256 cupIndex) external view returns (bytes32 cupId, uint256 roundCount) {
-        Cup storage cup = _requireContinentalCup(cupIndex);
-        return (cup.cupId, cup.rounds.length);
-    }
-
-    function getContinentalRound(uint256 cupIndex, uint256 roundIndex) external view returns (Round memory) {
-        Cup storage cup = _requireContinentalCup(cupIndex);
-        if (roundIndex >= cup.rounds.length) revert RoundDoesNotExist(CONTINENTAL_ID, cupIndex, roundIndex);
-        return cup.rounds[roundIndex];
+    function getContinental() external view returns (address pbrFeeHub, bytes32[] memory cupIds) {
+        if (_continental.pbrFeeHub == address(0)) revert ContinentalDoesNotExist();
+        return (_continental.pbrFeeHub, _continental.cupIds);
     }
 
     function continentalExists() external view returns (bool) {
-        return _continental.pbrTreasury != address(0);
+        return _continental.pbrFeeHub != address(0);
     }
 
-    function getInternational() external view returns (address pbrTreasury, uint256 cupCount) {
-        if (_international.pbrTreasury == address(0)) revert InternationalDoesNotExist();
-        return (_international.pbrTreasury, _international.cups.length);
-    }
-
-    function getInternationalCup(uint256 cupIndex) external view returns (bytes32 cupId, uint256 roundCount) {
-        Cup storage cup = _requireInternationalCup(cupIndex);
-        return (cup.cupId, cup.rounds.length);
-    }
-
-    function getInternationalRound(uint256 cupIndex, uint256 roundIndex) external view returns (Round memory) {
-        Cup storage cup = _requireInternationalCup(cupIndex);
-        if (roundIndex >= cup.rounds.length) revert RoundDoesNotExist(INTERNATIONAL_ID, cupIndex, roundIndex);
-        return cup.rounds[roundIndex];
+    function getInternational() external view returns (address pbrFeeHub, bytes32[] memory cupIds) {
+        if (_international.pbrFeeHub == address(0)) revert InternationalDoesNotExist();
+        return (_international.pbrFeeHub, _international.cupIds);
     }
 
     function internationalExists() external view returns (bool) {
-        return _international.pbrTreasury != address(0);
+        return _international.pbrFeeHub != address(0);
+    }
+
+    function getCupPbrTreasury(bytes32 cupId) external view returns (address) {
+        return cupPbrTreasury[cupId];
+    }
+
+    // --------------------------------------------
+    //  Views — calendar
+    // --------------------------------------------
+
+    function getSeasonMeta(bytes32 competitionId, bytes32 cupId, uint16 seasonId)
+        external
+        view
+        returns (CupSeasonMeta memory)
+    {
+        return _seasonMeta[competitionId][cupId][seasonId];
+    }
+
+    function getFinalRound(bytes32 competitionId, bytes32 cupId, uint16 seasonId) external view returns (uint32) {
+        return _seasonMeta[competitionId][cupId][seasonId].finalRound;
+    }
+
+    function getRound(bytes32 competitionId, bytes32 cupId, uint16 seasonId, uint32 roundNumber)
+        external
+        view
+        returns (RoundSchedule memory)
+    {
+        return _requireRound(competitionId, cupId, seasonId, roundNumber);
+    }
+
+    function isRoundPublished(bytes32 competitionId, bytes32 cupId, uint16 seasonId, uint32 roundNumber)
+        external
+        view
+        returns (bool)
+    {
+        return _isPublished(_rounds[competitionId][cupId][seasonId][roundNumber]);
     }
 
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
 
+    function _addCup(bytes32 competitionId, bytes32[] storage cupIds, bytes32 cupId, address pbrTreasury) internal {
+        if (cupId == bytes32(0)) revert ZeroId();
+        if (pbrTreasury == address(0)) revert ZeroAddress();
+        if (_findCupIndex(cupIds, cupId) != type(uint256).max) revert CupAlreadyExists(competitionId, cupId);
+        if (cupPbrTreasury[cupId] != address(0)) revert CupTreasuryAlreadySet(cupId, cupPbrTreasury[cupId]);
+
+        cupIds.push(cupId);
+        cupPbrTreasury[cupId] = pbrTreasury;
+        cupCompetitionId[cupId] = competitionId;
+
+        emit CupAdded(competitionId, cupId, pbrTreasury, cupIds.length - 1);
+    }
+
     function _requireLeague(bytes32 leagueId) internal view returns (League storage league) {
         league = _leagues[leagueId];
-        if (league.pbrTreasury == address(0)) revert LeagueDoesNotExist(leagueId);
+        if (league.pbrFeeHub == address(0)) revert LeagueDoesNotExist(leagueId);
     }
 
-    function _requireLeagueCup(bytes32 leagueId, uint256 cupIndex) internal view returns (Cup storage cup) {
-        League storage league = _requireLeague(leagueId);
-        if (cupIndex >= league.cups.length) revert CupDoesNotExist(leagueId, cupIndex);
-        cup = league.cups[cupIndex];
+    function _requireCup(bytes32 competitionId, bytes32 cupId) internal view {
+        if (cupCompetitionId[cupId] != competitionId) revert CupIdNotFound(competitionId, cupId);
     }
 
-    function _requireContinentalCup(uint256 cupIndex) internal view returns (Cup storage cup) {
-        if (_continental.pbrTreasury == address(0)) revert ContinentalDoesNotExist();
-        if (cupIndex >= _continental.cups.length) revert CupDoesNotExist(CONTINENTAL_ID, cupIndex);
-        cup = _continental.cups[cupIndex];
+    function _requireSeason(bytes32 competitionId, bytes32 cupId, uint16 seasonId)
+        internal
+        view
+        returns (CupSeasonMeta storage meta)
+    {
+        _requireCup(competitionId, cupId);
+        meta = _seasonMeta[competitionId][cupId][seasonId];
+        if (meta.finalRound == 0) revert SeasonNotOpen(competitionId, cupId, seasonId);
     }
 
-    function _requireInternationalCup(uint256 cupIndex) internal view returns (Cup storage cup) {
-        if (_international.pbrTreasury == address(0)) revert InternationalDoesNotExist();
-        if (cupIndex >= _international.cups.length) revert CupDoesNotExist(INTERNATIONAL_ID, cupIndex);
-        cup = _international.cups[cupIndex];
+    function _requireRound(bytes32 competitionId, bytes32 cupId, uint16 seasonId, uint32 roundNumber)
+        internal
+        view
+        returns (RoundSchedule storage round)
+    {
+        _requireSeason(competitionId, cupId, seasonId);
+        round = _rounds[competitionId][cupId][seasonId][roundNumber];
+        if (round.roundNumber == 0) revert RoundDoesNotExist(competitionId, cupId, seasonId, roundNumber);
     }
 
-    function _pushRound(bytes32 competitionId, uint256 cupIndex, Cup storage cup, Round calldata round) internal {
-        _validateTimeRange(round.roundStartTime, round.roundEndTime);
-        if (_findRoundIndex(cup, round.roundNumber) != type(uint256).max) {
-            revert RoundAlreadyExists(competitionId, cupIndex, round.roundNumber);
-        }
-
-        uint256 roundIndex = cup.rounds.length;
-        cup.rounds.push(round);
-        emit RoundAdded(competitionId, cupIndex, round.roundNumber, roundIndex);
-    }
-
-    function _updateRoundTimes(
-        bytes32 competitionId,
-        Cup storage cup,
-        uint256 cupIndex,
-        uint256 roundIndex,
-        uint256 roundStartTime,
-        uint256 roundEndTime
-    ) internal {
-        _validateTimeRange(roundStartTime, roundEndTime);
-        if (roundIndex >= cup.rounds.length) revert RoundDoesNotExist(competitionId, cupIndex, roundIndex);
-
-        Round storage round = cup.rounds[roundIndex];
-        round.roundStartTime = roundStartTime;
-        round.roundEndTime = roundEndTime;
-
-        emit RoundTimesUpdated(competitionId, cupIndex, roundIndex, roundStartTime, roundEndTime);
-    }
-
-    function _findCupIndex(Cup[] storage cups, bytes32 cupId) internal view returns (uint256) {
-        uint256 length = cups.length;
+    function _findCupIndex(bytes32[] storage cupIds, bytes32 cupId) internal view returns (uint256) {
+        uint256 length = cupIds.length;
         for (uint256 i; i < length; ++i) {
-            if (cups[i].cupId == cupId) return i;
+            if (cupIds[i] == cupId) return i;
         }
         return type(uint256).max;
     }
 
-    function _findRoundIndex(Cup storage cup, uint32 roundNumber) internal view returns (uint256) {
-        uint256 length = cup.rounds.length;
-        for (uint256 i; i < length; ++i) {
-            if (cup.rounds[i].roundNumber == roundNumber) return i;
-        }
-        return type(uint256).max;
+    function _isPublished(RoundSchedule storage round) internal view returns (bool) {
+        return round.roundNumber != 0 && round.startTime != 0 && round.endTime > round.startTime
+            && round.fixtureIds.length > 0;
     }
 
-    function _validateTimeRange(uint256 startTime, uint256 endTime) internal pure {
+    function _validateTimeRange(uint64 startTime, uint64 endTime) internal pure {
         if (endTime <= startTime) revert InvalidTimeRange(startTime, endTime);
     }
 }

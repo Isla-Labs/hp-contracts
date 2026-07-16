@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+/// @notice Competition class used by fee routing (`PbrFeeHub`) and calendars.
+/// @dev Domestic leagues own a fee hub; domestic cups share that hub as destinations.
 enum TournamentType {
-    DOMESTIC,
+    DOMESTIC_LEAGUE,
+    DOMESTIC_CUP,
     CONTINENTAL,
     INTERNATIONAL
 }

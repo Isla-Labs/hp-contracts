@@ -16,15 +16,15 @@ import {
  * @title TournamentRegistry
  * @notice Canonical tournament topology + season calendars, keyed by `tournamentId`.
  * @dev Examples:
- *        - `EPL`: DOMESTIC, feeHubs = [{EPL, hub}], treasury = EPL pot
- *        - `FACUP`: DOMESTIC, feeHubs = [{EPL, hub}], treasury = FA Cup pot
+ *        - `EPL`: DOMESTIC_LEAGUE, feeHubs = [{EPL, hub}], treasury = EPL pot
+ *        - `FACUP`: DOMESTIC_CUP, feeHubs = [{EPL, hub}], treasury = FA Cup pot
  *        - `UCL`: CONTINENTAL, feeHubs = all domestic hubs, treasury = UCL pot
  *
  *      Access:
  *      - `DEPLOYER_ROLE` (TournamentTimelock): hubs, tournaments, seasons / rounds.
  *      - `ADMIN_ROLE` (multisig initially): hub / treasury address updates.
  *
- *      Domestic hubs are also registered globally so `FeeRouter` can even-split when a
+ *      Domestic league hubs are also registered globally so `FeeRouter` can even-split when a
  *      market has no league (`getAllDomesticPbrFeeHubs`).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
@@ -137,7 +137,7 @@ contract TournamentRegistry is Initializable, AccessControl {
     /**
      * @notice Creates a tournament with linked fee hubs and treasury.
      * @param tournamentId Stable id (e.g. keccak256("EPL"), keccak256("UCL")).
-     * @param tournamentType Domestic / continental / international.
+     * @param tournamentType Domestic league / domestic cup / continental / international.
      * @param feeHubs Domestic hubs that should route fees to `pbrTreasury` (must be registered).
      * @param pbrTreasury Cup-specific `PbrTreasury` (may be zero until deployed).
      */

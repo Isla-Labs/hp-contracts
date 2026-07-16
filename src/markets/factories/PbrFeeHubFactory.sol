@@ -9,6 +9,8 @@ import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
 /**
  * @title PbrFeeHubFactory
  * @notice Deploys per-domestic-league `PbrFeeHub` beacon proxies (FeeRouter destinations).
+ * @dev Hubs store treasury destinations locally; TournamentExecutor dual-writes them when
+ *      competitions are wired. Default weights: 90/9/1 top-level, 89% domestic league share.
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
@@ -21,6 +23,9 @@ contract PbrFeeHubFactory {
     error ZeroAddress();
     error ZeroId();
 
+    /**
+     * @param admin_ Granted `ADMIN_ROLE` on each hub; also owns the beacon.
+     */
     constructor(address admin_) {
         if (admin_ == address(0)) revert ZeroAddress();
         admin = admin_;
@@ -28,38 +33,16 @@ contract PbrFeeHubFactory {
     }
 
     /**
-     * @notice Deploys a league hub with default 90/9/1 weights and 89:11 domestic sub-split.
-     * @dev Zero / empty continental or international destinations are skipped at relay time;
-     *      weights renormalize onto live treasuries (EPL-only day one → 100% league pot).
+     * @notice Deploys a league hub with default splits and the league treasury set.
+     * @dev Cups / continental / international start empty (100% → league until wired).
      * @param leagueId Domestic league id.
-     * @param leagueTreasury Primary domestic league `PbrTreasury` (required).
-     * @param domesticCups Domestic cup treasuries (`address(0)` slots ignored).
-     * @param continentalTreasuries Continental destinations (zeros / empty = inactive).
-     * @param continentalWeights Relative weights aligned with treasuries.
-     * @param internationalTreasury International pot (zero until configured).
+     * @param leagueTreasury Primary domestic-league `PbrTreasury`.
      */
-    function create(
-        bytes32 leagueId,
-        address leagueTreasury,
-        address[] calldata domesticCups,
-        address[] calldata continentalTreasuries,
-        uint16[] calldata continentalWeights,
-        address internationalTreasury
-    ) external returns (address hub) {
+    function create(bytes32 leagueId, address leagueTreasury) external returns (address hub) {
         if (leagueId == bytes32(0)) revert ZeroId();
+        if (leagueTreasury == address(0)) revert ZeroAddress();
 
-        bytes memory initData = abi.encodeCall(
-            PbrFeeHub.initialize,
-            (
-                admin,
-                leagueId,
-                leagueTreasury,
-                domesticCups,
-                continentalTreasuries,
-                continentalWeights,
-                internationalTreasury
-            )
-        );
+        bytes memory initData = abi.encodeCall(PbrFeeHub.initialize, (admin, leagueId, leagueTreasury));
         hub = address(new BeaconProxy(address(beacon), initData));
         emit PbrFeeHubCreated(leagueId, hub);
     }

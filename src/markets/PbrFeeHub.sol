@@ -12,7 +12,8 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
  *      are created / wired (registry remains the topology source of truth for calendars).
  *
  *      Top-level default weights (BPS): domestic 90% / continental 9% / international 1%.
- *      Empty buckets are skipped; top-level weights renormalize across live buckets.
+ *      Cascade split: live continental / international buckets take their fixed BPS of gross;
+ *      domestic always receives the remainder (engulfs inactive bucket shares).
  *
  *      Domestic sub-split: `leagueShareBps` → league treasury; remainder even across cups
  *      (if no cups, 100% → league). Continental / international: even split.
@@ -43,7 +44,8 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
 
     bytes32 public leagueId;
 
-    /// @notice Top-level weights; must sum to `BPS_DENOMINATOR` (renormalized at relay time)
+    /// @notice Top-level weights; must sum to `BPS_DENOMINATOR`
+    /// @dev Continental / international take fixed BPS when live; domestic gets the remainder.
     uint16 public domesticBps;
     uint16 public continentalBps;
     uint16 public internationalBps;
@@ -239,38 +241,22 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
             return;
         }
 
-        bool liveDomestic = leagueTreasury != address(0);
-        bool liveContinental = _continental.length != 0;
-        bool liveInternational = _international.length != 0;
+        if (leagueTreasury == address(0)) revert NoLiveDestination();
 
-        uint256 dWeight = liveDomestic ? domesticBps : 0;
-        uint256 cWeight = liveContinental ? continentalBps : 0;
-        uint256 iWeight = liveInternational ? internationalBps : 0;
-        uint256 activeWeight = dWeight + cWeight + iWeight;
-        if (activeWeight == 0) revert NoLiveDestination();
-
-        uint256 distributed;
-        if (dWeight != 0) {
-            uint256 domesticAmt = (amount * dWeight) / activeWeight;
-            distributed += domesticAmt;
-            _splitDomestic(domesticAmt);
-        }
-        if (cWeight != 0) {
-            uint256 continentalAmt = (amount * cWeight) / activeWeight;
-            distributed += continentalAmt;
+        // Live non-domestic buckets take their fixed BPS; domestic engulfs the rest.
+        uint256 continentalAmt;
+        if (_continental.length != 0) {
+            continentalAmt = (amount * continentalBps) / BPS_DENOMINATOR;
             _payEven(KIND_CONTINENTAL, _continental, continentalAmt);
         }
-        if (iWeight != 0) {
-            // Dust remainder from integer division lands on the last live top-level bucket
-            _payEven(KIND_INTERNATIONAL, _international, amount - distributed);
-        } else if (distributed < amount) {
-            uint256 dust = amount - distributed;
-            if (cWeight != 0) {
-                _payEven(KIND_CONTINENTAL, _continental, dust);
-            } else {
-                _splitDomestic(dust);
-            }
+
+        uint256 internationalAmt;
+        if (_international.length != 0) {
+            internationalAmt = (amount * internationalBps) / BPS_DENOMINATOR;
+            _payEven(KIND_INTERNATIONAL, _international, internationalAmt);
         }
+
+        _splitDomestic(amount - continentalAmt - internationalAmt);
     }
 
     function _splitDomestic(uint256 amount) internal {

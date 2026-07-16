@@ -7,7 +7,7 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
-import { TournamentRegistry } from "../TournamentRegistry.sol";
+import { TournamentRegistry } from "@src/TournamentRegistry.sol";
 
 /// @notice Emitted when `pbrFeeHub` is updated
 event PbrFeeHubUpdated(bytes32 indexed playerId, address indexed previousHub, address indexed newHub);
@@ -53,8 +53,8 @@ error DestinationNotContract();
  *
  *      PBR routing:
  *      - `pbrFeeHub != 0`: all PBR to that league hub.
- *      - `pbrFeeHub == 0` (unsupported / no league): split evenly across all domestic hubs
- *        from TournamentRegistry.
+ *      - `pbrFeeHub == 0` (unsupported / no league): split evenly across all registered
+ *        domestic hubs from `TournamentRegistry.getAllDomesticPbrFeeHubs()`.
  *
  *      Cup / continental / international splits live on each `PbrFeeHub`, not here.
  *

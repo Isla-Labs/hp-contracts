@@ -221,6 +221,8 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
      *      `internationalActiveTreasury` is cleared to `address(0)`.
      */
     function setInternationalActive(bool active, address treasury) external onlyRole(ADMIN_ROLE) {
+        // NOTE: ACCESS CONTROL NEEDS STRICT CONDITIONAL CHECKERS.
+        // I.E. IT NEEDS TO BE A CAT-1 UPDATE PROBABLY.
         if (active) {
             if (treasury == address(0)) revert ZeroAddress();
             internationalActiveTreasury = treasury;

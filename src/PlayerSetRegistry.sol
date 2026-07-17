@@ -48,6 +48,15 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         _;
     }
 
+    /// @dev Automator (cat-3) or MaintenanceTimelock (cat-2) for vault registry repairs.
+    modifier onlyCategoryTwoOrThree() {
+        address sender = _msgSender();
+        if (!hasRole(Roles.CATEGORY_TWO, sender) && !hasRole(Roles.CATEGORY_THREE, sender)) {
+            revert Errors.NotAuthorized();
+        }
+        _;
+    }
+
     // --------------------------------------------
     //  Initialization
     // --------------------------------------------
@@ -166,24 +175,24 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         emit Events.VaultDataUpdated(playerId, set.vaultData.playerVault, set.vaultData.stToken, isUtilized);
     }
 
-    function setStatus(bytes32 playerId, PlayerStatus status) external onlyRole(Roles.CATEGORY_THREE) {
+    function setStatus(bytes32 playerId, PlayerStatus status) external onlyCategoryTwoOrThree {
         _requirePlayer(playerId);
         _playerSets[playerId].status = status;
         emit Events.StatusUpdated(playerId, status);
     }
 
-    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyRole(Roles.CATEGORY_THREE) {
+    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyCategoryTwoOrThree {
         _requirePlayer(playerId);
         _playerSets[playerId].tournamentData.leagueId = leagueId;
         emit Events.LeagueIdUpdated(playerId, leagueId);
     }
 
-    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(Roles.CATEGORY_THREE) {
+    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyCategoryTwoOrThree {
         _requirePlayer(playerId);
         _addActiveTournament(playerId, tournamentId);
     }
 
-    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(Roles.CATEGORY_THREE) {
+    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyCategoryTwoOrThree {
         _requirePlayer(playerId);
 
         bytes32[] storage active = _playerSets[playerId].tournamentData.activeTournaments;

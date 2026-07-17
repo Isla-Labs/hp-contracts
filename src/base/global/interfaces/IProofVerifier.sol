@@ -3,13 +3,9 @@ pragma solidity ^0.8.34;
 
 /**
  * @title IProofVerifier
- * @notice Minimal interface for ZK / attestation gates on Class-1 executors.
- * @dev Concrete verifiers (PPM, eligibility, activity) live outside this package and are
- *      plugged in via `DelayedBatchExecutor.setProofVerifier`. A successful verify must
- *      guarantee integrity of the attested claim; liveness remains HP-operated.
- *
- *      Typical publicInputs encoding is verifier-specific (fixture digests, criteria epoch,
- *      playerId, action selector, etc.).
+ * @notice Minimal interface for future ZK / attestation gates.
+ * @dev Not wired into governance-2 day-one contracts. Reserved for later cat-3 caller
+ *      restrictions on top of `UpdateAuthority` (or typed executors).
  */
 interface IProofVerifier {
     /**

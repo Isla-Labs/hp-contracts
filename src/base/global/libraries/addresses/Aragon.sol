@@ -1,17 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-/**
- * @title AragonBaseAddresses
- * @notice Pinned Aragon OSx framework addresses on Base mainnet.
- * @dev Source of truth: `@aragon/osx-artifacts` → `addresses.json` (hand-curated by Aragon).
- *      https://github.com/aragon/osx/blob/main/npm-artifacts/src/addresses.json
- *
- *      Plugin repos (Multisig, TokenVoting, Admin) version independently — confirm repo
- *      addresses at DAO creation time from the matching plugin-artifacts packages / App UI.
- *
- *      These are framework contracts. Your HP DAO is created via `DAO_FACTORY.createDao`.
- */
 library AragonBaseAddresses {
     address internal constant DAO_IMPLEMENTATION = 0xBeb2271224D22BdA388B513268873387E5BfC27f;
     address internal constant DAO_FACTORY = 0xcc602EA573a42eBeC290f33F49D4A87177ebB8d2;

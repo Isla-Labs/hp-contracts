@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { TournamentType } from "@base/global/types/TournamentTypes.sol";
+
 library RegistryErrors {
     // --------------------------------------------
     //  Shared Errors
@@ -30,6 +32,7 @@ library RegistryErrors {
     error HubAlreadyLinked(bytes32 tournamentId, bytes32 leagueId);
     error HubNotLinked(bytes32 tournamentId, bytes32 leagueId);
     error HubMismatch(bytes32 leagueId, address expected, address actual);
+    error InvalidLinkTarget(TournamentType tournamentType);
     error SeasonExists(bytes32 tournamentId, uint16 seasonStartYear);
     error SeasonNotFound(bytes32 tournamentId, uint16 seasonStartYear);
     error RoundNotFound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber);

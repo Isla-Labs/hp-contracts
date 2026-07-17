@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: AGPL-3.0
+pragma solidity ^0.8.34;
+
+import { RoundStatus } from "@base/global/types/VaultTypes.sol";
+
+library VaultsErrors {
+    // --------------------------------------------
+    //  Shared Errors
+    // --------------------------------------------
+
+    error ZeroAddress();
+    error ZeroId();
+    error NothingToClaim();
+
+    // --------------------------------------------
+    //  PBRTreasury Errors
+    // --------------------------------------------
+
+    error ZeroSeason();
+    error LengthMismatch();
+    error NothingDue();
+    error NothingToSnapshot();
+    error BadRoundStatus(uint16 season, uint32 roundNumber, RoundStatus actual, RoundStatus expected);
+    error RoundNotEnded(uint16 season, uint32 roundNumber, uint256 endTime, uint256 currentTime);
+    error UnknownVault(address vault);
+    error VaultAlreadyRegistered(address vault);
+    error ZeroMAdj();
+    error InsufficientRoundFunds();
+    error TransferFailed();
+
+    // --------------------------------------------
+    //  PlayerVault Errors
+    // --------------------------------------------
+
+    error ZeroAmount();
+    error OnlyTournamentTreasury();
+    error InsufficientStake();
+    error MatchweekLock();
+    error AlreadySnapshotted(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber);
+    error NoSnapshot(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber);
+    error AlreadyClaimed();
+    error UnknownTournamentTreasury(bytes32 tournamentId);
+}

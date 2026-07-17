@@ -7,6 +7,8 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
+import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
 import { RoundStatus } from "@base/global/types/VaultTypes.sol";
 import { TournamentRegistry } from "@src/TournamentRegistry.sol";
 import { IStakedToken } from "@vaults/interfaces/IStakedToken.sol";
@@ -49,35 +51,6 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
     RoundKey[] private _snapRounds;
 
     // --------------------------------------------
-    //  Events
-    // --------------------------------------------
-
-    event Staked(address indexed user, uint256 amount, uint256 newTotalStaked);
-    event Unstaked(address indexed user, uint256 amount, uint256 newTotalStaked);
-    event SnapshotTaken(
-        bytes32 indexed tournamentId, uint16 indexed seasonId, uint32 roundNumber, uint256 snapId, uint256 totalSupply
-    );
-    event Claimed(
-        address indexed user, bytes32 indexed tournamentId, uint16 indexed seasonId, uint32 roundNumber, uint256 payout
-    );
-
-    // --------------------------------------------
-    //  Errors
-    // --------------------------------------------
-
-    error ZeroAddress();
-    error ZeroId();
-    error ZeroAmount();
-    error OnlyTournamentTreasury();
-    error InsufficientStake();
-    error MatchweekLock();
-    error AlreadySnapshotted(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber);
-    error NoSnapshot(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber);
-    error AlreadyClaimed();
-    error NothingToClaim();
-    error UnknownTournamentTreasury(bytes32 tournamentId);
-
-    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
@@ -97,9 +70,9 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
             admin_ == address(0) || tournamentRegistry_ == address(0) || playerToken_ == address(0)
                 || stToken_ == address(0)
         ) {
-            revert ZeroAddress();
+            revert Errors.ZeroAddress();
         }
-        if (playerId_ == bytes32(0)) revert ZeroId();
+        if (playerId_ == bytes32(0)) revert Errors.ZeroId();
 
         tournamentRegistry = TournamentRegistry(tournamentRegistry_);
         playerId = playerId_;
@@ -113,29 +86,29 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
     // --------------------------------------------
 
     function stake(uint256 amount) external nonReentrant {
-        if (amount == 0) revert ZeroAmount();
+        if (amount == 0) revert Errors.ZeroAmount();
 
         address user = msg.sender;
         IERC20(playerToken).safeTransferFrom(user, address(this), amount);
         IStakedToken(stToken).mint(user, amount);
 
         totalStaked += amount;
-        emit Staked(user, amount, totalStaked);
+        emit Events.Staked(user, amount, totalStaked);
     }
 
     function unstake(uint256 amount) external nonReentrant {
-        if (amount == 0) revert ZeroAmount();
+        if (amount == 0) revert Errors.ZeroAmount();
 
         address user = msg.sender;
         uint256 bal = IStakedToken(stToken).balanceOf(user);
-        if (amount > bal) revert InsufficientStake();
-        if (bal - amount < _lockedBalance(user)) revert MatchweekLock();
+        if (amount > bal) revert Errors.InsufficientStake();
+        if (bal - amount < _lockedBalance(user)) revert Errors.MatchweekLock();
 
         IStakedToken(stToken).burn(user, amount);
         IERC20(playerToken).safeTransfer(user, amount);
 
         totalStaked -= amount;
-        emit Unstaked(user, amount, totalStaked);
+        emit Events.Unstaked(user, amount, totalStaked);
     }
 
     // --------------------------------------------
@@ -144,16 +117,16 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
 
     function snapshot(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber) external returns (uint256 snapId) {
         address treasury = tournamentRegistry.getPbrTreasury(tournamentId_);
-        if (treasury == address(0) || msg.sender != treasury) revert OnlyTournamentTreasury();
+        if (treasury == address(0) || msg.sender != treasury) revert Errors.OnlyTournamentTreasury();
         if (snapIdOf[tournamentId_][seasonId_][roundNumber] != 0) {
-            revert AlreadySnapshotted(tournamentId_, seasonId_, roundNumber);
+            revert Errors.AlreadySnapshotted(tournamentId_, seasonId_, roundNumber);
         }
 
         snapId = IStakedToken(stToken).snapshot();
         snapIdOf[tournamentId_][seasonId_][roundNumber] = snapId;
         _snapRounds.push(RoundKey({ tournamentId: tournamentId_, seasonId: seasonId_, roundNumber: roundNumber }));
 
-        emit SnapshotTaken(tournamentId_, seasonId_, roundNumber, snapId, IStakedToken(stToken).totalSupplyAt(snapId));
+        emit Events.SnapshotTaken(tournamentId_, seasonId_, roundNumber, snapId, IStakedToken(stToken).totalSupplyAt(snapId));
     }
 
     // --------------------------------------------
@@ -212,11 +185,11 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
         returns (uint256 payout)
     {
         uint256 snapId = snapIdOf[tournamentId_][seasonId_][roundNumber];
-        if (snapId == 0) revert NoSnapshot(tournamentId_, seasonId_, roundNumber);
-        if (_isClaimed(user, snapId)) revert AlreadyClaimed();
+        if (snapId == 0) revert Errors.NoSnapshot(tournamentId_, seasonId_, roundNumber);
+        if (_isClaimed(user, snapId)) revert Errors.AlreadyClaimed();
 
         address treasuryAddr = tournamentRegistry.getPbrTreasury(tournamentId_);
-        if (treasuryAddr == address(0)) revert UnknownTournamentTreasury(tournamentId_);
+        if (treasuryAddr == address(0)) revert Errors.UnknownTournamentTreasury(tournamentId_);
 
         PbrTreasury treasury = PbrTreasury(payable(treasuryAddr));
         uint256 s = IStakedToken(stToken).balanceOfAt(user, snapId);
@@ -225,13 +198,13 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
 
         if (s == 0 || S == 0 || m == 0) {
             _setClaimed(user, snapId);
-            if (revertOnEmpty) revert NothingToClaim();
+            if (revertOnEmpty) revert Errors.NothingToClaim();
             return 0;
         }
 
         _setClaimed(user, snapId);
         payout = treasury.payClaim(seasonId_, roundNumber, user, s, S);
-        emit Claimed(user, tournamentId_, seasonId_, roundNumber, payout);
+        emit Events.Claimed(user, tournamentId_, seasonId_, roundNumber, payout);
     }
 
     function _lockedBalance(address user) internal view returns (uint256 locked) {

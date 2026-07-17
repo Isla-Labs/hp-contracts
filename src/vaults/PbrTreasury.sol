@@ -6,6 +6,8 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 
+import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
 import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
 import { RoundState, RoundStatus } from "@base/global/types/VaultTypes.sol";
 import { TournamentRegistry } from "@src/TournamentRegistry.sol";
@@ -64,45 +66,12 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
     bool public snapshotPending;
 
     // --------------------------------------------
-    //  Events
-    // --------------------------------------------
-
-    event FeesReceived(uint256 amount);
-    event VaultRegistered(address indexed vault);
-    event VaultUnregistered(address indexed vault);
-    event RoundLocked(uint16 indexed season, uint32 roundNumber, uint256 R, uint64 startTime, uint64 endTime, uint32 newTradingRound);
-    event SeasonWrapped(uint16 indexed settledSeason, uint16 newSeason);
-    event VaultSnapshotted(uint16 indexed season, uint32 roundNumber, address indexed vault, uint256 snapId);
-    event SnapshotBatchProgress(uint16 indexed season, uint32 roundNumber, uint256 cursor, bool done);
-    event RoundSettled(uint16 indexed season, uint32 roundNumber, uint256 M_adj, uint256 vaultCount);
-    event ClaimPaid(uint16 indexed season, uint32 roundNumber, address indexed vault, address user, uint256 payout);
-
-    // --------------------------------------------
-    //  Errors
-    // --------------------------------------------
-
-    error ZeroAddress();
-    error ZeroId();
-    error ZeroSeason();
-    error LengthMismatch();
-    error NothingDue();
-    error NothingToSnapshot();
-    error BadRoundStatus(uint16 season, uint32 roundNumber, RoundStatus actual, RoundStatus expected);
-    error RoundNotEnded(uint16 season, uint32 roundNumber, uint256 endTime, uint256 currentTime);
-    error UnknownVault(address vault);
-    error VaultAlreadyRegistered(address vault);
-    error ZeroMAdj();
-    error NothingToClaim();
-    error InsufficientRoundFunds();
-    error TransferFailed();
-
-    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address tournamentRegistry_) {
-        if (tournamentRegistry_ == address(0)) revert ZeroAddress();
+        if (tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
         tournamentRegistry = TournamentRegistry(tournamentRegistry_);
         _disableInitializers();
     }
@@ -113,9 +82,9 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
      * @param initialSeason_ Starting season (e.g. 2025).
      */
     function initialize(address admin_, bytes32 tournamentId_, uint16 initialSeason_) external initializer {
-        if (admin_ == address(0)) revert ZeroAddress();
-        if (tournamentId_ == bytes32(0)) revert ZeroId();
-        if (initialSeason_ == 0) revert ZeroSeason();
+        if (admin_ == address(0)) revert Errors.ZeroAddress();
+        if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
+        if (initialSeason_ == 0) revert Errors.ZeroSeason();
 
         tournamentId = tournamentId_;
         seasonId = initialSeason_;
@@ -130,7 +99,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         if (msg.value == 0) return;
         rewardsR += msg.value;
         totalRewardsR += msg.value;
-        emit FeesReceived(msg.value);
+        emit Events.FeesReceived(msg.value);
     }
 
     // --------------------------------------------
@@ -138,18 +107,18 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
     // --------------------------------------------
 
     function registerVault(address vault) external onlyRole(ADMIN_ROLE) {
-        if (vault == address(0)) revert ZeroAddress();
-        if (vault.code.length == 0) revert UnknownVault(vault);
-        if (isVault[vault]) revert VaultAlreadyRegistered(vault);
+        if (vault == address(0)) revert Errors.ZeroAddress();
+        if (vault.code.length == 0) revert Errors.UnknownVault(vault);
+        if (isVault[vault]) revert Errors.VaultAlreadyRegistered(vault);
 
         isVault[vault] = true;
         _vaults.push(vault);
         _vaultIndex[vault] = _vaults.length;
-        emit VaultRegistered(vault);
+        emit Events.VaultRegistered(vault);
     }
 
     function unregisterVault(address vault) external onlyRole(ADMIN_ROLE) {
-        if (!isVault[vault]) revert UnknownVault(vault);
+        if (!isVault[vault]) revert Errors.UnknownVault(vault);
 
         uint256 index0 = _vaultIndex[vault] - 1;
         uint256 last = _vaults.length - 1;
@@ -161,7 +130,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         _vaults.pop();
         delete _vaultIndex[vault];
         isVault[vault] = false;
-        emit VaultUnregistered(vault);
+        emit Events.VaultUnregistered(vault);
     }
 
     // --------------------------------------------
@@ -171,23 +140,23 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
     /// @notice Freeze a share of `rewardsR` into the active round when published and due.
     /// @dev Non-final rounds lock `LOCK_BPS` (80%); the final round freezes 100%. Remainder stays in `rewardsR`.
     function lock() external {
-        if (tradingRound != activeRound) revert NothingDue();
+        if (tradingRound != activeRound) revert Errors.NothingDue();
 
         uint16 season = seasonId;
         uint32 roundNumber = activeRound;
         RoundState storage round = _rounds[season][roundNumber];
         if (round.status != RoundStatus.None) {
-            revert BadRoundStatus(season, roundNumber, round.status, RoundStatus.None);
+            revert Errors.BadRoundStatus(season, roundNumber, round.status, RoundStatus.None);
         }
 
         bytes32 tid = tournamentId;
-        if (!tournamentRegistry.isRoundPublished(tid, season, roundNumber)) revert NothingDue();
+        if (!tournamentRegistry.isRoundPublished(tid, season, roundNumber)) revert Errors.NothingDue();
 
         RoundSchedule memory schedule = tournamentRegistry.getRound(tid, season, roundNumber);
-        if (block.timestamp < schedule.startTime) revert NothingDue();
+        if (block.timestamp < schedule.startTime) revert Errors.NothingDue();
 
         uint32 finalRound = tournamentRegistry.getFinalRound(tid, season);
-        if (finalRound == 0) revert NothingDue();
+        if (finalRound == 0) revert Errors.NothingDue();
 
         uint256 pot = rewardsR;
         uint256 R = roundNumber >= finalRound ? pot : Math.mulDiv(pot, LOCK_BPS, 10_000);
@@ -202,25 +171,25 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         snapshotCursor = 0;
         snapshotPending = true;
 
-        emit RoundLocked(season, roundNumber, R, round.startTime, round.endTime, tradingRound);
+        emit Events.RoundLocked(season, roundNumber, R, round.startTime, round.endTime, tradingRound);
     }
 
     /// @notice Page vault snapshots for the locked active round (50 per call).
     function snapshotBatch() external returns (uint256 processed, bool done) {
-        if (!snapshotPending) revert NothingToSnapshot();
+        if (!snapshotPending) revert Errors.NothingToSnapshot();
 
         uint16 season = seasonId;
         uint32 roundNumber = activeRound;
         RoundState storage round = _rounds[season][roundNumber];
         if (round.status != RoundStatus.Locked) {
-            revert BadRoundStatus(season, roundNumber, round.status, RoundStatus.Locked);
+            revert Errors.BadRoundStatus(season, roundNumber, round.status, RoundStatus.Locked);
         }
 
         uint256 length = _vaults.length;
         uint256 cursor = snapshotCursor;
         if (cursor >= length) {
             snapshotPending = false;
-            emit SnapshotBatchProgress(season, roundNumber, cursor, true);
+            emit Events.SnapshotBatchProgress(season, roundNumber, cursor, true);
             return (0, true);
         }
 
@@ -233,7 +202,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
             IPlayerVault playerVault = IPlayerVault(vault);
             if (playerVault.snapIdOf(tid, season, roundNumber) == 0) {
                 uint256 snapId = playerVault.snapshot(tid, season, roundNumber);
-                emit VaultSnapshotted(season, roundNumber, vault, snapId);
+                emit Events.VaultSnapshotted(season, roundNumber, vault, snapId);
             }
             unchecked {
                 ++i;
@@ -244,7 +213,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         snapshotCursor = end;
         done = end >= length;
         if (done) snapshotPending = false;
-        emit SnapshotBatchProgress(season, roundNumber, end, done);
+        emit Events.SnapshotBatchProgress(season, roundNumber, end, done);
     }
 
     // --------------------------------------------
@@ -255,22 +224,22 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         external
         onlyRole(SETTLER_ROLE)
     {
-        if (vaults.length != mwPoints.length) revert LengthMismatch();
-        if (adjTotalPoints == 0) revert ZeroMAdj();
+        if (vaults.length != mwPoints.length) revert Errors.LengthMismatch();
+        if (adjTotalPoints == 0) revert Errors.ZeroMAdj();
 
         uint16 season = seasonId;
         uint32 roundNumber = activeRound;
         RoundState storage round = _rounds[season][roundNumber];
         if (round.status != RoundStatus.Locked) {
-            revert BadRoundStatus(season, roundNumber, round.status, RoundStatus.Locked);
+            revert Errors.BadRoundStatus(season, roundNumber, round.status, RoundStatus.Locked);
         }
         if (block.timestamp < round.endTime) {
-            revert RoundNotEnded(season, roundNumber, round.endTime, block.timestamp);
+            revert Errors.RoundNotEnded(season, roundNumber, round.endTime, block.timestamp);
         }
 
         uint256 length = vaults.length;
         for (uint256 i; i < length; ++i) {
-            if (!isVault[vaults[i]]) revert UnknownVault(vaults[i]);
+            if (!isVault[vaults[i]]) revert Errors.UnknownVault(vaults[i]);
             vaultPoints[season][roundNumber][vaults[i]] = mwPoints[i];
         }
 
@@ -283,12 +252,12 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
             activeRound = 1;
             uint16 newSeason = season + 1;
             seasonId = newSeason;
-            emit SeasonWrapped(season, newSeason);
+            emit Events.SeasonWrapped(season, newSeason);
         } else {
             activeRound = tradingRound;
         }
 
-        emit RoundSettled(season, roundNumber, adjTotalPoints, length);
+        emit Events.RoundSettled(season, roundNumber, adjTotalPoints, length);
     }
 
     // --------------------------------------------
@@ -300,31 +269,31 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         nonReentrant
         returns (uint256 payout)
     {
-        if (!isVault[msg.sender]) revert UnknownVault(msg.sender);
-        if (user == address(0)) revert ZeroAddress();
+        if (!isVault[msg.sender]) revert Errors.UnknownVault(msg.sender);
+        if (user == address(0)) revert Errors.ZeroAddress();
 
         RoundState storage round = _rounds[season][roundNumber];
         if (round.status != RoundStatus.Claimable) {
-            revert BadRoundStatus(season, roundNumber, round.status, RoundStatus.Claimable);
+            revert Errors.BadRoundStatus(season, roundNumber, round.status, RoundStatus.Claimable);
         }
-        if (s == 0 || S == 0 || round.R == 0) revert NothingToClaim();
+        if (s == 0 || S == 0 || round.R == 0) revert Errors.NothingToClaim();
 
         uint256 m = vaultPoints[season][roundNumber][msg.sender];
-        if (m == 0) revert NothingToClaim();
+        if (m == 0) revert Errors.NothingToClaim();
 
         payout = Math.mulDiv(Math.mulDiv(round.R, m, round.M_adj), s, S);
-        if (payout == 0) revert NothingToClaim();
+        if (payout == 0) revert Errors.NothingToClaim();
 
         uint256 newPaid = round.paid + payout;
-        if (newPaid > round.R) revert InsufficientRoundFunds();
+        if (newPaid > round.R) revert Errors.InsufficientRoundFunds();
 
         round.paid = newPaid;
         totalRewardsR -= payout;
 
         (bool ok,) = user.call{ value: payout }("");
-        if (!ok) revert TransferFailed();
+        if (!ok) revert Errors.TransferFailed();
 
-        emit ClaimPaid(season, roundNumber, msg.sender, user, payout);
+        emit Events.ClaimPaid(season, roundNumber, msg.sender, user, payout);
     }
 
     // --------------------------------------------

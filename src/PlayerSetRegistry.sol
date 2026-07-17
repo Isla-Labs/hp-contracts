@@ -4,6 +4,8 @@ pragma solidity ^0.8.34;
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
+import { RegistryErrors as Errors } from "@base/global/libraries/errors/RegistryErrors.sol";
+import { RegistryEvents as Events } from "@base/global/libraries/events/RegistryEvents.sol";
 import {
     AdvancedTradeData,
     DopplerData,
@@ -49,34 +51,6 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     bytes32[] private _playerIds;
 
     // --------------------------------------------
-    //  Events
-    // --------------------------------------------
-
-    event PlayerRegistered(bytes32 indexed playerId, address indexed token, address indexed feeRouter);
-    event StatusUpdated(bytes32 indexed playerId, PlayerStatus status);
-    event LeagueIdUpdated(bytes32 indexed playerId, bytes32 indexed leagueId);
-    event ActiveTournamentAdded(bytes32 indexed playerId, bytes32 indexed tournamentId);
-    event ActiveTournamentRemoved(bytes32 indexed playerId, bytes32 indexed tournamentId);
-    event VaultDataAdded(bytes32 indexed playerId, address playerVault, address stToken);
-    event VaultDataUpdated(bytes32 indexed playerId, address playerVault, address stToken, bool isUtilized);
-    event DopplerDataUpdated(bytes32 indexed playerId, address feeRouter);
-    event AdvancedTradeDataAdded(bytes32 indexed playerId, address advancedTradeVault, address markSource);
-
-    // --------------------------------------------
-    //  Errors
-    // --------------------------------------------
-
-    error ZeroAddress();
-    error ZeroId();
-    error NotAuthorized();
-    error Exists();
-    error NotFound();
-    error VaultDataAlreadySet(bytes32 playerId);
-    error AdvancedTradeDataAlreadySet(bytes32 playerId);
-    error TournamentAlreadyActive(bytes32 tournamentId);
-    error TournamentNotActive(bytes32 tournamentId);
-
-    // --------------------------------------------
     //  Access Control
     // --------------------------------------------
 
@@ -86,7 +60,7 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     }
 
     function _onlyVault() internal view {
-        if (playerIdOfVault[msg.sender] == bytes32(0)) revert NotAuthorized();
+        if (playerIdOfVault[msg.sender] == bytes32(0)) revert Errors.NotAuthorized();
     }
 
     // --------------------------------------------
@@ -104,7 +78,7 @@ contract PlayerSetRegistry is Initializable, AccessControl {
      * @param activityTimelock_ ActivityTimelock: `UPKEEP_ROLE`.
      */
     function initialize(address admin_, address updateAuthority_, address lifecycleTimelock_, address activityTimelock_) external initializer {
-        if (admin_ == address(0) || updateAuthority_ == address(0) || lifecycleTimelock_ == address(0) || activityTimelock_ == address(0)) revert ZeroAddress();
+        if (admin_ == address(0) || updateAuthority_ == address(0) || lifecycleTimelock_ == address(0) || activityTimelock_ == address(0)) revert Errors.ZeroAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(UPDATE_ROLE, updateAuthority_);
@@ -127,16 +101,16 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         TournamentData calldata tournamentData,
         DopplerData calldata dopplerData
     ) external onlyRole(LIFECYCLE_ROLE) {
-        if (playerId == bytes32(0)) revert ZeroId();
-        if (tokenData.token == address(0)) revert ZeroAddress();
+        if (playerId == bytes32(0)) revert Errors.ZeroId();
+        if (tokenData.token == address(0)) revert Errors.ZeroAddress();
         if (
             dopplerData.hookDoppler == address(0) || dopplerData.hookMigrator == address(0)
                 || dopplerData.feeRouter == address(0)
         ) {
-            revert ZeroAddress();
+            revert Errors.ZeroAddress();
         }
-        if (_playerSets[playerId].tokenData.token != address(0)) revert Exists();
-        if (playerIdOfToken[tokenData.token] != bytes32(0)) revert Exists();
+        if (_playerSets[playerId].tokenData.token != address(0)) revert Errors.Exists();
+        if (playerIdOfToken[tokenData.token] != bytes32(0)) revert Errors.Exists();
 
         PlayerSet storage set = _playerSets[playerId];
         set.status = PlayerStatus.BONDING;
@@ -147,12 +121,12 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         playerIdOfToken[tokenData.token] = playerId;
         _playerIds.push(playerId);
 
-        emit PlayerRegistered(playerId, tokenData.token, dopplerData.feeRouter);
-        if (tournamentData.leagueId != bytes32(0)) emit LeagueIdUpdated(playerId, tournamentData.leagueId);
+        emit Events.PlayerRegistered(playerId, tokenData.token, dopplerData.feeRouter);
+        if (tournamentData.leagueId != bytes32(0)) emit Events.LeagueIdUpdated(playerId, tournamentData.leagueId);
 
         uint256 n = tournamentData.activeTournaments.length;
         for (uint256 i; i < n; ++i) {
-            emit ActiveTournamentAdded(playerId, tournamentData.activeTournaments[i]);
+            emit Events.ActiveTournamentAdded(playerId, tournamentData.activeTournaments[i]);
         }
     }
 
@@ -161,16 +135,16 @@ contract PlayerSetRegistry is Initializable, AccessControl {
      */
     function addVaultData(bytes32 playerId, VaultData calldata vaultData) external onlyRole(LIFECYCLE_ROLE) {
         PlayerSet storage set = _requirePlayer(playerId);
-        if (set.vaultData.playerVault != address(0)) revert VaultDataAlreadySet(playerId);
-        if (vaultData.playerVault == address(0) || vaultData.stToken == address(0)) revert ZeroAddress();
-        if (playerIdOfVault[vaultData.playerVault] != bytes32(0)) revert Exists();
+        if (set.vaultData.playerVault != address(0)) revert Errors.VaultDataAlreadySet(playerId);
+        if (vaultData.playerVault == address(0) || vaultData.stToken == address(0)) revert Errors.ZeroAddress();
+        if (playerIdOfVault[vaultData.playerVault] != bytes32(0)) revert Errors.Exists();
 
         set.vaultData = VaultData({
             playerVault: vaultData.playerVault, stToken: vaultData.stToken, isUtilized: vaultData.isUtilized
         });
         playerIdOfVault[vaultData.playerVault] = playerId;
 
-        emit VaultDataAdded(playerId, vaultData.playerVault, vaultData.stToken);
+        emit Events.VaultDataAdded(playerId, vaultData.playerVault, vaultData.stToken);
     }
 
     /**
@@ -181,11 +155,11 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         onlyRole(LIFECYCLE_ROLE)
     {
         PlayerSet storage set = _requirePlayer(playerId);
-        if (set.advancedTradeData.advancedTradeVault != address(0)) revert AdvancedTradeDataAlreadySet(playerId);
-        if (data.advancedTradeVault == address(0) || data.markSource == address(0)) revert ZeroAddress();
+        if (set.advancedTradeData.advancedTradeVault != address(0)) revert Errors.AdvancedTradeDataAlreadySet(playerId);
+        if (data.advancedTradeVault == address(0) || data.markSource == address(0)) revert Errors.ZeroAddress();
 
         set.advancedTradeData = data;
-        emit AdvancedTradeDataAdded(playerId, data.advancedTradeVault, data.markSource);
+        emit Events.AdvancedTradeDataAdded(playerId, data.advancedTradeVault, data.markSource);
     }
 
     // --------------------------------------------
@@ -195,22 +169,22 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     function updateUtilization(bool isUtilized) external onlyVault {
         bytes32 playerId = playerIdOfVault[msg.sender];
         PlayerSet storage set = _playerSets[playerId];
-        if (set.vaultData.playerVault != msg.sender) revert NotAuthorized();
+        if (set.vaultData.playerVault != msg.sender) revert Errors.NotAuthorized();
 
         set.vaultData.isUtilized = isUtilized;
-        emit VaultDataUpdated(playerId, set.vaultData.playerVault, set.vaultData.stToken, isUtilized);
+        emit Events.VaultDataUpdated(playerId, set.vaultData.playerVault, set.vaultData.stToken, isUtilized);
     }
 
     function setStatus(bytes32 playerId, PlayerStatus status) external onlyRole(UPDATE_ROLE) {
         _requirePlayer(playerId);
         _playerSets[playerId].status = status;
-        emit StatusUpdated(playerId, status);
+        emit Events.StatusUpdated(playerId, status);
     }
 
     function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyRole(LIFECYCLE_ROLE) {
         _requirePlayer(playerId);
         _playerSets[playerId].tournamentData.leagueId = leagueId;
-        emit LeagueIdUpdated(playerId, leagueId);
+        emit Events.LeagueIdUpdated(playerId, leagueId);
     }
 
     function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(ACTIVITY_ROLE) {
@@ -230,22 +204,22 @@ contract PlayerSetRegistry is Initializable, AccessControl {
                 break;
             }
         }
-        if (index == type(uint256).max) revert TournamentNotActive(tournamentId);
+        if (index == type(uint256).max) revert Errors.TournamentNotActive(tournamentId);
 
         uint256 last = length - 1;
         if (index != last) active[index] = active[last];
         active.pop();
-        emit ActiveTournamentRemoved(playerId, tournamentId);
+        emit Events.ActiveTournamentRemoved(playerId, tournamentId);
     }
 
     /// @notice Updates Doppler fields after migration / hook replacement
     function setDopplerData(bytes32 playerId, DopplerData calldata data) external onlyRole(UPDATE_ROLE) {
         _requirePlayer(playerId);
         if (data.hookDoppler == address(0) || data.hookMigrator == address(0) || data.feeRouter == address(0)) {
-            revert ZeroAddress();
+            revert Errors.ZeroAddress();
         }
         _playerSets[playerId].dopplerData = data;
-        emit DopplerDataUpdated(playerId, data.feeRouter);
+        emit Events.DopplerDataUpdated(playerId, data.feeRouter);
     }
 
     // --------------------------------------------
@@ -299,10 +273,10 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         uint256 n = tournamentData.activeTournaments.length;
         for (uint256 i; i < n; ++i) {
             bytes32 tournamentId = tournamentData.activeTournaments[i];
-            if (tournamentId == bytes32(0)) revert ZeroId();
+            if (tournamentId == bytes32(0)) revert Errors.ZeroId();
             for (uint256 j; j < i; ++j) {
                 if (tournamentData.activeTournaments[j] == tournamentId) {
-                    revert TournamentAlreadyActive(tournamentId);
+                    revert Errors.TournamentAlreadyActive(tournamentId);
                 }
             }
             set.tournamentData.activeTournaments.push(tournamentId);
@@ -310,20 +284,20 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     }
 
     function _addActiveTournament(bytes32 playerId, bytes32 tournamentId) internal {
-        if (tournamentId == bytes32(0)) revert ZeroId();
+        if (tournamentId == bytes32(0)) revert Errors.ZeroId();
 
         bytes32[] storage active = _playerSets[playerId].tournamentData.activeTournaments;
         uint256 length = active.length;
         for (uint256 i; i < length; ++i) {
-            if (active[i] == tournamentId) revert TournamentAlreadyActive(tournamentId);
+            if (active[i] == tournamentId) revert Errors.TournamentAlreadyActive(tournamentId);
         }
 
         active.push(tournamentId);
-        emit ActiveTournamentAdded(playerId, tournamentId);
+        emit Events.ActiveTournamentAdded(playerId, tournamentId);
     }
 
     function _requirePlayer(bytes32 playerId) internal view returns (PlayerSet storage set) {
         set = _playerSets[playerId];
-        if (set.tokenData.token == address(0)) revert NotFound();
+        if (set.tokenData.token == address(0)) revert Errors.NotFound();
     }
 }

@@ -5,6 +5,10 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 
+import { MarketsErrors as Errors } from "@base/global/libraries/errors/MarketsErrors.sol";
+import { MarketsEvents as Events } from "@base/global/libraries/events/MarketsEvents.sol";
+import { TournamentType } from "@base/global/types/TournamentTypes.sol";
+
 /**
  * @title PbrFeeHub
  * @notice Per-domestic-league fee splitter: `FeeRouter` → hub → typed `PbrTreasury` destinations.
@@ -28,16 +32,7 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
-    // --------------------------------------------
-    //  Internal Constants
-    // --------------------------------------------
-
     uint16 public constant BPS_DENOMINATOR = 10_000;
-
-    uint8 public constant KIND_DOMESTIC_LEAGUE = 1;
-    uint8 public constant KIND_DOMESTIC_CUP = 2;
-    uint8 public constant KIND_CONTINENTAL = 3;
-    uint8 public constant KIND_INTERNATIONAL = 4;
 
     // --------------------------------------------
     //  Storage
@@ -73,33 +68,6 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     mapping(address treasury => uint256) public pending;
 
     // --------------------------------------------
-    //  Events
-    // --------------------------------------------
-
-    event FeesReceived(uint256 amount);
-    event FeesRelayed(uint8 indexed kind, address indexed treasury, uint256 amount);
-    event FeesQueued(uint8 indexed kind, address indexed treasury, uint256 amount);
-    event TopLevelSplitUpdated(uint16 domesticBps, uint16 continentalBps, uint16 internationalBps);
-    event LeagueShareUpdated(uint16 leagueShareBps);
-    event LeagueTreasuryUpdated(address indexed previous, address indexed treasury);
-    event DomesticCupsUpdated(address[] cups);
-    event ContinentalUpdated(address[] treasuries);
-    event InternationalUpdated(address[] treasuries);
-    event InternationalActiveUpdated(bool active, address indexed treasury);
-    event InternationalActiveShareUpdated(uint16 internationalActiveShareBps);
-
-    // --------------------------------------------
-    //  Errors
-    // --------------------------------------------
-
-    error ZeroAddress();
-    error ZeroId();
-    error NoLiveDestination();
-    error InvalidBpsTotal(uint256 total);
-    error DuplicateTreasury(address treasury);
-    error InternationalNotConfigured();
-
-    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
@@ -114,8 +82,8 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
      * @param leagueTreasury_ Primary domestic league `PbrTreasury`.
      */
     function initialize(address admin_, bytes32 leagueId_, address leagueTreasury_) external initializer {
-        if (admin_ == address(0) || leagueTreasury_ == address(0)) revert ZeroAddress();
-        if (leagueId_ == bytes32(0)) revert ZeroId();
+        if (admin_ == address(0) || leagueTreasury_ == address(0)) revert Errors.ZeroAddress();
+        if (leagueId_ == bytes32(0)) revert Errors.ZeroId();
 
         leagueId = leagueId_;
         leagueTreasury = leagueTreasury_;
@@ -127,10 +95,10 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         leagueShareBps = 8900;
         internationalActiveShareBps = 9000;
 
-        emit TopLevelSplitUpdated(domesticBps, continentalBps, internationalBps);
-        emit LeagueShareUpdated(leagueShareBps);
-        emit InternationalActiveShareUpdated(internationalActiveShareBps);
-        emit LeagueTreasuryUpdated(address(0), leagueTreasury_);
+        emit Events.TopLevelSplitUpdated(domesticBps, continentalBps, internationalBps);
+        emit Events.LeagueShareUpdated(leagueShareBps);
+        emit Events.InternationalActiveShareUpdated(internationalActiveShareBps);
+        emit Events.LeagueTreasuryUpdated(address(0), leagueTreasury_);
     }
 
     // --------------------------------------------
@@ -143,30 +111,31 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
 
     /// @notice Retries pending amounts for all configured destinations
     function forward() external nonReentrant {
-        _forward(KIND_DOMESTIC_LEAGUE, leagueTreasury);
+        _forward(TournamentType.DOMESTIC_LEAGUE, leagueTreasury);
 
         uint256 cups = _domesticCups.length;
         for (uint256 i; i < cups; ++i) {
-            _forward(KIND_DOMESTIC_CUP, _domesticCups[i]);
+            _forward(TournamentType.DOMESTIC_CUP, _domesticCups[i]);
         }
 
         uint256 cont = _continental.length;
         for (uint256 i; i < cont; ++i) {
-            _forward(KIND_CONTINENTAL, _continental[i]);
+            _forward(TournamentType.CONTINENTAL, _continental[i]);
         }
 
-        _forward(KIND_INTERNATIONAL, internationalActiveTreasury);
+        _forward(TournamentType.INTERNATIONAL, internationalActiveTreasury);
 
         uint256 intl = _international.length;
         for (uint256 i; i < intl; ++i) {
-            _forward(KIND_INTERNATIONAL, _international[i]);
+            _forward(TournamentType.INTERNATIONAL, _international[i]);
         }
     }
 
-    /// @notice Retries pending for a specific treasury (including orphaned destinations)
+    /// @notice Retries pending for a specific treasury (including orphaned destinations).
+    /// @dev Emits `OrphanFeesRelayed` / `OrphanFeesQueued` — no `TournamentType` (bucket may be unknown).
     function forwardPending(address treasury) external nonReentrant {
-        if (treasury == address(0)) revert ZeroAddress();
-        _forward(0, treasury);
+        if (treasury == address(0)) revert Errors.ZeroAddress();
+        _forwardOrphan(treasury);
     }
 
     // --------------------------------------------
@@ -178,40 +147,40 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         onlyRole(ADMIN_ROLE)
     {
         uint256 total = uint256(domesticBps_) + continentalBps_ + internationalBps_;
-        if (total != BPS_DENOMINATOR) revert InvalidBpsTotal(total);
+        if (total != BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(total);
 
         domesticBps = domesticBps_;
         continentalBps = continentalBps_;
         internationalBps = internationalBps_;
-        emit TopLevelSplitUpdated(domesticBps_, continentalBps_, internationalBps_);
+        emit Events.TopLevelSplitUpdated(domesticBps_, continentalBps_, internationalBps_);
     }
 
     function setLeagueShareBps(uint16 leagueShareBps_) external onlyRole(ADMIN_ROLE) {
-        if (leagueShareBps_ > BPS_DENOMINATOR) revert InvalidBpsTotal(leagueShareBps_);
+        if (leagueShareBps_ > BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(leagueShareBps_);
         leagueShareBps = leagueShareBps_;
-        emit LeagueShareUpdated(leagueShareBps_);
+        emit Events.LeagueShareUpdated(leagueShareBps_);
     }
 
     function setLeagueTreasury(address treasury_) external onlyRole(ADMIN_ROLE) {
-        if (treasury_ == address(0)) revert ZeroAddress();
+        if (treasury_ == address(0)) revert Errors.ZeroAddress();
         address previous = leagueTreasury;
         leagueTreasury = treasury_;
-        emit LeagueTreasuryUpdated(previous, treasury_);
+        emit Events.LeagueTreasuryUpdated(previous, treasury_);
     }
 
     function setDomesticCups(address[] calldata cups_) external onlyRole(ADMIN_ROLE) {
         _setAddressList(_domesticCups, cups_);
-        emit DomesticCupsUpdated(cups_);
+        emit Events.DomesticCupsUpdated(cups_);
     }
 
     function setContinental(address[] calldata treasuries_) external onlyRole(ADMIN_ROLE) {
         _setAddressList(_continental, treasuries_);
-        emit ContinentalUpdated(treasuries_);
+        emit Events.ContinentalUpdated(treasuries_);
     }
 
     function setInternational(address[] calldata treasuries_) external onlyRole(ADMIN_ROLE) {
         _setAddressList(_international, treasuries_);
-        emit InternationalUpdated(treasuries_);
+        emit Events.InternationalUpdated(treasuries_);
     }
 
     /**
@@ -224,23 +193,23 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         // NOTE: ACCESS CONTROL NEEDS STRICT CONDITIONAL CHECKERS.
         // I.E. IT NEEDS TO BE A CAT-1 UPDATE PROBABLY.
         if (active) {
-            if (treasury == address(0)) revert ZeroAddress();
+            if (treasury == address(0)) revert Errors.ZeroAddress();
             internationalActiveTreasury = treasury;
             internationalActive = true;
-            emit InternationalActiveUpdated(true, treasury);
+            emit Events.InternationalActiveUpdated(true, treasury);
             return;
         }
 
         internationalActive = false;
         internationalActiveTreasury = address(0);
-        emit InternationalActiveUpdated(false, address(0));
+        emit Events.InternationalActiveUpdated(false, address(0));
     }
 
     /// @notice Share of gross routed to `internationalActiveTreasury` while the override is active
     function setInternationalActiveShareBps(uint16 shareBps_) external onlyRole(ADMIN_ROLE) {
-        if (shareBps_ > BPS_DENOMINATOR) revert InvalidBpsTotal(shareBps_);
+        if (shareBps_ > BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(shareBps_);
         internationalActiveShareBps = shareBps_;
-        emit InternationalActiveShareUpdated(shareBps_);
+        emit Events.InternationalActiveShareUpdated(shareBps_);
     }
 
     // --------------------------------------------
@@ -266,14 +235,14 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     function _split(uint256 amount) internal {
         if (amount == 0) return;
 
-        emit FeesReceived(amount);
+        emit Events.FeesReceived(amount);
 
         if (internationalActive) {
             address dest = internationalActiveTreasury;
-            if (dest == address(0)) revert InternationalNotConfigured();
+            if (dest == address(0)) revert Errors.InternationalNotConfigured();
 
             uint256 overrideAmt = (amount * internationalActiveShareBps) / BPS_DENOMINATOR;
-            _pay(KIND_INTERNATIONAL, dest, overrideAmt);
+            _pay(TournamentType.INTERNATIONAL, dest, overrideAmt);
             amount -= overrideAmt;
             if (amount == 0) return;
         }
@@ -284,18 +253,18 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     /// @dev Normal top-level cascade: live continental / international take fixed BPS; domestic engulfs rest.
     function _splitCascade(uint256 amount) internal {
         if (amount == 0) return;
-        if (leagueTreasury == address(0)) revert NoLiveDestination();
+        if (leagueTreasury == address(0)) revert Errors.NoLiveDestination();
 
         uint256 continentalAmt;
         if (_continental.length != 0) {
             continentalAmt = (amount * continentalBps) / BPS_DENOMINATOR;
-            _payEven(KIND_CONTINENTAL, _continental, continentalAmt);
+            _payEven(TournamentType.CONTINENTAL, _continental, continentalAmt);
         }
 
         uint256 internationalAmt;
         if (_international.length != 0) {
             internationalAmt = (amount * internationalBps) / BPS_DENOMINATOR;
-            _payEven(KIND_INTERNATIONAL, _international, internationalAmt);
+            _payEven(TournamentType.INTERNATIONAL, _international, internationalAmt);
         }
 
         _splitDomestic(amount - continentalAmt - internationalAmt);
@@ -303,48 +272,48 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
 
     function _splitDomestic(uint256 amount) internal {
         if (amount == 0) return;
-        if (leagueTreasury == address(0)) revert NoLiveDestination();
+        if (leagueTreasury == address(0)) revert Errors.NoLiveDestination();
 
         uint256 liveCups = _domesticCups.length;
         if (liveCups == 0) {
-            _pay(KIND_DOMESTIC_LEAGUE, leagueTreasury, amount);
+            _pay(TournamentType.DOMESTIC_LEAGUE, leagueTreasury, amount);
             return;
         }
 
         uint256 leagueAmt = (amount * leagueShareBps) / BPS_DENOMINATOR;
-        _pay(KIND_DOMESTIC_LEAGUE, leagueTreasury, leagueAmt);
-        _payEven(KIND_DOMESTIC_CUP, _domesticCups, amount - leagueAmt);
+        _pay(TournamentType.DOMESTIC_LEAGUE, leagueTreasury, leagueAmt);
+        _payEven(TournamentType.DOMESTIC_CUP, _domesticCups, amount - leagueAmt);
     }
 
-    function _payEven(uint8 kind, address[] storage treasuries, uint256 amount) internal {
+    function _payEven(TournamentType tournamentType, address[] storage treasuries, uint256 amount) internal {
         if (amount == 0) return;
 
         uint256 count = treasuries.length;
-        if (count == 0) revert NoLiveDestination();
+        if (count == 0) revert Errors.NoLiveDestination();
 
         uint256 share = amount / count;
         uint256 distributed;
         for (uint256 i; i < count; ++i) {
             uint256 leg = i == count - 1 ? amount - distributed : share;
             distributed += leg;
-            _pay(kind, treasuries[i], leg);
+            _pay(tournamentType, treasuries[i], leg);
         }
     }
 
-    function _pay(uint8 kind, address treasury, uint256 amount) internal {
+    function _pay(TournamentType tournamentType, address treasury, uint256 amount) internal {
         if (amount == 0) return;
-        if (treasury == address(0)) revert NoLiveDestination();
+        if (treasury == address(0)) revert Errors.NoLiveDestination();
 
         (bool ok,) = treasury.call{ value: amount }("");
         if (ok) {
-            emit FeesRelayed(kind, treasury, amount);
+            emit Events.FeesRelayed(tournamentType, treasury, amount);
         } else {
             pending[treasury] += amount;
-            emit FeesQueued(kind, treasury, amount);
+            emit Events.FeesQueued(tournamentType, treasury, amount);
         }
     }
 
-    function _forward(uint8 kind, address treasury) internal {
+    function _forward(TournamentType tournamentType, address treasury) internal {
         if (treasury == address(0)) return;
 
         uint256 amount = pending[treasury];
@@ -353,10 +322,24 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         pending[treasury] = 0;
         (bool ok,) = treasury.call{ value: amount }("");
         if (ok) {
-            emit FeesRelayed(kind, treasury, amount);
+            emit Events.FeesRelayed(tournamentType, treasury, amount);
         } else {
             pending[treasury] = amount;
-            emit FeesQueued(kind, treasury, amount);
+            emit Events.FeesQueued(tournamentType, treasury, amount);
+        }
+    }
+
+    function _forwardOrphan(address treasury) internal {
+        uint256 amount = pending[treasury];
+        if (amount == 0) return;
+
+        pending[treasury] = 0;
+        (bool ok,) = treasury.call{ value: amount }("");
+        if (ok) {
+            emit Events.OrphanFeesRelayed(treasury, amount);
+        } else {
+            pending[treasury] = amount;
+            emit Events.OrphanFeesQueued(treasury, amount);
         }
     }
 
@@ -364,9 +347,9 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         uint256 length = next.length;
         for (uint256 i; i < length; ++i) {
             address treasury = next[i];
-            if (treasury == address(0)) revert ZeroAddress();
+            if (treasury == address(0)) revert Errors.ZeroAddress();
             for (uint256 j; j < i; ++j) {
-                if (next[j] == treasury) revert DuplicateTreasury(treasury);
+                if (next[j] == treasury) revert Errors.DuplicateTreasury(treasury);
             }
         }
 

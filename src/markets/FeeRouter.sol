@@ -7,37 +7,9 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
+import { MarketsErrors as Errors } from "@base/global/libraries/errors/MarketsErrors.sol";
+import { MarketsEvents as Events } from "@base/global/libraries/events/MarketsEvents.sol";
 import { TournamentRegistry } from "@src/TournamentRegistry.sol";
-
-/// @notice Emitted when `pbrFeeHub` is updated
-event PbrFeeHubUpdated(bytes32 indexed playerId, address indexed previousHub, address indexed newHub);
-
-/// @notice Emitted when ETH is successfully relayed to a destination
-event FeesRelayed(bytes32 indexed playerId, address indexed to, uint256 amount);
-
-/// @notice Emitted when a relay attempt fails and ETH remains queued on this contract
-event FeesQueued(bytes32 indexed playerId, address indexed to, uint256 amount);
-
-/// @notice Emitted when `atFunding` is updated
-event AtFundingUpdated(bytes32 indexed playerId, address indexed previousFunding, address indexed newFunding);
-
-/// @notice Emitted when ERC20 dust is rescued
-event TokenRescued(address indexed token, address indexed to, uint256 amount);
-
-/// @notice Emitted when the minimum relay threshold is updated
-event MinRelayUpdated(bytes32 indexed playerId, uint256 previous, uint256 minRelay);
-
-/// @notice Thrown when a required address is zero
-error ZeroAddress();
-
-/// @notice Thrown when a required id is zero
-error ZeroId();
-
-/// @notice Thrown when the destination address is this contract
-error InvalidDestination();
-
-/// @notice Thrown when the destination is not a deployed contract
-error DestinationNotContract();
 
 /**
  * @title FeeRouter
@@ -95,7 +67,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address tournamentRegistry_) {
-        if (tournamentRegistry_ == address(0)) revert ZeroAddress();
+        if (tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
         tournamentRegistry = TournamentRegistry(tournamentRegistry_);
         _disableInitializers();
     }
@@ -115,8 +87,8 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
         address atFunding_,
         address pbrFeeHub_
     ) external initializer {
-        if (playerId_ == bytes32(0)) revert ZeroId();
-        if (lifecycleTimelock_ == address(0) || admin_ == address(0)) revert ZeroAddress();
+        if (playerId_ == bytes32(0)) revert Errors.ZeroId();
+        if (lifecycleTimelock_ == address(0) || admin_ == address(0)) revert Errors.ZeroAddress();
 
         playerId = playerId_;
         minRelay = 0.0001 ether;
@@ -170,7 +142,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
             address[] memory hubs = tournamentRegistry.getAllDomesticPbrFeeHubs();
             uint256 count = hubs.length;
             if (count == 0) {
-                emit FeesQueued(playerId, address(0), amount);
+                emit Events.FeesQueued(playerId, address(0), amount);
                 return;
             }
 
@@ -193,15 +165,15 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
         if (amount == 0) return;
 
         if (to == address(0)) {
-            emit FeesQueued(playerId, to, amount);
+            emit Events.FeesQueued(playerId, to, amount);
             return;
         }
 
         (bool success,) = to.call{ value: amount }("");
         if (success) {
-            emit FeesRelayed(playerId, to, amount);
+            emit Events.FeesRelayed(playerId, to, amount);
         } else {
-            emit FeesQueued(playerId, to, amount);
+            emit Events.FeesQueued(playerId, to, amount);
         }
     }
 
@@ -220,9 +192,9 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
      * @param amount Amount to transfer.
      */
     function rescueToken(address token, address to, uint256 amount) external onlyRole(ADMIN_ROLE) {
-        if (token == address(0) || to == address(0)) revert ZeroAddress();
+        if (token == address(0) || to == address(0)) revert Errors.ZeroAddress();
         IERC20(token).safeTransfer(to, amount);
-        emit TokenRescued(token, to, amount);
+        emit Events.TokenRescued(token, to, amount);
     }
 
     /**
@@ -232,7 +204,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     function setMinRelay(uint256 minRelay_) external onlyRole(ADMIN_ROLE) nonReentrant {
         uint256 previous = minRelay;
         minRelay = minRelay_;
-        emit MinRelayUpdated(playerId, previous, minRelay_);
+        emit Events.MinRelayUpdated(playerId, previous, minRelay_);
         _tryRelay();
     }
 
@@ -252,7 +224,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
         address previous = atFunding;
         if (newFunding == address(0)) {
             atFunding = address(0);
-            emit AtFundingUpdated(playerId, previous, address(0));
+            emit Events.AtFundingUpdated(playerId, previous, address(0));
         } else {
             _setAtFunding(newFunding);
         }
@@ -261,21 +233,21 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
 
     function _setPbrFeeHub(address newHub) internal {
         if (newHub != address(0)) {
-            if (newHub == address(this)) revert InvalidDestination();
-            if (newHub.code.length == 0) revert DestinationNotContract();
+            if (newHub == address(this)) revert Errors.InvalidDestination();
+            if (newHub.code.length == 0) revert Errors.DestinationNotContract();
         }
 
         address previous = pbrFeeHub;
         pbrFeeHub = newHub;
-        emit PbrFeeHubUpdated(playerId, previous, newHub);
+        emit Events.PbrFeeHubUpdated(playerId, previous, newHub);
     }
 
     function _setAtFunding(address newFunding) internal {
-        if (newFunding == address(this)) revert InvalidDestination();
-        if (newFunding.code.length == 0) revert DestinationNotContract();
+        if (newFunding == address(this)) revert Errors.InvalidDestination();
+        if (newFunding.code.length == 0) revert Errors.DestinationNotContract();
 
         address previous = atFunding;
         atFunding = newFunding;
-        emit AtFundingUpdated(playerId, previous, newFunding);
+        emit Events.AtFundingUpdated(playerId, previous, newFunding);
     }
 }

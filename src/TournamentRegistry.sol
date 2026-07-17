@@ -4,6 +4,8 @@ pragma solidity ^0.8.34;
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
+import { RegistryErrors as Errors } from "@base/global/libraries/errors/RegistryErrors.sol";
+import { RegistryEvents as Events } from "@base/global/libraries/events/RegistryEvents.sol";
 import {
     Hub,
     Season,
@@ -49,41 +51,6 @@ contract TournamentRegistry is Initializable, AccessControl {
     bytes32[] private _tournamentIds;
 
     // --------------------------------------------
-    //  Events
-    // --------------------------------------------
-
-    event HubRegistered(bytes32 indexed leagueId, address indexed pbrFeeHub);
-    event HubUpdated(bytes32 indexed leagueId, address indexed previous, address indexed pbrFeeHub);
-    event TournamentCreated(
-        bytes32 indexed tournamentId, TournamentType tournamentType, address indexed pbrTreasury
-    );
-    event HubAddedToTournament(bytes32 indexed tournamentId, bytes32 indexed leagueId, address pbrFeeHub);
-    event HubRemovedFromTournament(bytes32 indexed tournamentId, bytes32 indexed leagueId);
-    event PbrTreasuryUpdated(bytes32 indexed tournamentId, address indexed previous, address indexed pbrTreasury);
-    event SeasonOpened(bytes32 indexed tournamentId, uint16 indexed seasonStartYear, uint32 finalRound);
-    event RoundUpserted(bytes32 indexed tournamentId, uint16 indexed seasonStartYear, uint32 roundNumber);
-
-    // --------------------------------------------
-    //  Errors
-    // --------------------------------------------
-
-    error ZeroAddress();
-    error ZeroId();
-    error Exists();
-    error NotFound();
-    error HubAlreadyRegistered(bytes32 leagueId);
-    error HubNotRegistered(bytes32 leagueId);
-    error HubAlreadyLinked(bytes32 tournamentId, bytes32 leagueId);
-    error HubNotLinked(bytes32 tournamentId, bytes32 leagueId);
-    error HubMismatch(bytes32 leagueId, address expected, address actual);
-    error SeasonExists(bytes32 tournamentId, uint16 seasonStartYear);
-    error SeasonNotFound(bytes32 tournamentId, uint16 seasonStartYear);
-    error RoundNotFound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber);
-    error InvalidFinalRound();
-    error InvalidRoundNumber(uint32 roundNumber, uint32 finalRound);
-    error InvalidTimeRange(uint64 startTime, uint64 endTime);
-
-    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
@@ -97,7 +64,7 @@ contract TournamentRegistry is Initializable, AccessControl {
      * @param deployer_ TournamentTimelock granted `DEPLOYER_ROLE`.
      */
     function initialize(address admin_, address deployer_) external initializer {
-        if (admin_ == address(0) || deployer_ == address(0)) revert ZeroAddress();
+        if (admin_ == address(0) || deployer_ == address(0)) revert Errors.ZeroAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
@@ -113,22 +80,22 @@ contract TournamentRegistry is Initializable, AccessControl {
      * @dev Must exist before tournaments can link that hub.
      */
     function registerHub(Hub calldata hub) external onlyRole(DEPLOYER_ROLE) {
-        if (hub.leagueId == bytes32(0)) revert ZeroId();
-        if (hub.pbrFeeHub == address(0)) revert ZeroAddress();
-        if (pbrFeeHubOf[hub.leagueId] != address(0)) revert HubAlreadyRegistered(hub.leagueId);
+        if (hub.leagueId == bytes32(0)) revert Errors.ZeroId();
+        if (hub.pbrFeeHub == address(0)) revert Errors.ZeroAddress();
+        if (pbrFeeHubOf[hub.leagueId] != address(0)) revert Errors.HubAlreadyRegistered(hub.leagueId);
 
         pbrFeeHubOf[hub.leagueId] = hub.pbrFeeHub;
         _leagueIds.push(hub.leagueId);
-        emit HubRegistered(hub.leagueId, hub.pbrFeeHub);
+        emit Events.HubRegistered(hub.leagueId, hub.pbrFeeHub);
     }
 
     function setHub(bytes32 leagueId, address pbrFeeHub) external onlyRole(ADMIN_ROLE) {
-        if (pbrFeeHubOf[leagueId] == address(0)) revert HubNotRegistered(leagueId);
-        if (pbrFeeHub == address(0)) revert ZeroAddress();
+        if (pbrFeeHubOf[leagueId] == address(0)) revert Errors.HubNotRegistered(leagueId);
+        if (pbrFeeHub == address(0)) revert Errors.ZeroAddress();
 
         address previous = pbrFeeHubOf[leagueId];
         pbrFeeHubOf[leagueId] = pbrFeeHub;
-        emit HubUpdated(leagueId, previous, pbrFeeHub);
+        emit Events.HubUpdated(leagueId, previous, pbrFeeHub);
     }
 
     // --------------------------------------------
@@ -148,8 +115,8 @@ contract TournamentRegistry is Initializable, AccessControl {
         Hub[] calldata feeHubs,
         address pbrTreasury
     ) external onlyRole(DEPLOYER_ROLE) {
-        if (tournamentId == bytes32(0)) revert ZeroId();
-        if (_tournaments[tournamentId].tournamentId != bytes32(0)) revert Exists();
+        if (tournamentId == bytes32(0)) revert Errors.ZeroId();
+        if (_tournaments[tournamentId].tournamentId != bytes32(0)) revert Errors.Exists();
 
         Tournament storage t = _tournaments[tournamentId];
         t.tournamentType = tournamentType;
@@ -162,7 +129,7 @@ contract TournamentRegistry is Initializable, AccessControl {
         }
 
         _tournamentIds.push(tournamentId);
-        emit TournamentCreated(tournamentId, tournamentType, pbrTreasury);
+        emit Events.TournamentCreated(tournamentId, tournamentType, pbrTreasury);
     }
 
     function addHub(bytes32 tournamentId, Hub calldata hub) external onlyRole(DEPLOYER_ROLE) {
@@ -181,19 +148,19 @@ contract TournamentRegistry is Initializable, AccessControl {
                 break;
             }
         }
-        if (index == type(uint256).max) revert HubNotLinked(tournamentId, leagueId);
+        if (index == type(uint256).max) revert Errors.HubNotLinked(tournamentId, leagueId);
 
         uint256 last = length - 1;
         if (index != last) t.feeHubs[index] = t.feeHubs[last];
         t.feeHubs.pop();
-        emit HubRemovedFromTournament(tournamentId, leagueId);
+        emit Events.HubRemovedFromTournament(tournamentId, leagueId);
     }
 
     function setPbrTreasury(bytes32 tournamentId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
         Tournament storage t = _requireTournament(tournamentId);
         address previous = t.pbrTreasury;
         t.pbrTreasury = pbrTreasury;
-        emit PbrTreasuryUpdated(tournamentId, previous, pbrTreasury);
+        emit Events.PbrTreasuryUpdated(tournamentId, previous, pbrTreasury);
     }
 
     // --------------------------------------------
@@ -204,12 +171,12 @@ contract TournamentRegistry is Initializable, AccessControl {
         external
         onlyRole(DEPLOYER_ROLE)
     {
-        if (seasonStartYear == 0) revert ZeroId();
-        if (finalRound == 0) revert InvalidFinalRound();
+        if (seasonStartYear == 0) revert Errors.ZeroId();
+        if (finalRound == 0) revert Errors.InvalidFinalRound();
 
         Tournament storage t = _requireTournament(tournamentId);
         if (_seasonIndex(t, seasonStartYear) != type(uint256).max) {
-            revert SeasonExists(tournamentId, seasonStartYear);
+            revert Errors.SeasonExists(tournamentId, seasonStartYear);
         }
 
         t.seasons.push(
@@ -217,7 +184,7 @@ contract TournamentRegistry is Initializable, AccessControl {
                 seasonStartYear: seasonStartYear, finalRound: finalRound, roundCount: 0, rounds: new RoundSchedule[](0)
             })
         );
-        emit SeasonOpened(tournamentId, seasonStartYear, finalRound);
+        emit Events.SeasonOpened(tournamentId, seasonStartYear, finalRound);
     }
 
     function upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round)
@@ -226,13 +193,13 @@ contract TournamentRegistry is Initializable, AccessControl {
     {
         Tournament storage t = _requireTournament(tournamentId);
         uint256 sIndex = _seasonIndex(t, seasonStartYear);
-        if (sIndex == type(uint256).max) revert SeasonNotFound(tournamentId, seasonStartYear);
+        if (sIndex == type(uint256).max) revert Errors.SeasonNotFound(tournamentId, seasonStartYear);
 
         Season storage season = t.seasons[sIndex];
         if (round.roundNumber == 0 || round.roundNumber > season.finalRound) {
-            revert InvalidRoundNumber(round.roundNumber, season.finalRound);
+            revert Errors.InvalidRoundNumber(round.roundNumber, season.finalRound);
         }
-        if (round.endTime <= round.startTime) revert InvalidTimeRange(round.startTime, round.endTime);
+        if (round.endTime <= round.startTime) revert Errors.InvalidTimeRange(round.startTime, round.endTime);
 
         uint256 rIndex = _roundIndex(season, round.roundNumber);
         if (rIndex == type(uint256).max) {
@@ -251,7 +218,7 @@ contract TournamentRegistry is Initializable, AccessControl {
             }
         }
 
-        emit RoundUpserted(tournamentId, seasonStartYear, round.roundNumber);
+        emit Events.RoundUpserted(tournamentId, seasonStartYear, round.roundNumber);
     }
 
     // --------------------------------------------
@@ -309,7 +276,7 @@ contract TournamentRegistry is Initializable, AccessControl {
     {
         Season storage season = _requireSeason(tournamentId, seasonStartYear);
         uint256 rIndex = _roundIndex(season, roundNumber);
-        if (rIndex == type(uint256).max) revert RoundNotFound(tournamentId, seasonStartYear, roundNumber);
+        if (rIndex == type(uint256).max) revert Errors.RoundNotFound(tournamentId, seasonStartYear, roundNumber);
         return season.rounds[rIndex];
     }
 
@@ -338,31 +305,31 @@ contract TournamentRegistry is Initializable, AccessControl {
     // --------------------------------------------
 
     function _linkHub(Tournament storage t, bytes32 tournamentId, Hub calldata hub) internal {
-        if (hub.leagueId == bytes32(0)) revert ZeroId();
-        if (hub.pbrFeeHub == address(0)) revert ZeroAddress();
+        if (hub.leagueId == bytes32(0)) revert Errors.ZeroId();
+        if (hub.pbrFeeHub == address(0)) revert Errors.ZeroAddress();
 
         address registered = pbrFeeHubOf[hub.leagueId];
-        if (registered == address(0)) revert HubNotRegistered(hub.leagueId);
-        if (registered != hub.pbrFeeHub) revert HubMismatch(hub.leagueId, registered, hub.pbrFeeHub);
+        if (registered == address(0)) revert Errors.HubNotRegistered(hub.leagueId);
+        if (registered != hub.pbrFeeHub) revert Errors.HubMismatch(hub.leagueId, registered, hub.pbrFeeHub);
 
         uint256 length = t.feeHubs.length;
         for (uint256 i; i < length; ++i) {
-            if (t.feeHubs[i].leagueId == hub.leagueId) revert HubAlreadyLinked(tournamentId, hub.leagueId);
+            if (t.feeHubs[i].leagueId == hub.leagueId) revert Errors.HubAlreadyLinked(tournamentId, hub.leagueId);
         }
 
         t.feeHubs.push(hub);
-        emit HubAddedToTournament(tournamentId, hub.leagueId, hub.pbrFeeHub);
+        emit Events.HubAddedToTournament(tournamentId, hub.leagueId, hub.pbrFeeHub);
     }
 
     function _requireTournament(bytes32 tournamentId) internal view returns (Tournament storage t) {
         t = _tournaments[tournamentId];
-        if (t.tournamentId == bytes32(0)) revert NotFound();
+        if (t.tournamentId == bytes32(0)) revert Errors.NotFound();
     }
 
     function _requireSeason(bytes32 tournamentId, uint16 seasonStartYear) internal view returns (Season storage) {
         Tournament storage t = _requireTournament(tournamentId);
         uint256 sIndex = _seasonIndex(t, seasonStartYear);
-        if (sIndex == type(uint256).max) revert SeasonNotFound(tournamentId, seasonStartYear);
+        if (sIndex == type(uint256).max) revert Errors.SeasonNotFound(tournamentId, seasonStartYear);
         return t.seasons[sIndex];
     }
 

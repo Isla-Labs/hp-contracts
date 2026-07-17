@@ -4,7 +4,7 @@ pragma solidity ^0.8.34;
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 
-import { PbrTreasury } from "../PbrTreasury.sol";
+import { PbrTreasury } from "@vaults/PbrTreasury.sol";
 
 /**
  * @title PbrTreasuryFactory

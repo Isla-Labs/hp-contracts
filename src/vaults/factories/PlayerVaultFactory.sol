@@ -4,8 +4,8 @@ pragma solidity ^0.8.34;
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 
-import { PlayerVault } from "../PlayerVault.sol";
-import { StakedToken } from "../StakedToken.sol";
+import { PlayerVault } from "@vaults/PlayerVault.sol";
+import { StakedToken } from "@vaults/StakedToken.sol";
 
 /**
  * @title PlayerVaultFactory

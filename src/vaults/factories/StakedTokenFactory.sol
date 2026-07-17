@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { StakedToken } from "../StakedToken.sol";
+import { StakedToken } from "@vaults/StakedToken.sol";
 
 /**
  * @title StakedTokenFactory

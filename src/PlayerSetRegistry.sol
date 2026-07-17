@@ -33,10 +33,10 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     bytes32 public constant LIFECYCLE_ROLE = keccak256("LIFECYCLE_ROLE");
 
     /// @notice ActivityTimelock — per-player active tournament upkeep
-    bytes32 public constant UPKEEP_ROLE = keccak256("UPKEEP_ROLE");
+    bytes32 public constant ACTIVITY_ROLE = keccak256("ACTIVITY_ROLE");
 
     /// @notice Multisig + LifecycleTimelock — status / Doppler updates
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant UPDATE_ROLE = keccak256("UPDATE_ROLE");
 
     // --------------------------------------------
     //  Storage
@@ -99,18 +99,18 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     }
 
     /**
-     * @param admin_ Multisig: `DEFAULT_ADMIN_ROLE` + `ADMIN_ROLE` (fallback for status / Doppler).
-     * @param lifecycle_ LifecycleTimelock: `LIFECYCLE_ROLE` + `ADMIN_ROLE` (primary status / Doppler path).
-     * @param upkeep_ ActivityTimelock: `UPKEEP_ROLE`.
+     * @param updateAuthority_ Multisig: `DEFAULT_ADMIN_ROLE` + `ADMIN_ROLE` (fallback for status / Doppler).
+     * @param lifecycleTimelock_ LifecycleTimelock: `LIFECYCLE_ROLE` + `ADMIN_ROLE` (primary status / Doppler path).
+     * @param activityTimelock_ ActivityTimelock: `UPKEEP_ROLE`.
      */
-    function initialize(address admin_, address lifecycle_, address upkeep_) external initializer {
-        if (admin_ == address(0) || lifecycle_ == address(0) || upkeep_ == address(0)) revert ZeroAddress();
+    function initialize(address admin_, address updateAuthority_, address lifecycleTimelock_, address activityTimelock_) external initializer {
+        if (admin_ == address(0) || updateAuthority_ == address(0) || lifecycleTimelock_ == address(0) || activityTimelock_ == address(0)) revert ZeroAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
-        _grantRole(ADMIN_ROLE, admin_);
-        _grantRole(ADMIN_ROLE, lifecycle_);
-        _grantRole(LIFECYCLE_ROLE, lifecycle_);
-        _grantRole(UPKEEP_ROLE, upkeep_);
+        _grantRole(UPDATE_ROLE, updateAuthority_);
+        _grantRole(UPDATE_ROLE, lifecycleTimelock_);
+        _grantRole(LIFECYCLE_ROLE, lifecycleTimelock_);
+        _grantRole(ACTIVITY_ROLE, activityTimelock_);
     }
 
     // --------------------------------------------
@@ -201,7 +201,7 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         emit VaultDataUpdated(playerId, set.vaultData.playerVault, set.vaultData.stToken, isUtilized);
     }
 
-    function setStatus(bytes32 playerId, PlayerStatus status) external onlyRole(ADMIN_ROLE) {
+    function setStatus(bytes32 playerId, PlayerStatus status) external onlyRole(UPDATE_ROLE) {
         _requirePlayer(playerId);
         _playerSets[playerId].status = status;
         emit StatusUpdated(playerId, status);
@@ -213,12 +213,12 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         emit LeagueIdUpdated(playerId, leagueId);
     }
 
-    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(UPKEEP_ROLE) {
+    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(ACTIVITY_ROLE) {
         _requirePlayer(playerId);
         _addActiveTournament(playerId, tournamentId);
     }
 
-    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(UPKEEP_ROLE) {
+    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(ACTIVITY_ROLE) {
         _requirePlayer(playerId);
 
         bytes32[] storage active = _playerSets[playerId].tournamentData.activeTournaments;
@@ -239,7 +239,7 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     }
 
     /// @notice Updates Doppler fields after migration / hook replacement
-    function setDopplerData(bytes32 playerId, DopplerData calldata data) external onlyRole(ADMIN_ROLE) {
+    function setDopplerData(bytes32 playerId, DopplerData calldata data) external onlyRole(UPDATE_ROLE) {
         _requirePlayer(playerId);
         if (data.hookDoppler == address(0) || data.hookMigrator == address(0) || data.feeRouter == address(0)) {
             revert ZeroAddress();

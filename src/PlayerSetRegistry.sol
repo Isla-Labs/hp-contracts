@@ -4,6 +4,7 @@ pragma solidity ^0.8.34;
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
+import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
 import { RegistryErrors as Errors } from "@base/global/libraries/errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@base/global/libraries/events/RegistryEvents.sol";
 import {
@@ -20,26 +21,14 @@ import {
  * @title PlayerSetRegistry
  * @notice Canonical per-player market discovery set (`playerId` → `PlayerSet`).
  * @dev Access:
- *      - `LIFECYCLE_ROLE` (LifecycleTimelock): register player + Doppler/tournament data;
- *        add vault / advanced-trade sets; league transfers.
- *      - `UPKEEP_ROLE` (ActivityTimelock): add / remove active tournaments.
- *      - `ADMIN_ROLE` (multisig + LifecycleTimelock): status and Doppler updates
- *        (LifecycleTimelock is the primary path; multisig is the public-migrate fallback).
+ *      - `CATEGORY_THREE` (`Automator`): registration, status, league / active tournaments,
+ *        and Doppler updates.
  *      - Registered vaults: `updateUtilization` via `onlyVault`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract PlayerSetRegistry is Initializable, AccessControl {
-    /// @notice LifecycleTimelock — market deployment / player-set registration
-    bytes32 public constant LIFECYCLE_ROLE = keccak256("LIFECYCLE_ROLE");
-
-    /// @notice ActivityTimelock — per-player active tournament upkeep
-    bytes32 public constant ACTIVITY_ROLE = keccak256("ACTIVITY_ROLE");
-
-    /// @notice Multisig + LifecycleTimelock — status / Doppler updates
-    bytes32 public constant UPDATE_ROLE = keccak256("UPDATE_ROLE");
-
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -55,12 +44,8 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     // --------------------------------------------
 
     modifier onlyVault() {
-        _onlyVault();
-        _;
-    }
-
-    function _onlyVault() internal view {
         if (playerIdOfVault[msg.sender] == bytes32(0)) revert Errors.NotAuthorized();
+        _;
     }
 
     // --------------------------------------------
@@ -73,22 +58,18 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     }
 
     /**
-     * @param updateAuthority_ Multisig: `DEFAULT_ADMIN_ROLE` + `ADMIN_ROLE` (fallback for status / Doppler).
-     * @param lifecycleTimelock_ LifecycleTimelock: `LIFECYCLE_ROLE` + `ADMIN_ROLE` (primary status / Doppler path).
-     * @param activityTimelock_ ActivityTimelock: `UPKEEP_ROLE`.
+     * @param automator_ `Automator` — `CATEGORY_THREE`.
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
      */
-    function initialize(address admin_, address updateAuthority_, address lifecycleTimelock_, address activityTimelock_) external initializer {
-        if (admin_ == address(0) || updateAuthority_ == address(0) || lifecycleTimelock_ == address(0) || activityTimelock_ == address(0)) revert Errors.ZeroAddress();
+    function initialize(address automator_, address dao_) external initializer {
+        if (automator_ == address(0) || dao_ == address(0)) revert Errors.ZeroAddress();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, admin_); // replace with governance
-        _grantRole(UPDATE_ROLE, updateAuthority_); // replace with governance
-        _grantRole(UPDATE_ROLE, lifecycleTimelock_); // replace with governance
-        _grantRole(LIFECYCLE_ROLE, lifecycleTimelock_); // replace with governance
-        _grantRole(ACTIVITY_ROLE, activityTimelock_); // replace with governance
+        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
+        _grantRole(Roles.CATEGORY_THREE, automator_);
     }
 
     // --------------------------------------------
-    //  Registration
+    //  Registration (CATEGORY_THREE)
     // --------------------------------------------
 
     /**
@@ -100,7 +81,7 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         TokenData calldata tokenData,
         TournamentData calldata tournamentData,
         DopplerData calldata dopplerData
-    ) external onlyRole(LIFECYCLE_ROLE) {
+    ) external onlyRole(Roles.CATEGORY_THREE) {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
         if (tokenData.token == address(0)) revert Errors.ZeroAddress();
         if (
@@ -133,7 +114,7 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     /**
      * @notice Attaches vault + stToken after `PlayerVault` deployment.
      */
-    function addVaultData(bytes32 playerId, VaultData calldata vaultData) external onlyRole(LIFECYCLE_ROLE) {
+    function addVaultData(bytes32 playerId, VaultData calldata vaultData) external onlyRole(Roles.CATEGORY_THREE) {
         PlayerSet storage set = _requirePlayer(playerId);
         if (set.vaultData.playerVault != address(0)) revert Errors.VaultDataAlreadySet(playerId);
         if (vaultData.playerVault == address(0) || vaultData.stToken == address(0)) revert Errors.ZeroAddress();
@@ -152,7 +133,7 @@ contract PlayerSetRegistry is Initializable, AccessControl {
      */
     function addAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data)
         external
-        onlyRole(LIFECYCLE_ROLE)
+        onlyRole(Roles.CATEGORY_THREE)
     {
         PlayerSet storage set = _requirePlayer(playerId);
         if (set.advancedTradeData.advancedTradeVault != address(0)) revert Errors.AdvancedTradeDataAlreadySet(playerId);
@@ -160,6 +141,16 @@ contract PlayerSetRegistry is Initializable, AccessControl {
 
         set.advancedTradeData = data;
         emit Events.AdvancedTradeDataAdded(playerId, data.advancedTradeVault, data.markSource);
+    }
+
+    /// @notice Updates Doppler fields after migration / hook replacement
+    function setDopplerData(bytes32 playerId, DopplerData calldata data) external onlyRole(Roles.CATEGORY_THREE) {
+        _requirePlayer(playerId);
+        if (data.hookDoppler == address(0) || data.hookMigrator == address(0) || data.feeRouter == address(0)) {
+            revert Errors.ZeroAddress();
+        }
+        _playerSets[playerId].dopplerData = data;
+        emit Events.DopplerDataUpdated(playerId, data.feeRouter);
     }
 
     // --------------------------------------------
@@ -175,24 +166,24 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         emit Events.VaultDataUpdated(playerId, set.vaultData.playerVault, set.vaultData.stToken, isUtilized);
     }
 
-    function setStatus(bytes32 playerId, PlayerStatus status) external onlyRole(UPDATE_ROLE) {
+    function setStatus(bytes32 playerId, PlayerStatus status) external onlyRole(Roles.CATEGORY_THREE) {
         _requirePlayer(playerId);
         _playerSets[playerId].status = status;
         emit Events.StatusUpdated(playerId, status);
     }
 
-    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyRole(LIFECYCLE_ROLE) {
+    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyRole(Roles.CATEGORY_THREE) {
         _requirePlayer(playerId);
         _playerSets[playerId].tournamentData.leagueId = leagueId;
         emit Events.LeagueIdUpdated(playerId, leagueId);
     }
 
-    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(ACTIVITY_ROLE) {
+    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(Roles.CATEGORY_THREE) {
         _requirePlayer(playerId);
         _addActiveTournament(playerId, tournamentId);
     }
 
-    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(ACTIVITY_ROLE) {
+    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyRole(Roles.CATEGORY_THREE) {
         _requirePlayer(playerId);
 
         bytes32[] storage active = _playerSets[playerId].tournamentData.activeTournaments;
@@ -210,16 +201,6 @@ contract PlayerSetRegistry is Initializable, AccessControl {
         if (index != last) active[index] = active[last];
         active.pop();
         emit Events.ActiveTournamentRemoved(playerId, tournamentId);
-    }
-
-    /// @notice Updates Doppler fields after migration / hook replacement
-    function setDopplerData(bytes32 playerId, DopplerData calldata data) external onlyRole(UPDATE_ROLE) {
-        _requirePlayer(playerId);
-        if (data.hookDoppler == address(0) || data.hookMigrator == address(0) || data.feeRouter == address(0)) {
-            revert Errors.ZeroAddress();
-        }
-        _playerSets[playerId].dopplerData = data;
-        emit Events.DopplerDataUpdated(playerId, data.feeRouter);
     }
 
     // --------------------------------------------

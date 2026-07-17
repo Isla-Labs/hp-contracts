@@ -32,17 +32,20 @@ contract PlayerVaultFactory {
     address public immutable constitutionalTimelock;
 
     address public immutable tournamentRegistry;
+    address public immutable playerSetRegistry;
 
     constructor(
         address automator_,
         address maintenanceTimelock_,
         address dao_,
         address constitutionalTimelock_,
-        address tournamentRegistry_
+        address tournamentRegistry_,
+        address playerSetRegistry_
     ) {
         if (
             automator_ == address(0) || maintenanceTimelock_ == address(0) || dao_ == address(0)
                 || constitutionalTimelock_ == address(0) || tournamentRegistry_ == address(0)
+                || playerSetRegistry_ == address(0)
         ) revert Errors.ZeroAddress();
 
         automator = automator_;
@@ -50,6 +53,7 @@ contract PlayerVaultFactory {
         dao = dao_;
         constitutionalTimelock = constitutionalTimelock_;
         tournamentRegistry = tournamentRegistry_;
+        playerSetRegistry = playerSetRegistry_;
         beacon = new UpgradeableBeacon(address(new PlayerVault()), constitutionalTimelock_);
     }
 
@@ -64,7 +68,14 @@ contract PlayerVaultFactory {
         stToken = address(new StakedToken(name, symbol, playerVault));
 
         PlayerVault(playerVault).initialize(
-            automator, maintenanceTimelock, dao, tournamentRegistry, playerId, playerToken, stToken
+            automator,
+            maintenanceTimelock,
+            dao,
+            tournamentRegistry,
+            playerSetRegistry,
+            playerId,
+            playerToken,
+            stToken
         );
 
         emit Events.PlayerVaultCreated(playerId, playerVault, stToken);

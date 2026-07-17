@@ -78,6 +78,7 @@ contract TournamentRegistry is Initializable, AccessControl {
     error HubMismatch(bytes32 leagueId, address expected, address actual);
     error SeasonExists(bytes32 tournamentId, uint16 seasonStartYear);
     error SeasonNotFound(bytes32 tournamentId, uint16 seasonStartYear);
+    error RoundNotFound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber);
     error InvalidFinalRound();
     error InvalidRoundNumber(uint32 roundNumber, uint32 finalRound);
     error InvalidTimeRange(uint64 startTime, uint64 endTime);
@@ -139,7 +140,7 @@ contract TournamentRegistry is Initializable, AccessControl {
      * @param tournamentId Stable id (e.g. keccak256("EPL"), keccak256("UCL")).
      * @param tournamentType Domestic league / domestic cup / continental / international.
      * @param feeHubs Domestic hubs that should route fees to `pbrTreasury` (must be registered).
-     * @param pbrTreasury Cup-specific `PbrTreasury` (may be zero until deployed).
+     * @param pbrTreasury Tournament-specific `PbrTreasury` (may be zero until deployed).
      */
     function createTournament(
         bytes32 tournamentId,
@@ -293,6 +294,45 @@ contract TournamentRegistry is Initializable, AccessControl {
         }
     }
 
+    function getPbrTreasury(bytes32 tournamentId) external view returns (address) {
+        return _requireTournament(tournamentId).pbrTreasury;
+    }
+
+    function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32) {
+        return _requireSeason(tournamentId, seasonStartYear).finalRound;
+    }
+
+    function getRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)
+        external
+        view
+        returns (RoundSchedule memory)
+    {
+        Season storage season = _requireSeason(tournamentId, seasonStartYear);
+        uint256 rIndex = _roundIndex(season, roundNumber);
+        if (rIndex == type(uint256).max) revert RoundNotFound(tournamentId, seasonStartYear, roundNumber);
+        return season.rounds[rIndex];
+    }
+
+    /// @notice True when the round exists with a valid time range and at least one fixture.
+    function isRoundPublished(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)
+        external
+        view
+        returns (bool)
+    {
+        Tournament storage t = _tournaments[tournamentId];
+        if (t.tournamentId == bytes32(0)) return false;
+
+        uint256 sIndex = _seasonIndex(t, seasonStartYear);
+        if (sIndex == type(uint256).max) return false;
+
+        Season storage season = t.seasons[sIndex];
+        uint256 rIndex = _roundIndex(season, roundNumber);
+        if (rIndex == type(uint256).max) return false;
+
+        RoundSchedule storage round = season.rounds[rIndex];
+        return round.startTime != 0 && round.endTime > round.startTime && round.fixtureIds.length > 0;
+    }
+
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
@@ -317,6 +357,13 @@ contract TournamentRegistry is Initializable, AccessControl {
     function _requireTournament(bytes32 tournamentId) internal view returns (Tournament storage t) {
         t = _tournaments[tournamentId];
         if (t.tournamentId == bytes32(0)) revert NotFound();
+    }
+
+    function _requireSeason(bytes32 tournamentId, uint16 seasonStartYear) internal view returns (Season storage) {
+        Tournament storage t = _requireTournament(tournamentId);
+        uint256 sIndex = _seasonIndex(t, seasonStartYear);
+        if (sIndex == type(uint256).max) revert SeasonNotFound(tournamentId, seasonStartYear);
+        return t.seasons[sIndex];
     }
 
     function _seasonIndex(Tournament storage t, uint16 seasonStartYear) internal view returns (uint256) {

@@ -11,7 +11,7 @@ import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEven
 import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
 import { RoundState, RoundStatus } from "@base/global/types/VaultTypes.sol";
 import { TournamentRegistry } from "@src/TournamentRegistry.sol";
-import { IPlayerVault } from "@vaults/interfaces/IPlayerVault.sol";
+import { IPlayerVault } from "@base/global/interfaces/IPlayerVault.sol";
 
 /**
  * @title PbrTreasury

@@ -8,6 +8,10 @@ library MarketsEvents {
     //  FeeRouter Events
     // --------------------------------------------
 
+    event FeeRouterCreated(
+        bytes32 indexed playerId, address indexed feeRouter, address indexed pbrFeeHub, address atFunding
+    );
+
     event PbrFeeHubUpdated(bytes32 indexed playerId, address indexed previousHub, address indexed newHub);
     event FeesRelayed(bytes32 indexed playerId, address indexed to, uint256 amount);
     event FeesQueued(bytes32 indexed playerId, address indexed to, uint256 amount);
@@ -18,6 +22,8 @@ library MarketsEvents {
     // --------------------------------------------
     //  PbrFeeHub Events
     // --------------------------------------------
+
+    event PbrFeeHubCreated(bytes32 indexed leagueId, address indexed pbrFeeHub);
 
     event FeesReceived(uint256 amount);
     event FeesRelayed(TournamentType indexed tournamentType, address indexed treasury, uint256 amount);

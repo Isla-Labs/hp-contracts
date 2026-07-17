@@ -6,6 +6,8 @@ library VaultsEvents {
     //  PBRTreasury Events
     // --------------------------------------------
 
+    event PbrTreasuryCreated(bytes32 indexed tournamentId, address indexed pbrTreasury, uint16 initialSeason);
+
     event FeesReceived(uint256 amount);
     event VaultRegistered(address indexed vault);
     event VaultUnregistered(address indexed vault);
@@ -20,6 +22,8 @@ library VaultsEvents {
     //  PlayerVault Events
     // --------------------------------------------
 
+    event PlayerVaultCreated(bytes32 indexed playerId, address indexed playerVault, address indexed stToken);
+
     event Staked(address indexed user, uint256 amount, uint256 newTotalStaked);
     event Unstaked(address indexed user, uint256 amount, uint256 newTotalStaked);
     event SnapshotTaken(
@@ -28,4 +32,10 @@ library VaultsEvents {
     event Claimed(
         address indexed user, bytes32 indexed tournamentId, uint16 indexed seasonId, uint32 roundNumber, uint256 payout
     );
+
+    // --------------------------------------------
+    //  StakedToken Events
+    // --------------------------------------------
+
+    event StakedTokenCreated(address indexed vault, address indexed stToken, string name, string symbol);
 }

@@ -11,7 +11,7 @@ import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErro
 import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
 import { RoundStatus } from "@base/global/types/VaultTypes.sol";
 import { TournamentRegistry } from "@src/TournamentRegistry.sol";
-import { IStakedToken } from "@vaults/interfaces/IStakedToken.sol";
+import { IStakedToken } from "@base/global/interfaces/IStakedToken.sol";
 import { PbrTreasury } from "@vaults/PbrTreasury.sol";
 
 /**

@@ -4,6 +4,8 @@ pragma solidity ^0.8.34;
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 
+import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
 import { PlayerVault } from "@vaults/PlayerVault.sol";
 import { StakedToken } from "@vaults/StakedToken.sol";
 
@@ -18,13 +20,8 @@ contract PlayerVaultFactory {
     address public immutable admin;
     address public immutable tournamentRegistry;
 
-    event PlayerVaultCreated(bytes32 indexed playerId, address indexed playerVault, address indexed stToken);
-
-    error ZeroAddress();
-    error ZeroId();
-
     constructor(address admin_, address tournamentRegistry_) {
-        if (admin_ == address(0) || tournamentRegistry_ == address(0)) revert ZeroAddress();
+        if (admin_ == address(0) || tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
         admin = admin_;
         tournamentRegistry = tournamentRegistry_;
         beacon = new UpgradeableBeacon(address(new PlayerVault()), admin_);
@@ -34,15 +31,15 @@ contract PlayerVaultFactory {
         external
         returns (address playerVault, address stToken)
     {
-        if (playerId == bytes32(0)) revert ZeroId();
-        if (playerToken == address(0)) revert ZeroAddress();
+        if (playerId == bytes32(0)) revert Errors.ZeroId();
+        if (playerToken == address(0)) revert Errors.ZeroAddress();
 
         playerVault = address(new BeaconProxy(address(beacon), ""));
         stToken = address(new StakedToken(name, symbol, playerVault));
 
         PlayerVault(playerVault).initialize(admin, tournamentRegistry, playerId, playerToken, stToken);
 
-        emit PlayerVaultCreated(playerId, playerVault, stToken);
+        emit Events.PlayerVaultCreated(playerId, playerVault, stToken);
     }
 
     function implementation() external view returns (address) {

@@ -4,6 +4,8 @@ pragma solidity ^0.8.34;
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 
+import { MarketsErrors as Errors } from "@base/global/libraries/errors/MarketsErrors.sol";
+import { MarketsEvents as Events } from "@base/global/libraries/events/MarketsEvents.sol";
 import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
 
 /**
@@ -18,16 +20,11 @@ contract PbrFeeHubFactory {
     UpgradeableBeacon public immutable beacon;
     address public immutable admin;
 
-    event PbrFeeHubCreated(bytes32 indexed leagueId, address indexed pbrFeeHub);
-
-    error ZeroAddress();
-    error ZeroId();
-
     /**
      * @param admin_ Granted `ADMIN_ROLE` on each hub; also owns the beacon.
      */
     constructor(address admin_) {
-        if (admin_ == address(0)) revert ZeroAddress();
+        if (admin_ == address(0)) revert Errors.ZeroAddress();
         admin = admin_;
         beacon = new UpgradeableBeacon(address(new PbrFeeHub()), admin_);
     }
@@ -39,12 +36,12 @@ contract PbrFeeHubFactory {
      * @param leagueTreasury Primary domestic-league `PbrTreasury`.
      */
     function create(bytes32 leagueId, address leagueTreasury) external returns (address hub) {
-        if (leagueId == bytes32(0)) revert ZeroId();
-        if (leagueTreasury == address(0)) revert ZeroAddress();
+        if (leagueId == bytes32(0)) revert Errors.ZeroId();
+        if (leagueTreasury == address(0)) revert Errors.ZeroAddress();
 
         bytes memory initData = abi.encodeCall(PbrFeeHub.initialize, (admin, leagueId, leagueTreasury));
         hub = address(new BeaconProxy(address(beacon), initData));
-        emit PbrFeeHubCreated(leagueId, hub);
+        emit Events.PbrFeeHubCreated(leagueId, hub);
     }
 
     function implementation() external view returns (address) {

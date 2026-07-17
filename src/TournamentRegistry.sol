@@ -4,6 +4,7 @@ pragma solidity ^0.8.34;
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
+import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
 import { RegistryErrors as Errors } from "@base/global/libraries/errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@base/global/libraries/events/RegistryEvents.sol";
 import {
@@ -23,22 +24,17 @@ import {
  *        - `UCL`: CONTINENTAL, feeHubs = all domestic hubs, treasury = UCL pot
  *
  *      Access:
- *      - `DEPLOYER_ROLE` (TournamentTimelock): hubs, tournaments, seasons / rounds.
- *      - `ADMIN_ROLE` (multisig initially): hub / treasury address updates.
+ *      - `CATEGORY_ONE` (`ConstitutionalTimelock`): `registerHub`, tournament create, `linkHub`.
+ *      - `CATEGORY_THREE` (`Automator`): `openSeason`, `upsertRound`.
  *
- *      Domestic league hubs are also registered globally so `FeeRouter` can even-split when a
- *      market has no league (`getAllDomesticPbrFeeHubs`).
+ *      Domestic league hubs are registered globally (`registerHub`) so `FeeRouter` can
+ *      even-split when a market has no league (`getAllDomesticPbrFeeHubs`). Per-tournament
+ *      `feeHubs` are set at `createTournament` and can grow later via `linkHub`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract TournamentRegistry is Initializable, AccessControl {
-    /// @notice TournamentTimelock — hub / tournament / calendar deployment
-    bytes32 public constant DEPLOYER_ROLE = keccak256("DEPLOYER_ROLE");
-
-    /// @notice Admin (multisig) — sensitive destination updates
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -60,26 +56,31 @@ contract TournamentRegistry is Initializable, AccessControl {
     }
 
     /**
-     * @param admin_ Multisig granted `ADMIN_ROLE` (+ `DEFAULT_ADMIN_ROLE` for role management).
-     * @param deployer_ TournamentTimelock granted `DEPLOYER_ROLE`.
+     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE`.
+     * @param automator_ `Automator` — `CATEGORY_THREE`.
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
      */
-    function initialize(address admin_, address deployer_) external initializer {
-        if (admin_ == address(0) || deployer_ == address(0)) revert Errors.ZeroAddress();
+    function initialize(address constitutionalTimelock_, address automator_, address dao_) external initializer {
+        if (constitutionalTimelock_ == address(0) || automator_ == address(0) || dao_ == address(0)) {
+            revert Errors.ZeroAddress();
+        }
 
-        _grantRole(DEFAULT_ADMIN_ROLE, admin_); // replace with governance
-        _grantRole(ADMIN_ROLE, admin_); // replace with governance
-        _grantRole(DEPLOYER_ROLE, deployer_); // replace with governance
+        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
+        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
+        _grantRole(Roles.CATEGORY_THREE, automator_);
     }
 
     // --------------------------------------------
-    //  Domestic hubs (FeeRouter)
+    //  Domestic hubs (FeeRouter) — CATEGORY_ONE
     // --------------------------------------------
 
     /**
      * @notice Registers a domestic league hub (`leagueId` + `PbrFeeHub` address).
-     * @dev Must exist before tournaments can link that hub.
+     * @dev Used only when deploying a new DOMESTIC_LEAGUE (other types use existing league hubs):
+     *      STEP1: call registerHub
+     *      STEP2: call createTournament
      */
-    function registerHub(Hub calldata hub) external onlyRole(DEPLOYER_ROLE) {
+    function registerHub(Hub calldata hub) external onlyRole(Roles.CATEGORY_ONE) {
         if (hub.leagueId == bytes32(0)) revert Errors.ZeroId();
         if (hub.pbrFeeHub == address(0)) revert Errors.ZeroAddress();
         if (pbrFeeHubOf[hub.leagueId] != address(0)) revert Errors.HubAlreadyRegistered(hub.leagueId);
@@ -89,34 +90,30 @@ contract TournamentRegistry is Initializable, AccessControl {
         emit Events.HubRegistered(hub.leagueId, hub.pbrFeeHub);
     }
 
-    function setHub(bytes32 leagueId, address pbrFeeHub) external onlyRole(ADMIN_ROLE) {
-        if (pbrFeeHubOf[leagueId] == address(0)) revert Errors.HubNotRegistered(leagueId);
-        if (pbrFeeHub == address(0)) revert Errors.ZeroAddress();
-
-        address previous = pbrFeeHubOf[leagueId];
-        pbrFeeHubOf[leagueId] = pbrFeeHub;
-        emit Events.HubUpdated(leagueId, previous, pbrFeeHub);
-    }
-
     // --------------------------------------------
-    //  Tournament registration
+    //  Tournament registration — CATEGORY_ONE
     // --------------------------------------------
 
     /**
      * @notice Creates a tournament with linked fee hubs and treasury.
      * @param tournamentId Stable id (e.g. keccak256("EPL"), keccak256("UCL")).
+     *      For `DOMESTIC_LEAGUE`, must equal the `leagueId` previously passed to `registerHub`.
      * @param tournamentType Domestic league / domestic cup / continental / international.
      * @param feeHubs Domestic hubs that should route fees to `pbrTreasury` (must be registered).
-     * @param pbrTreasury Tournament-specific `PbrTreasury` (may be zero until deployed).
+     * @param pbrTreasury Tournament-specific `PbrTreasury` (required; deploy alongside the tournament).
      */
     function createTournament(
         bytes32 tournamentId,
         TournamentType tournamentType,
         Hub[] calldata feeHubs,
         address pbrTreasury
-    ) external onlyRole(DEPLOYER_ROLE) {
+    ) external onlyRole(Roles.CATEGORY_ONE) {
         if (tournamentId == bytes32(0)) revert Errors.ZeroId();
+        if (pbrTreasury == address(0)) revert Errors.ZeroAddress();
         if (_tournaments[tournamentId].tournamentId != bytes32(0)) revert Errors.Exists();
+        if (tournamentType == TournamentType.DOMESTIC_LEAGUE && pbrFeeHubOf[tournamentId] == address(0)) {
+            revert Errors.HubNotRegistered(tournamentId);
+        }
 
         Tournament storage t = _tournaments[tournamentId];
         t.tournamentType = tournamentType;
@@ -132,44 +129,27 @@ contract TournamentRegistry is Initializable, AccessControl {
         emit Events.TournamentCreated(tournamentId, tournamentType, pbrTreasury);
     }
 
-    function addHub(bytes32 tournamentId, Hub calldata hub) external onlyRole(DEPLOYER_ROLE) {
+    /**
+     * @notice Links an additional registered domestic hub to a CONTINENTAL / INTERNATIONAL tournament.
+     * @dev Used when a new domestic league comes online and existing multi-hub tournaments must
+     *      include its hub. Domestic leagues/cups get their hub only at `createTournament`.
+     */
+    function linkHub(bytes32 tournamentId, Hub calldata hub) external onlyRole(Roles.CATEGORY_ONE) {
         Tournament storage t = _requireTournament(tournamentId);
+        TournamentType tournamentType = t.tournamentType;
+        if (tournamentType != TournamentType.CONTINENTAL && tournamentType != TournamentType.INTERNATIONAL) {
+            revert Errors.InvalidLinkTarget(tournamentType);
+        }
         _linkHub(t, tournamentId, hub);
     }
 
-    function removeHub(bytes32 tournamentId, bytes32 leagueId) external onlyRole(DEPLOYER_ROLE) {
-        Tournament storage t = _requireTournament(tournamentId);
-
-        uint256 length = t.feeHubs.length;
-        uint256 index = type(uint256).max;
-        for (uint256 i; i < length; ++i) {
-            if (t.feeHubs[i].leagueId == leagueId) {
-                index = i;
-                break;
-            }
-        }
-        if (index == type(uint256).max) revert Errors.HubNotLinked(tournamentId, leagueId);
-
-        uint256 last = length - 1;
-        if (index != last) t.feeHubs[index] = t.feeHubs[last];
-        t.feeHubs.pop();
-        emit Events.HubRemovedFromTournament(tournamentId, leagueId);
-    }
-
-    function setPbrTreasury(bytes32 tournamentId, address pbrTreasury) external onlyRole(ADMIN_ROLE) {
-        Tournament storage t = _requireTournament(tournamentId);
-        address previous = t.pbrTreasury;
-        t.pbrTreasury = pbrTreasury;
-        emit Events.PbrTreasuryUpdated(tournamentId, previous, pbrTreasury);
-    }
-
     // --------------------------------------------
-    //  Season calendar
+    //  Season calendar — CATEGORY_THREE
     // --------------------------------------------
 
     function openSeason(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound)
         external
-        onlyRole(DEPLOYER_ROLE)
+        onlyRole(Roles.CATEGORY_THREE)
     {
         if (seasonStartYear == 0) revert Errors.ZeroId();
         if (finalRound == 0) revert Errors.InvalidFinalRound();
@@ -189,7 +169,7 @@ contract TournamentRegistry is Initializable, AccessControl {
 
     function upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round)
         external
-        onlyRole(DEPLOYER_ROLE)
+        onlyRole(Roles.CATEGORY_THREE)
     {
         Tournament storage t = _requireTournament(tournamentId);
         uint256 sIndex = _seasonIndex(t, seasonStartYear);

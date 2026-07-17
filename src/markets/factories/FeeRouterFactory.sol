@@ -11,8 +11,8 @@ import { FeeRouter } from "@markets/FeeRouter.sol";
 /**
  * @title FeeRouterFactory
  * @notice Deploys per-market `BeaconProxy` FeeRouters sharing one `UpgradeableBeacon`.
- * @dev Beacon ownership (logic upgrades) is assigned to `admin`. Each `create` call deploys a
- *      thin proxy with player-specific storage initialized via `FeeRouter.initialize`.
+ * @dev Beacon ownership (logic upgrades) is assigned to `ConstitutionalTimelock`. Each `create`
+ *      call deploys a thin proxy with player-specific storage via `FeeRouter.initialize`.
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
@@ -20,27 +20,44 @@ contract FeeRouterFactory {
     /// @notice Shared beacon; upgrade to change logic for every market FeeRouter
     UpgradeableBeacon public immutable beacon;
 
-    /// @notice Granted `LIFECYCLE_ROLE` on every deployed FeeRouter
-    address public immutable lifecycleTimelock;
+    /// @notice Granted `CATEGORY_THREE` on every deployed FeeRouter
+    address public immutable automator;
 
-    /// @notice Granted `ADMIN_ROLE` on every deployed FeeRouter; also owns the beacon
-    address public immutable admin;
+    /// @notice Granted `CATEGORY_TWO` on every deployed FeeRouter
+    address public immutable maintenanceTimelock;
+
+    /// @notice Granted `CATEGORY_ONE` on every deployed FeeRouter; owns the beacon
+    address public immutable constitutionalTimelock;
+
+    /// @notice Granted `DEFAULT_ADMIN_ROLE` on every deployed FeeRouter
+    address public immutable dao;
 
     /**
-     * @param lifecycleTimelock_ Address granted `LIFECYCLE_ROLE` on each FeeRouter.
-     * @param admin_ Address granted `ADMIN_ROLE` on each FeeRouter and ownership of the beacon.
+     * @param automator_ `Automator` — cat-3 on each FeeRouter.
+     * @param maintenanceTimelock_ `MaintenanceTimelock` — cat-2 on each FeeRouter.
+     * @param constitutionalTimelock_ `ConstitutionalTimelock` — cat-1 + beacon owner.
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE` on each FeeRouter.
      * @param tournamentRegistry_ TournamentRegistry baked into the FeeRouter implementation.
      */
-    constructor(address lifecycleTimelock_, address admin_, address tournamentRegistry_) {
-        if (lifecycleTimelock_ == address(0) || admin_ == address(0) || tournamentRegistry_ == address(0)) {
-            revert Errors.ZeroAddress();
-        }
+    constructor(
+        address automator_,
+        address maintenanceTimelock_,
+        address constitutionalTimelock_,
+        address dao_,
+        address tournamentRegistry_
+    ) {
+        if (
+            automator_ == address(0) || maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0)
+                || dao_ == address(0) || tournamentRegistry_ == address(0)
+        ) revert Errors.ZeroAddress();
 
-        lifecycleTimelock = lifecycleTimelock_;
-        admin = admin_;
+        automator = automator_;
+        maintenanceTimelock = maintenanceTimelock_;
+        constitutionalTimelock = constitutionalTimelock_;
+        dao = dao_;
 
         address impl = address(new FeeRouter(tournamentRegistry_));
-        beacon = new UpgradeableBeacon(impl, admin_);
+        beacon = new UpgradeableBeacon(impl, constitutionalTimelock_);
     }
 
     /**
@@ -53,8 +70,10 @@ contract FeeRouterFactory {
     function create(bytes32 playerId, address atFunding, address pbrFeeHub) external returns (address feeRouter) {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
 
-        bytes memory initData =
-            abi.encodeCall(FeeRouter.initialize, (lifecycleTimelock, admin, playerId, atFunding, pbrFeeHub));
+        bytes memory initData = abi.encodeCall(
+            FeeRouter.initialize,
+            (automator, maintenanceTimelock, constitutionalTimelock, dao, playerId, atFunding, pbrFeeHub)
+        );
 
         feeRouter = address(new BeaconProxy(address(beacon), initData));
 

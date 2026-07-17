@@ -5,6 +5,7 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 
+import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
 import { MarketsErrors as Errors } from "@base/global/libraries/errors/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@base/global/libraries/events/MarketsEvents.sol";
 import { TournamentType } from "@base/global/types/TournamentTypes.sol";
@@ -12,8 +13,13 @@ import { TournamentType } from "@base/global/types/TournamentTypes.sol";
 /**
  * @title PbrFeeHub
  * @notice Per-domestic-league fee splitter: `FeeRouter` → hub → typed `PbrTreasury` destinations.
- * @dev Destinations are stored locally and dual-written by TournamentExecutor when tournaments
- *      are created / wired (registry remains the topology source of truth for calendars).
+ * @dev Destinations are stored locally and dual-written when tournaments are created / wired
+ *      (registry remains the topology source of truth for calendars).
+ *
+ *      Access:
+ *      - `CATEGORY_TWO` (`MaintenanceTimelock`): `setTopLevelSplit`, `setLeagueShareBps`.
+ *      - `CATEGORY_ONE` (`ConstitutionalTimelock`): treasury / destination wiring and
+ *        international override controls.
  *
  *      Top-level default weights (BPS): domestic 90% / continental 9% / international 1%.
  *      Cascade split: live continental / international buckets take their fixed BPS of gross;
@@ -30,8 +36,6 @@ import { TournamentType } from "@base/global/types/TournamentTypes.sol";
  * @custom:security-contact security@islalabs.co
  */
 contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-
     uint16 public constant BPS_DENOMINATOR = 10_000;
 
     // --------------------------------------------
@@ -77,17 +81,30 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     }
 
     /**
-     * @param admin_ Admin for split / destination updates (TournamentExecutor / multisig).
+     * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
+     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE`.
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
      * @param leagueId_ Domestic league this hub serves.
      * @param leagueTreasury_ Primary domestic league `PbrTreasury`.
      */
-    function initialize(address admin_, bytes32 leagueId_, address leagueTreasury_) external initializer {
-        if (admin_ == address(0) || leagueTreasury_ == address(0)) revert Errors.ZeroAddress();
+    function initialize(
+        address maintenanceTimelock_,
+        address constitutionalTimelock_,
+        address dao_,
+        bytes32 leagueId_,
+        address leagueTreasury_
+    ) external initializer {
+        if (
+            maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0) || dao_ == address(0)
+                || leagueTreasury_ == address(0)
+        ) revert Errors.ZeroAddress();
         if (leagueId_ == bytes32(0)) revert Errors.ZeroId();
 
         leagueId = leagueId_;
         leagueTreasury = leagueTreasury_;
-        _grantRole(ADMIN_ROLE, admin_);
+        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
+        _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
+        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
 
         domesticBps = 9000;
         continentalBps = 900;
@@ -139,12 +156,12 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     }
 
     // --------------------------------------------
-    //  Admin
+    //  Maintenance (CATEGORY_TWO)
     // --------------------------------------------
 
     function setTopLevelSplit(uint16 domesticBps_, uint16 continentalBps_, uint16 internationalBps_)
         external
-        onlyRole(ADMIN_ROLE)
+        onlyRole(Roles.CATEGORY_TWO)
     {
         uint256 total = uint256(domesticBps_) + continentalBps_ + internationalBps_;
         if (total != BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(total);
@@ -155,30 +172,34 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         emit Events.TopLevelSplitUpdated(domesticBps_, continentalBps_, internationalBps_);
     }
 
-    function setLeagueShareBps(uint16 leagueShareBps_) external onlyRole(ADMIN_ROLE) {
+    function setLeagueShareBps(uint16 leagueShareBps_) external onlyRole(Roles.CATEGORY_TWO) {
         if (leagueShareBps_ > BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(leagueShareBps_);
         leagueShareBps = leagueShareBps_;
         emit Events.LeagueShareUpdated(leagueShareBps_);
     }
 
-    function setLeagueTreasury(address treasury_) external onlyRole(ADMIN_ROLE) {
+    // --------------------------------------------
+    //  Constitutional (CATEGORY_ONE)
+    // --------------------------------------------
+
+    function setLeagueTreasury(address treasury_) external onlyRole(Roles.CATEGORY_ONE) {
         if (treasury_ == address(0)) revert Errors.ZeroAddress();
         address previous = leagueTreasury;
         leagueTreasury = treasury_;
         emit Events.LeagueTreasuryUpdated(previous, treasury_);
     }
 
-    function setDomesticCups(address[] calldata cups_) external onlyRole(ADMIN_ROLE) {
+    function setDomesticCups(address[] calldata cups_) external onlyRole(Roles.CATEGORY_ONE) {
         _setAddressList(_domesticCups, cups_);
         emit Events.DomesticCupsUpdated(cups_);
     }
 
-    function setContinental(address[] calldata treasuries_) external onlyRole(ADMIN_ROLE) {
+    function setContinental(address[] calldata treasuries_) external onlyRole(Roles.CATEGORY_ONE) {
         _setAddressList(_continental, treasuries_);
         emit Events.ContinentalUpdated(treasuries_);
     }
 
-    function setInternational(address[] calldata treasuries_) external onlyRole(ADMIN_ROLE) {
+    function setInternational(address[] calldata treasuries_) external onlyRole(Roles.CATEGORY_ONE) {
         _setAddressList(_international, treasuries_);
         emit Events.InternationalUpdated(treasuries_);
     }
@@ -189,9 +210,7 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
      *      the remainder uses the normal cascade. When false, `treasury` is ignored and
      *      `internationalActiveTreasury` is cleared to `address(0)`.
      */
-    function setInternationalActive(bool active, address treasury) external onlyRole(ADMIN_ROLE) {
-        // NOTE: ACCESS CONTROL NEEDS STRICT CONDITIONAL CHECKERS.
-        // I.E. IT NEEDS TO BE A CAT-1 UPDATE PROBABLY.
+    function setInternationalActive(bool active, address treasury) external onlyRole(Roles.CATEGORY_ONE) {
         if (active) {
             if (treasury == address(0)) revert Errors.ZeroAddress();
             internationalActiveTreasury = treasury;
@@ -206,7 +225,7 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     }
 
     /// @notice Share of gross routed to `internationalActiveTreasury` while the override is active
-    function setInternationalActiveShareBps(uint16 shareBps_) external onlyRole(ADMIN_ROLE) {
+    function setInternationalActiveShareBps(uint16 shareBps_) external onlyRole(Roles.CATEGORY_ONE) {
         if (shareBps_ > BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(shareBps_);
         internationalActiveShareBps = shareBps_;
         emit Events.InternationalActiveShareUpdated(shareBps_);

@@ -3,10 +3,12 @@ pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+import { Pausable } from "@openzeppelin/utils/Pausable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
+import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
 import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
 import { RoundStatus } from "@base/global/types/VaultTypes.sol";
@@ -18,14 +20,15 @@ import { PbrTreasury } from "@vaults/PbrTreasury.sol";
  * @title PlayerVault
  * @notice Stake custody + per-(tournament, season, round) snapshots; claims against each tournament treasury.
  * @dev Snapshot callers must be `TournamentRegistry.getPbrTreasury(tournamentId)`.
+ *      `DEFAULT_ADMIN_ROLE` (DAO) may pause/unpause user stake and claim flows.
+ *      `CATEGORY_THREE` (`Automator`) or `CATEGORY_TWO` (`MaintenanceTimelock`) may toggle
+ *      `isActive` for lifecycle support / discontinuation (or manual repair).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
+contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
-
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     // --------------------------------------------
     //  Storage
@@ -37,6 +40,9 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
     address public playerToken;
     address public stToken;
     uint256 public totalStaked;
+
+    /// @notice When false, new stakes are rejected (unsupported / discontinued market).
+    bool public isActive;
 
     mapping(bytes32 tournamentId => mapping(uint16 seasonId => mapping(uint32 roundNumber => uint256 snapId))) public
         snapIdOf;
@@ -51,6 +57,19 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
     RoundKey[] private _snapRounds;
 
     // --------------------------------------------
+    //  Access
+    // --------------------------------------------
+
+    /// @dev Automator (cat-3) or MaintenanceTimelock (cat-2) for lifecycle / manual repair.
+    modifier onlyCategoryTwoOrThree() {
+        address sender = _msgSender();
+        if (!hasRole(Roles.CATEGORY_TWO, sender) && !hasRole(Roles.CATEGORY_THREE, sender)) {
+            revert Errors.Unauthorized();
+        }
+        _;
+    }
+
+    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
@@ -59,16 +78,23 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
         _disableInitializers();
     }
 
+    /**
+     * @param automator_ `Automator` — `CATEGORY_THREE`.
+     * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE` (pause / role admin).
+     */
     function initialize(
-        address admin_,
+        address automator_,
+        address maintenanceTimelock_,
+        address dao_,
         address tournamentRegistry_,
         bytes32 playerId_,
         address playerToken_,
         address stToken_
     ) external initializer {
         if (
-            admin_ == address(0) || tournamentRegistry_ == address(0) || playerToken_ == address(0)
-                || stToken_ == address(0)
+            automator_ == address(0) || maintenanceTimelock_ == address(0) || dao_ == address(0)
+                || tournamentRegistry_ == address(0) || playerToken_ == address(0) || stToken_ == address(0)
         ) {
             revert Errors.ZeroAddress();
         }
@@ -78,14 +104,45 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
         playerId = playerId_;
         playerToken = playerToken_;
         stToken = stToken_;
-        _grantRole(ADMIN_ROLE, admin_);
+        isActive = true;
+
+        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
+        _grantRole(Roles.CATEGORY_THREE, automator_);
+        _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
+    }
+
+    // --------------------------------------------
+    //  Pause (DEFAULT_ADMIN_ROLE)
+    // --------------------------------------------
+
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
+    }
+
+    // --------------------------------------------
+    //  Lifecycle (CATEGORY_THREE)
+    // --------------------------------------------
+
+    /**
+     * @notice Mark the vault as supported or unsupported for new stakes.
+     * @dev Lifecycle automation (cat-3) or manual maintenance (cat-2).
+     *      Unstake and claim remain available when inactive.
+     */
+    function setActive(bool active_) external onlyCategoryTwoOrThree {
+        isActive = active_;
+        emit Events.ActiveUpdated(playerId, active_);
     }
 
     // --------------------------------------------
     //  Stake / Unstake
     // --------------------------------------------
 
-    function stake(uint256 amount) external nonReentrant {
+    function stake(uint256 amount) external nonReentrant whenNotPaused {
+        if (!isActive) revert Errors.VaultInactive();
         if (amount == 0) revert Errors.ZeroAmount();
 
         address user = msg.sender;
@@ -96,7 +153,7 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
         emit Events.Staked(user, amount, totalStaked);
     }
 
-    function unstake(uint256 amount) external nonReentrant {
+    function unstake(uint256 amount) external nonReentrant whenNotPaused {
         if (amount == 0) revert Errors.ZeroAmount();
 
         address user = msg.sender;
@@ -115,6 +172,7 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
     //  mwStartTime
     // --------------------------------------------
 
+    /// @dev Not pausable — settlement crank must still snapshot while user flows are halted.
     function snapshot(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber) external returns (uint256 snapId) {
         address treasury = tournamentRegistry.getPbrTreasury(tournamentId_);
         if (treasury == address(0) || msg.sender != treasury) revert Errors.OnlyTournamentTreasury();
@@ -126,18 +184,25 @@ contract PlayerVault is Initializable, AccessControl, ReentrancyGuard {
         snapIdOf[tournamentId_][seasonId_][roundNumber] = snapId;
         _snapRounds.push(RoundKey({ tournamentId: tournamentId_, seasonId: seasonId_, roundNumber: roundNumber }));
 
-        emit Events.SnapshotTaken(tournamentId_, seasonId_, roundNumber, snapId, IStakedToken(stToken).totalSupplyAt(snapId));
+        emit Events.SnapshotTaken(
+            tournamentId_, seasonId_, roundNumber, snapId, IStakedToken(stToken).totalSupplyAt(snapId)
+        );
     }
 
     // --------------------------------------------
     //  Claim
     // --------------------------------------------
 
-    function claim(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber) external nonReentrant returns (uint256) {
+    function claim(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber)
+        external
+        nonReentrant
+        whenNotPaused
+        returns (uint256)
+    {
         return _claim(msg.sender, tournamentId_, seasonId_, roundNumber, true);
     }
 
-    function claimAll() external nonReentrant returns (uint256 totalPayout) {
+    function claimAll() external nonReentrant whenNotPaused returns (uint256 totalPayout) {
         address user = msg.sender;
         uint256 length = _snapRounds.length;
         for (uint256 i; i < length; ++i) {

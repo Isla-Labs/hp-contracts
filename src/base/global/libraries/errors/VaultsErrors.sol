@@ -10,6 +10,7 @@ library VaultsErrors {
 
     error ZeroAddress();
     error ZeroId();
+    error Unauthorized();
     error NothingToClaim();
 
     // --------------------------------------------
@@ -33,6 +34,7 @@ library VaultsErrors {
     // --------------------------------------------
 
     error ZeroAmount();
+    error VaultInactive();
     error OnlyTournamentTreasury();
     error InsufficientStake();
     error MatchweekLock();

@@ -6,6 +6,7 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 
+import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
 import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
 import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
@@ -18,6 +19,11 @@ import { IPlayerVault } from "@base/global/interfaces/IPlayerVault.sol";
  * @notice Single-tournament PBR pot: fee accrual, lock / snapshot / settle, pull claims.
  * @dev One deployment per `tournamentId`. Fees arrive from `PbrFeeHub` (or directly).
  *
+ *      Access:
+ *      - `CATEGORY_THREE` (`Automator`): `settle`.
+ *      - `CATEGORY_THREE` or `CATEGORY_TWO` (`MaintenanceTimelock`): `registerVault` /
+ *        `unregisterVault` (automator path + manual repair).
+ *
  *      Crank: `lock()` → `snapshotBatch()` → `settle(...)`.
  *      Wrap: lock of `finalRound` sets `tradingRound = 1`; settle advances `seasonId`.
  *
@@ -25,9 +31,6 @@ import { IPlayerVault } from "@base/global/interfaces/IPlayerVault.sol";
  * @custom:security-contact security@islalabs.co
  */
 contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant SETTLER_ROLE = keccak256("SETTLER_ROLE");
-
     // --------------------------------------------
     //  Internal Constants
     // --------------------------------------------
@@ -66,6 +69,19 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
     bool public snapshotPending;
 
     // --------------------------------------------
+    //  Access
+    // --------------------------------------------
+
+    /// @dev Automator (cat-3) or MaintenanceTimelock (cat-2) for vault registry repairs.
+    modifier onlyCategoryTwoOrThree() {
+        address sender = _msgSender();
+        if (!hasRole(Roles.CATEGORY_TWO, sender) && !hasRole(Roles.CATEGORY_THREE, sender)) {
+            revert Errors.Unauthorized();
+        }
+        _;
+    }
+
+    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
@@ -77,12 +93,22 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
     }
 
     /**
-     * @param admin_ Admin + initial settler.
+     * @param automator_ `Automator` — `CATEGORY_THREE`.
+     * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
      * @param tournamentId_ Sole tournament this treasury serves.
      * @param initialSeason_ Starting season (e.g. 2025).
      */
-    function initialize(address admin_, bytes32 tournamentId_, uint16 initialSeason_) external initializer {
-        if (admin_ == address(0)) revert Errors.ZeroAddress();
+    function initialize(
+        address automator_,
+        address maintenanceTimelock_,
+        address dao_,
+        bytes32 tournamentId_,
+        uint16 initialSeason_
+    ) external initializer {
+        if (automator_ == address(0) || maintenanceTimelock_ == address(0) || dao_ == address(0)) {
+            revert Errors.ZeroAddress();
+        }
         if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
         if (initialSeason_ == 0) revert Errors.ZeroSeason();
 
@@ -91,8 +117,9 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         activeRound = 1;
         tradingRound = 1;
 
-        _grantRole(ADMIN_ROLE, admin_);
-        _grantRole(SETTLER_ROLE, admin_);
+        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
+        _grantRole(Roles.CATEGORY_THREE, automator_);
+        _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
     }
 
     receive() external payable nonReentrant {
@@ -106,7 +133,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
     //  Player Vault Registration
     // --------------------------------------------
 
-    function registerVault(address vault) external onlyRole(ADMIN_ROLE) {
+    function registerVault(address vault) external onlyCategoryTwoOrThree {
         if (vault == address(0)) revert Errors.ZeroAddress();
         if (vault.code.length == 0) revert Errors.UnknownVault(vault);
         if (isVault[vault]) revert Errors.VaultAlreadyRegistered(vault);
@@ -117,7 +144,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         emit Events.VaultRegistered(vault);
     }
 
-    function unregisterVault(address vault) external onlyRole(ADMIN_ROLE) {
+    function unregisterVault(address vault) external onlyCategoryTwoOrThree {
         if (!isVault[vault]) revert Errors.UnknownVault(vault);
 
         uint256 index0 = _vaultIndex[vault] - 1;
@@ -222,7 +249,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
 
     function settle(address[] calldata vaults, uint256[] calldata mwPoints, uint256 adjTotalPoints)
         external
-        onlyRole(SETTLER_ROLE)
+        onlyRole(Roles.CATEGORY_THREE)
     {
         if (vaults.length != mwPoints.length) revert Errors.LengthMismatch();
         if (adjTotalPoints == 0) revert Errors.ZeroMAdj();

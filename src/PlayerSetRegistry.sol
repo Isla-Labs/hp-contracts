@@ -80,11 +80,11 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     function initialize(address admin_, address updateAuthority_, address lifecycleTimelock_, address activityTimelock_) external initializer {
         if (admin_ == address(0) || updateAuthority_ == address(0) || lifecycleTimelock_ == address(0) || activityTimelock_ == address(0)) revert Errors.ZeroAddress();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, admin_);
-        _grantRole(UPDATE_ROLE, updateAuthority_);
-        _grantRole(UPDATE_ROLE, lifecycleTimelock_);
-        _grantRole(LIFECYCLE_ROLE, lifecycleTimelock_);
-        _grantRole(ACTIVITY_ROLE, activityTimelock_);
+        _grantRole(DEFAULT_ADMIN_ROLE, admin_); // replace with governance
+        _grantRole(UPDATE_ROLE, updateAuthority_); // replace with governance
+        _grantRole(UPDATE_ROLE, lifecycleTimelock_); // replace with governance
+        _grantRole(LIFECYCLE_ROLE, lifecycleTimelock_); // replace with governance
+        _grantRole(ACTIVITY_ROLE, activityTimelock_); // replace with governance
     }
 
     // --------------------------------------------

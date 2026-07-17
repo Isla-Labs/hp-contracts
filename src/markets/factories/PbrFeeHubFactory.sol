@@ -11,22 +11,36 @@ import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
 /**
  * @title PbrFeeHubFactory
  * @notice Deploys per-domestic-league `PbrFeeHub` beacon proxies (FeeRouter destinations).
- * @dev Hubs store treasury destinations locally; TournamentExecutor dual-writes them when
- *      competitions are wired. Default weights: 90/9/1 top-level, 89% domestic league share.
+ * @dev Beacon ownership (logic upgrades) is assigned to `ConstitutionalTimelock`. Hubs store
+ *      treasury destinations locally; default weights: 90/9/1 top-level, 89% domestic league share.
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract PbrFeeHubFactory {
     UpgradeableBeacon public immutable beacon;
-    address public immutable admin;
+
+    /// @notice Granted `CATEGORY_TWO` on each hub
+    address public immutable maintenanceTimelock;
+
+    /// @notice Granted `CATEGORY_ONE` on each hub; owns the beacon
+    address public immutable constitutionalTimelock;
+
+    /// @notice Granted `DEFAULT_ADMIN_ROLE` on each hub
+    address public immutable dao;
 
     /**
-     * @param admin_ Granted `ADMIN_ROLE` on each hub; also owns the beacon.
+     * @param maintenanceTimelock_ `MaintenanceTimelock` — cat-2 on each hub.
+     * @param constitutionalTimelock_ `ConstitutionalTimelock` — cat-1 + beacon owner.
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE` on each hub.
      */
-    constructor(address admin_) {
-        if (admin_ == address(0)) revert Errors.ZeroAddress();
-        admin = admin_;
-        beacon = new UpgradeableBeacon(address(new PbrFeeHub()), admin_);
+    constructor(address maintenanceTimelock_, address constitutionalTimelock_, address dao_) {
+        if (maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0) || dao_ == address(0)) {
+            revert Errors.ZeroAddress();
+        }
+        maintenanceTimelock = maintenanceTimelock_;
+        constitutionalTimelock = constitutionalTimelock_;
+        dao = dao_;
+        beacon = new UpgradeableBeacon(address(new PbrFeeHub()), constitutionalTimelock_);
     }
 
     /**
@@ -39,7 +53,9 @@ contract PbrFeeHubFactory {
         if (leagueId == bytes32(0)) revert Errors.ZeroId();
         if (leagueTreasury == address(0)) revert Errors.ZeroAddress();
 
-        bytes memory initData = abi.encodeCall(PbrFeeHub.initialize, (admin, leagueId, leagueTreasury));
+        bytes memory initData = abi.encodeCall(
+            PbrFeeHub.initialize, (maintenanceTimelock, constitutionalTimelock, dao, leagueId, leagueTreasury)
+        );
         hub = address(new BeaconProxy(address(beacon), initData));
         emit Events.PbrFeeHubCreated(leagueId, hub);
     }

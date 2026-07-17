@@ -7,6 +7,7 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
+import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
 import { MarketsErrors as Errors } from "@base/global/libraries/errors/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@base/global/libraries/events/MarketsEvents.sol";
 import { TournamentRegistry } from "@src/TournamentRegistry.sol";
@@ -18,9 +19,10 @@ import { TournamentRegistry } from "@src/TournamentRegistry.sol";
  *      a shared `UpgradeableBeacon`. Per-market state lives in each proxy; `tournamentRegistry`
  *      is immutable on the implementation and shared by all proxies.
  *
- *      Access:
- *      - `LIFECYCLE_ROLE` (LifecycleTimelock): `setPbrFeeHub` for league transfers / delisting.
- *      - `ADMIN_ROLE`: ATFunding, `minRelay`, and token rescue.
+ *      Access (governance categories):
+ *      - `CATEGORY_THREE` (`Automator`): `setPbrFeeHub` for league transfers / delisting.
+ *      - `CATEGORY_ONE` (`ConstitutionalTimelock`): `setAtFunding`.
+ *      - `CATEGORY_TWO` (`MaintenanceTimelock`): `setMinRelay`, `rescueToken`.
  *
  *      Fee split:
  *      - If `atFunding == address(0)`, 100% of fees take the PBR route.
@@ -28,7 +30,7 @@ import { TournamentRegistry } from "@src/TournamentRegistry.sol";
  *
  *      Relay threshold:
  *      - On `receive`, ETH accrues until `balance >= minRelay` (default at init: 0.0001 ether),
- *        then the full balance is relayed. Admin may update via `setMinRelay`.
+ *        then the full balance is relayed. Maintenance may update via `setMinRelay`.
  *      - `forward` and destination updates always attempt a full-balance relay (bypass gate).
  *
  *      PBR routing:
@@ -43,12 +45,6 @@ import { TournamentRegistry } from "@src/TournamentRegistry.sol";
  */
 contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
-
-    /// @notice LifecycleTimelock role for hub updates during transfers / delisting
-    bytes32 public constant LIFECYCLE_ROLE = keccak256("LIFECYCLE_ROLE");
-
-    /// @notice Admin role for ATFunding and rescue
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     /// @notice Registry used to enumerate domestic PBR fee hubs when unsupported
     TournamentRegistry public immutable tournamentRegistry;
@@ -74,27 +70,36 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
 
     /**
      * @notice Initializes per-market proxy storage. Called once via BeaconProxy constructor data.
-     * @param lifecycleTimelock_ Address granted `LIFECYCLE_ROLE`.
-     * @param admin_ Address granted `ADMIN_ROLE`.
+     * @param automator_ `Automator` — `CATEGORY_THREE`.
+     * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
+     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE`.
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
      * @param playerId_ Player identity associated with this FeeRouter.
      * @param atFunding_ Optional ATFunding for the 11% FR share (zero = all fees via PBR).
      * @param pbrFeeHub_ Initial league `PbrFeeHub` (zero = unsupported / OOF even-split).
      */
     function initialize(
-        address lifecycleTimelock_,
-        address admin_,
+        address automator_,
+        address maintenanceTimelock_,
+        address constitutionalTimelock_,
+        address dao_,
         bytes32 playerId_,
         address atFunding_,
         address pbrFeeHub_
     ) external initializer {
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
-        if (lifecycleTimelock_ == address(0) || admin_ == address(0)) revert Errors.ZeroAddress();
+        if (
+            automator_ == address(0) || maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0)
+                || dao_ == address(0)
+        ) revert Errors.ZeroAddress();
 
         playerId = playerId_;
         minRelay = 0.0001 ether;
 
-        _grantRole(ADMIN_ROLE, admin_);
-        _grantRole(LIFECYCLE_ROLE, lifecycleTimelock_);
+        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
+        _grantRole(Roles.CATEGORY_THREE, automator_);
+        _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
+        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
 
         if (atFunding_ != address(0)) {
             _setAtFunding(atFunding_);
@@ -191,7 +196,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
      * @param to Recipient of the rescued tokens.
      * @param amount Amount to transfer.
      */
-    function rescueToken(address token, address to, uint256 amount) external onlyRole(ADMIN_ROLE) {
+    function rescueToken(address token, address to, uint256 amount) external onlyRole(Roles.CATEGORY_TWO) {
         if (token == address(0) || to == address(0)) revert Errors.ZeroAddress();
         IERC20(token).safeTransfer(to, amount);
         emit Events.TokenRescued(token, to, amount);
@@ -201,7 +206,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
      * @notice Updates the minimum ETH balance required before auto-relay on `receive`.
      * @dev Lowering the threshold immediately attempts a gated relay if the balance qualifies.
      */
-    function setMinRelay(uint256 minRelay_) external onlyRole(ADMIN_ROLE) nonReentrant {
+    function setMinRelay(uint256 minRelay_) external onlyRole(Roles.CATEGORY_TWO) nonReentrant {
         uint256 previous = minRelay;
         minRelay = minRelay_;
         emit Events.MinRelayUpdated(playerId, previous, minRelay_);
@@ -210,17 +215,17 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
 
     /**
      * @notice Updates the league `PbrFeeHub` and sweeps any queued ETH.
-     * @dev LifecycleTimelock-only. Pass zero when the market is unsupported / has no league.
+     * @dev Automator (`CATEGORY_THREE`). Pass zero when the market is unsupported / has no league.
      */
-    function setPbrFeeHub(address newHub) external onlyRole(LIFECYCLE_ROLE) nonReentrant {
+    function setPbrFeeHub(address newHub) external onlyRole(Roles.CATEGORY_THREE) nonReentrant {
         _setPbrFeeHub(newHub);
     }
 
     /**
      * @notice Sets or clears the ATFunding destination for the 11% FR share.
-     * @dev Pass zero to disable FR routing (100% PBR). Used when Advanced Trade funding goes live.
+     * @dev ConstitutionalTimelock (`CATEGORY_ONE`). Pass zero to disable FR (100% PBR).
      */
-    function setAtFunding(address newFunding) external onlyRole(ADMIN_ROLE) nonReentrant {
+    function setAtFunding(address newFunding) external onlyRole(Roles.CATEGORY_ONE) nonReentrant {
         address previous = atFunding;
         if (newFunding == address(0)) {
             atFunding = address(0);

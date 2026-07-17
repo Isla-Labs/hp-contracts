@@ -24,6 +24,7 @@ library VaultsEvents {
 
     event PlayerVaultCreated(bytes32 indexed playerId, address indexed playerVault, address indexed stToken);
 
+    event ActiveUpdated(bytes32 indexed playerId, bool isActive);
     event Staked(address indexed user, uint256 amount, uint256 newTotalStaked);
     event Unstaked(address indexed user, uint256 amount, uint256 newTotalStaked);
     event SnapshotTaken(

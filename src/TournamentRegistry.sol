@@ -66,9 +66,9 @@ contract TournamentRegistry is Initializable, AccessControl {
     function initialize(address admin_, address deployer_) external initializer {
         if (admin_ == address(0) || deployer_ == address(0)) revert Errors.ZeroAddress();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, admin_);
-        _grantRole(ADMIN_ROLE, admin_);
-        _grantRole(DEPLOYER_ROLE, deployer_);
+        _grantRole(DEFAULT_ADMIN_ROLE, admin_); // replace with governance
+        _grantRole(ADMIN_ROLE, admin_); // replace with governance
+        _grantRole(DEPLOYER_ROLE, deployer_); // replace with governance
     }
 
     // --------------------------------------------

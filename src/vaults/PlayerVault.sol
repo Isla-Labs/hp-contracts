@@ -13,6 +13,7 @@ import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErro
 import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
 import { RoundStatus } from "@base/global/types/VaultTypes.sol";
 import { TournamentRegistry } from "@src/TournamentRegistry.sol";
+import { PlayerSetRegistry } from "@src/PlayerSetRegistry.sol";
 import { IStakedToken } from "@base/global/interfaces/IStakedToken.sol";
 import { PbrTreasury } from "@vaults/PbrTreasury.sol";
 
@@ -20,6 +21,8 @@ import { PbrTreasury } from "@vaults/PbrTreasury.sol";
  * @title PlayerVault
  * @notice Stake custody + per-(tournament, season, round) snapshots; claims against each tournament treasury.
  * @dev Snapshot callers must be `TournamentRegistry.getPbrTreasury(tournamentId)`.
+ *      Stake/unstake syncs `VaultData.isUtilized` on `PlayerSetRegistry` when `totalStaked`
+ *      crosses zero. Vault must already be registered via `addVaultData`.
  *      `DEFAULT_ADMIN_ROLE` (DAO) may pause/unpause user stake and claim flows.
  *      `CATEGORY_THREE` (`Automator`) or `CATEGORY_TWO` (`MaintenanceTimelock`) may toggle
  *      `isActive` for lifecycle support / discontinuation (or manual repair).
@@ -35,6 +38,7 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
     // --------------------------------------------
 
     TournamentRegistry public tournamentRegistry;
+    PlayerSetRegistry public playerSetRegistry;
 
     bytes32 public playerId;
     address public playerToken;
@@ -88,19 +92,22 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
         address maintenanceTimelock_,
         address dao_,
         address tournamentRegistry_,
+        address playerSetRegistry_,
         bytes32 playerId_,
         address playerToken_,
         address stToken_
     ) external initializer {
         if (
             automator_ == address(0) || maintenanceTimelock_ == address(0) || dao_ == address(0)
-                || tournamentRegistry_ == address(0) || playerToken_ == address(0) || stToken_ == address(0)
+                || tournamentRegistry_ == address(0) || playerSetRegistry_ == address(0) || playerToken_ == address(0)
+                || stToken_ == address(0)
         ) {
             revert Errors.ZeroAddress();
         }
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
 
         tournamentRegistry = TournamentRegistry(tournamentRegistry_);
+        playerSetRegistry = PlayerSetRegistry(playerSetRegistry_);
         playerId = playerId_;
         playerToken = playerToken_;
         stToken = stToken_;
@@ -149,8 +156,12 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
         IERC20(playerToken).safeTransferFrom(user, address(this), amount);
         IStakedToken(stToken).mint(user, amount);
 
-        totalStaked += amount;
-        emit Events.Staked(user, amount, totalStaked);
+        uint256 previous = totalStaked;
+        uint256 next = previous + amount;
+        totalStaked = next;
+        _syncUtilization(previous, next);
+
+        emit Events.Staked(user, amount, next);
     }
 
     function unstake(uint256 amount) external nonReentrant whenNotPaused {
@@ -164,8 +175,12 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
         IStakedToken(stToken).burn(user, amount);
         IERC20(playerToken).safeTransfer(user, amount);
 
-        totalStaked -= amount;
-        emit Events.Unstaked(user, amount, totalStaked);
+        uint256 previous = totalStaked;
+        uint256 next = previous - amount;
+        totalStaked = next;
+        _syncUtilization(previous, next);
+
+        emit Events.Unstaked(user, amount, next);
     }
 
     // --------------------------------------------
@@ -244,6 +259,15 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
     // --------------------------------------------
     //  Internal
     // --------------------------------------------
+
+    /// @dev Notify registry when utilization flips at the zero-stake boundary.
+    function _syncUtilization(uint256 previousTotal, uint256 newTotal) internal {
+        if (previousTotal == 0 && newTotal > 0) {
+            playerSetRegistry.updateUtilization(true);
+        } else if (previousTotal > 0 && newTotal == 0) {
+            playerSetRegistry.updateUtilization(false);
+        }
+    }
 
     function _claim(address user, bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber, bool revertOnEmpty)
         internal

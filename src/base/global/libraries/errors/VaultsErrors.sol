@@ -48,4 +48,12 @@ library VaultsErrors {
     // --------------------------------------------
 
     error OnlyVault();
+
+    // --------------------------------------------
+    //  Factory Errors
+    // --------------------------------------------
+
+    error AddressMismatch(address actual, address expected);
+    error ZeroSalt();
+    error InvalidSalt();
 }

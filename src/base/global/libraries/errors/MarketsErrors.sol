@@ -8,6 +8,7 @@ library MarketsErrors {
 
     error ZeroAddress();
     error ZeroId();
+    error Unauthorized();
 
     // --------------------------------------------
     //  FeeRouter Errors

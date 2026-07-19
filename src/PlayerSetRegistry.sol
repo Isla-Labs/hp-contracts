@@ -21,8 +21,8 @@ import {
  * @title PlayerSetRegistry
  * @notice Canonical per-player market discovery set (`playerId` → `PlayerSet`).
  * @dev Access:
- *      - `CATEGORY_THREE` (`Automator`): registration, status, league / active tournaments,
- *        and Doppler updates.
+ *      - `CATEGORY_THREE` (`Automator` / `DeployTournament`): registration, status, league /
+ *        active tournaments, and Doppler updates.
  *      - Registered vaults: `updateUtilization` via `onlyVault`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
@@ -190,6 +190,18 @@ contract PlayerSetRegistry is Initializable, AccessControl {
     function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyCategoryTwoOrThree {
         _requirePlayer(playerId);
         _addActiveTournament(playerId, tournamentId);
+    }
+
+    /// @notice Bulk `addActiveTournament` for the same `tournamentId` across many players.
+    function addActiveTournamentForPlayers(bytes32[] calldata playerIds, bytes32 tournamentId)
+        external
+        onlyCategoryTwoOrThree
+    {
+        uint256 length = playerIds.length;
+        for (uint256 i; i < length; ++i) {
+            _requirePlayer(playerIds[i]);
+            _addActiveTournament(playerIds[i], tournamentId);
+        }
     }
 
     function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyCategoryTwoOrThree {

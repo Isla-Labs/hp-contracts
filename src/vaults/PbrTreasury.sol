@@ -96,6 +96,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
      * @param automator_ `Automator` — `CATEGORY_THREE`.
      * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
      * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
+     * @param deployTournament_ `DeployTournament` — `CATEGORY_THREE` (bootstrap vault registration).
      * @param tournamentId_ Sole tournament this treasury serves.
      * @param initialSeason_ Starting season (e.g. 2025).
      */
@@ -103,10 +104,14 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         address automator_,
         address maintenanceTimelock_,
         address dao_,
+        address deployTournament_,
         bytes32 tournamentId_,
         uint16 initialSeason_
     ) external initializer {
-        if (automator_ == address(0) || maintenanceTimelock_ == address(0) || dao_ == address(0)) {
+        if (
+            automator_ == address(0) || maintenanceTimelock_ == address(0) || dao_ == address(0)
+                || deployTournament_ == address(0)
+        ) {
             revert Errors.ZeroAddress();
         }
         if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
@@ -119,6 +124,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
         _grantRole(Roles.CATEGORY_THREE, automator_);
+        _grantRole(Roles.CATEGORY_THREE, deployTournament_);
         _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
     }
 
@@ -134,14 +140,15 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
     // --------------------------------------------
 
     function registerVault(address vault) external onlyCategoryTwoOrThree {
-        if (vault == address(0)) revert Errors.ZeroAddress();
-        if (vault.code.length == 0) revert Errors.UnknownVault(vault);
-        if (isVault[vault]) revert Errors.VaultAlreadyRegistered(vault);
+        _registerVault(vault);
+    }
 
-        isVault[vault] = true;
-        _vaults.push(vault);
-        _vaultIndex[vault] = _vaults.length;
-        emit Events.VaultRegistered(vault);
+    /// @notice Bulk `registerVault` for tournament bootstrap.
+    function registerVaults(address[] calldata vaults) external onlyCategoryTwoOrThree {
+        uint256 length = vaults.length;
+        for (uint256 i; i < length; ++i) {
+            _registerVault(vaults[i]);
+        }
     }
 
     function unregisterVault(address vault) external onlyCategoryTwoOrThree {
@@ -158,6 +165,17 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
         delete _vaultIndex[vault];
         isVault[vault] = false;
         emit Events.VaultUnregistered(vault);
+    }
+
+    function _registerVault(address vault) internal {
+        if (vault == address(0)) revert Errors.ZeroAddress();
+        if (vault.code.length == 0) revert Errors.UnknownVault(vault);
+        if (isVault[vault]) revert Errors.VaultAlreadyRegistered(vault);
+
+        isVault[vault] = true;
+        _vaults.push(vault);
+        _vaultIndex[vault] = _vaults.length;
+        emit Events.VaultRegistered(vault);
     }
 
     // --------------------------------------------

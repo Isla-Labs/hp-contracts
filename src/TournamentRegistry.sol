@@ -24,8 +24,9 @@ import {
  *        - `UCL`: CONTINENTAL, feeHubs = all domestic hubs, treasury = UCL pot
  *
  *      Access:
- *      - `CATEGORY_ONE` (`ConstitutionalTimelock`): `registerHub`, tournament create, `linkHub`.
- *      - `CATEGORY_THREE` (`Automator`): `openSeason`, `upsertRound`.
+ *      - `CATEGORY_ONE` (`ConstitutionalTimelock` / `DeployTournament`): `registerHub`,
+ *        tournament create, `linkHub`.
+ *      - `CATEGORY_THREE` (`Automator` / `DeployTournament`): `openSeason`, `upsertRound(s)`.
  *
  *      Domestic league hubs are registered globally (`registerHub`) so `FeeRouter` can
  *      even-split when a market has no league (`getAllDomesticPbrFeeHubs`). Per-tournament
@@ -171,34 +172,18 @@ contract TournamentRegistry is Initializable, AccessControl {
         external
         onlyRole(Roles.CATEGORY_THREE)
     {
-        Tournament storage t = _requireTournament(tournamentId);
-        uint256 sIndex = _seasonIndex(t, seasonStartYear);
-        if (sIndex == type(uint256).max) revert Errors.SeasonNotFound(tournamentId, seasonStartYear);
+        _upsertRound(tournamentId, seasonStartYear, round);
+    }
 
-        Season storage season = t.seasons[sIndex];
-        if (round.roundNumber == 0 || round.roundNumber > season.finalRound) {
-            revert Errors.InvalidRoundNumber(round.roundNumber, season.finalRound);
+    /// @notice Bulk `upsertRound` for calendar bootstrap / matchweek ingest.
+    function upsertRounds(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule[] calldata rounds)
+        external
+        onlyRole(Roles.CATEGORY_THREE)
+    {
+        uint256 length = rounds.length;
+        for (uint256 i; i < length; ++i) {
+            _upsertRound(tournamentId, seasonStartYear, rounds[i]);
         }
-        if (round.endTime <= round.startTime) revert Errors.InvalidTimeRange(round.startTime, round.endTime);
-
-        uint256 rIndex = _roundIndex(season, round.roundNumber);
-        if (rIndex == type(uint256).max) {
-            season.rounds.push(round);
-            unchecked {
-                ++season.roundCount;
-            }
-        } else {
-            RoundSchedule storage stored = season.rounds[rIndex];
-            stored.startTime = round.startTime;
-            stored.endTime = round.endTime;
-            delete stored.fixtureIds;
-            uint256 n = round.fixtureIds.length;
-            for (uint256 i; i < n; ++i) {
-                stored.fixtureIds.push(round.fixtureIds[i]);
-            }
-        }
-
-        emit Events.RoundUpserted(tournamentId, seasonStartYear, round.roundNumber);
     }
 
     // --------------------------------------------
@@ -283,6 +268,37 @@ contract TournamentRegistry is Initializable, AccessControl {
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
+
+    function _upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round) internal {
+        Tournament storage t = _requireTournament(tournamentId);
+        uint256 sIndex = _seasonIndex(t, seasonStartYear);
+        if (sIndex == type(uint256).max) revert Errors.SeasonNotFound(tournamentId, seasonStartYear);
+
+        Season storage season = t.seasons[sIndex];
+        if (round.roundNumber == 0 || round.roundNumber > season.finalRound) {
+            revert Errors.InvalidRoundNumber(round.roundNumber, season.finalRound);
+        }
+        if (round.endTime <= round.startTime) revert Errors.InvalidTimeRange(round.startTime, round.endTime);
+
+        uint256 rIndex = _roundIndex(season, round.roundNumber);
+        if (rIndex == type(uint256).max) {
+            season.rounds.push(round);
+            unchecked {
+                ++season.roundCount;
+            }
+        } else {
+            RoundSchedule storage stored = season.rounds[rIndex];
+            stored.startTime = round.startTime;
+            stored.endTime = round.endTime;
+            delete stored.fixtureIds;
+            uint256 n = round.fixtureIds.length;
+            for (uint256 i; i < n; ++i) {
+                stored.fixtureIds.push(round.fixtureIds[i]);
+            }
+        }
+
+        emit Events.RoundUpserted(tournamentId, seasonStartYear, round.roundNumber);
+    }
 
     function _linkHub(Tournament storage t, bytes32 tournamentId, Hub calldata hub) internal {
         if (hub.leagueId == bytes32(0)) revert Errors.ZeroId();

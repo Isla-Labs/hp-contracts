@@ -45,9 +45,13 @@ interface IPlayerSetRegistry {
 
     function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external;
 
-    function addActiveTournamentForPlayers(bytes32[] calldata playerIds, bytes32 tournamentId) external;
-
     function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external;
+
+    /// @notice Called by the tournament's `PbrTreasury` after registering a vault.
+    function addActiveTournamentForVault(address vault, bytes32 tournamentId) external;
+
+    /// @notice Called by the tournament's `PbrTreasury` after unregistering a vault.
+    function removeActiveTournamentForVault(address vault, bytes32 tournamentId) external;
 
     // --------------------------------------------
     //  Views

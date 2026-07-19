@@ -45,6 +45,9 @@ interface ITournamentRegistry {
 
     function getAllDomesticPbrFeeHubs() external view returns (address[] memory hubs);
 
+    /// @notice All registered domestic hubs as `(leagueId, pbrFeeHub)` pairs.
+    function getAllDomesticHubs() external view returns (Hub[] memory hubs);
+
     function getTournamentsForLeague(bytes32 leagueId) external view returns (bytes32[] memory ids);
 
     function getPbrTreasury(bytes32 tournamentId) external view returns (address);

@@ -18,6 +18,8 @@ interface IPbrTreasury {
 
     function unregisterVault(address vault) external;
 
+    function unregisterVaults(address[] calldata vaults) external;
+
     // --------------------------------------------
     //  Claims (called by PlayerVault)
     // --------------------------------------------

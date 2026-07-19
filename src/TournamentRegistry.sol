@@ -200,6 +200,16 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
         }
     }
 
+    /// @notice All registered domestic hubs (league id + hub address).
+    function getAllDomesticHubs() external view returns (Hub[] memory hubs) {
+        uint256 length = _leagueIds.length;
+        hubs = new Hub[](length);
+        for (uint256 i; i < length; ++i) {
+            bytes32 leagueId = _leagueIds[i];
+            hubs[i] = Hub({ leagueId: leagueId, pbrFeeHub: pbrFeeHubOf[leagueId] });
+        }
+    }
+
     /// @notice Tournaments that list a hub for `leagueId`
     function getTournamentsForLeague(bytes32 leagueId) external view returns (bytes32[] memory ids) {
         uint256 length = _tournamentIds.length;

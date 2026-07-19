@@ -11,6 +11,9 @@ library DeploymentsErrors {
     error Unauthorized();
     error NotConfigured();
     error InvalidTournamentType(TournamentType actual, TournamentType expected);
+    error UnsupportedTournamentType(TournamentType tournamentType);
+    error EmptyHubs();
+    error HubNotRegistered(bytes32 leagueId);
     error VaultMissing(bytes32 playerId);
     error InvalidOpenSeasonData();
     error AddressMismatch(address actual, address expected);

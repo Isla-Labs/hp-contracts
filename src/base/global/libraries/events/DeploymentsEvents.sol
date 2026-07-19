@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { TournamentType } from "@base/global/types/TournamentTypes.sol";
+
 library DeploymentsEvents {
-    event DomesticLeagueDeployed(
+    event TournamentDeployed(
         bytes32 indexed tournamentId,
+        TournamentType tournamentType,
         address indexed pbrTreasury,
-        address indexed pbrFeeHub,
         uint16 initialSeason,
+        uint256 hubCount,
         uint256 registeredPlayers
     );
 

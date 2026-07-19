@@ -14,6 +14,7 @@ import {
     TournamentType,
     RoundSchedule
 } from "@base/global/types/TournamentTypes.sol";
+import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 
 /**
  * @title TournamentRegistry
@@ -35,7 +36,7 @@ import {
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TournamentRegistry is Initializable, AccessControl {
+contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------

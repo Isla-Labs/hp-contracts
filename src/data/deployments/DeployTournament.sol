@@ -3,13 +3,16 @@ pragma solidity ^0.8.34;
 
 import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@base/global/libraries/events/DeploymentsEvents.sol";
+
 import { Hub, RoundSchedule, TournamentType } from "@base/global/types/TournamentTypes.sol";
 import { VaultData } from "@base/global/types/PlayerSetTypes.sol";
-import { TournamentRegistry } from "@src/TournamentRegistry.sol";
-import { PlayerSetRegistry } from "@src/PlayerSetRegistry.sol";
-import { PbrTreasuryFactory } from "@vaults/factories/PbrTreasuryFactory.sol";
-import { PbrFeeHubFactory } from "@markets/factories/PbrFeeHubFactory.sol";
-import { PbrTreasury } from "@vaults/PbrTreasury.sol";
+
+import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
+import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
+
+import { IPbrTreasuryFactory } from "@base/global/interfaces/vaults/factories/IPbrTreasuryFactory.sol";
+import { IPbrFeeHubFactory } from "@base/global/interfaces/markets/factories/IPbrFeeHubFactory.sol";
+import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
 
 /**
  * @title DeployTournament
@@ -34,11 +37,11 @@ contract DeployTournament {
     // --------------------------------------------
 
     address public immutable constitutionalTimelock;
-    TournamentRegistry public immutable tournamentRegistry;
-    PlayerSetRegistry public immutable playerSetRegistry;
+    ITournamentRegistry public immutable tournamentRegistry;
+    IPlayerSetRegistry public immutable playerSetRegistry;
 
-    PbrTreasuryFactory public pbrTreasuryFactory;
-    PbrFeeHubFactory public pbrFeeHubFactory;
+    IPbrTreasuryFactory public pbrTreasuryFactory;
+    IPbrFeeHubFactory public pbrFeeHubFactory;
 
     bool public factoriesConfigured;
 
@@ -102,8 +105,8 @@ contract DeployTournament {
             revert Errors.ZeroAddress();
         }
         constitutionalTimelock = constitutionalTimelock_;
-        tournamentRegistry = TournamentRegistry(tournamentRegistry_);
-        playerSetRegistry = PlayerSetRegistry(playerSetRegistry_);
+        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
     }
 
     /**
@@ -113,14 +116,14 @@ contract DeployTournament {
         if (factoriesConfigured) revert Errors.Unauthorized();
         if (pbrTreasuryFactory_ == address(0) || pbrFeeHubFactory_ == address(0)) revert Errors.ZeroAddress();
         if (
-            PbrTreasuryFactory(pbrTreasuryFactory_).deployTournament() != address(this)
-                || PbrFeeHubFactory(pbrFeeHubFactory_).deployTournament() != address(this)
+            IPbrTreasuryFactory(pbrTreasuryFactory_).deployTournament() != address(this)
+                || IPbrFeeHubFactory(pbrFeeHubFactory_).deployTournament() != address(this)
         ) {
             revert Errors.Unauthorized();
         }
 
-        pbrTreasuryFactory = PbrTreasuryFactory(pbrTreasuryFactory_);
-        pbrFeeHubFactory = PbrFeeHubFactory(pbrFeeHubFactory_);
+        pbrTreasuryFactory = IPbrTreasuryFactory(pbrTreasuryFactory_);
+        pbrFeeHubFactory = IPbrFeeHubFactory(pbrFeeHubFactory_);
         factoriesConfigured = true;
         emit Events.FactoriesConfigured(pbrTreasuryFactory_, pbrFeeHubFactory_);
     }
@@ -261,7 +264,7 @@ contract DeployTournament {
             vaults[i] = vault;
         }
 
-        PbrTreasury(payable(pbrTreasury)).registerVaults(vaults);
+        IPbrTreasury(pbrTreasury).registerVaults(vaults);
         playerSetRegistry.addActiveTournamentForPlayers(playerIds, tournamentId);
     }
 }

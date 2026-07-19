@@ -8,6 +8,7 @@ import { ICreateX } from "@createx/ICreateX.sol";
 import { CreateXAddresses } from "@base/global/libraries/addresses/CreateX.sol";
 import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
+import { IPbrTreasuryFactory } from "@base/global/interfaces/vaults/factories/IPbrTreasuryFactory.sol";
 import { PbrTreasury } from "@vaults/PbrTreasury.sol";
 
 /**
@@ -22,7 +23,7 @@ import { PbrTreasury } from "@vaults/PbrTreasury.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrTreasuryFactory {
+contract PbrTreasuryFactory is IPbrTreasuryFactory {
     ICreateX public constant CREATE_X = ICreateX(CreateXAddresses.CREATE_X);
 
     UpgradeableBeacon public immutable beacon;

@@ -11,8 +11,9 @@ import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErro
 import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
 import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
 import { RoundState, RoundStatus } from "@base/global/types/VaultTypes.sol";
-import { TournamentRegistry } from "@src/TournamentRegistry.sol";
-import { IPlayerVault } from "@base/global/interfaces/IPlayerVault.sol";
+import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
+import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
+import { IPlayerVault } from "@base/global/interfaces/vaults/IPlayerVault.sol";
 
 /**
  * @title PbrTreasury
@@ -30,7 +31,7 @@ import { IPlayerVault } from "@base/global/interfaces/IPlayerVault.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
+contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreasury {
     // --------------------------------------------
     //  Internal Constants
     // --------------------------------------------
@@ -44,7 +45,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
     //  Storage
     // --------------------------------------------
 
-    TournamentRegistry public immutable tournamentRegistry;
+    ITournamentRegistry public immutable tournamentRegistry;
 
     bytes32 public tournamentId;
 
@@ -88,7 +89,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard {
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address tournamentRegistry_) {
         if (tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
-        tournamentRegistry = TournamentRegistry(tournamentRegistry_);
+        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         _disableInitializers();
     }
 

@@ -10,7 +10,7 @@ import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
 import { MarketsErrors as Errors } from "@base/global/libraries/errors/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@base/global/libraries/events/MarketsEvents.sol";
-import { TournamentRegistry } from "@src/TournamentRegistry.sol";
+import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 
 /**
  * @title FeeRouter
@@ -47,7 +47,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Registry used to enumerate domestic PBR fee hubs when unsupported
-    TournamentRegistry public immutable tournamentRegistry;
+    ITournamentRegistry public immutable tournamentRegistry;
 
     /// @notice Player identity associated with this FeeRouter proxy
     bytes32 public playerId;
@@ -64,7 +64,7 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address tournamentRegistry_) {
         if (tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
-        tournamentRegistry = TournamentRegistry(tournamentRegistry_);
+        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         _disableInitializers();
     }
 

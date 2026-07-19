@@ -16,6 +16,7 @@ import {
     TournamentData,
     VaultData
 } from "@base/global/types/PlayerSetTypes.sol";
+import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 
 /**
  * @title PlayerSetRegistry
@@ -28,7 +29,7 @@ import {
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerSetRegistry is Initializable, AccessControl {
+contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------

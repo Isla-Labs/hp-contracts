@@ -6,6 +6,7 @@ import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.
 
 import { MarketsErrors as Errors } from "@base/global/libraries/errors/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@base/global/libraries/events/MarketsEvents.sol";
+import { IPbrFeeHubFactory } from "@base/global/interfaces/markets/factories/IPbrFeeHubFactory.sol";
 import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
 
 /**
@@ -17,7 +18,7 @@ import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrFeeHubFactory {
+contract PbrFeeHubFactory is IPbrFeeHubFactory {
     UpgradeableBeacon public immutable beacon;
 
     /// @notice Granted `CATEGORY_TWO` on each hub

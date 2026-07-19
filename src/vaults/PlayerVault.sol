@@ -12,10 +12,10 @@ import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.s
 import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
 import { RoundStatus } from "@base/global/types/VaultTypes.sol";
-import { TournamentRegistry } from "@src/TournamentRegistry.sol";
-import { PlayerSetRegistry } from "@src/PlayerSetRegistry.sol";
-import { IStakedToken } from "@base/global/interfaces/IStakedToken.sol";
-import { PbrTreasury } from "@vaults/PbrTreasury.sol";
+import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
+import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
+import { IStakedToken } from "@base/global/interfaces/vaults/IStakedToken.sol";
+import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
 
 /**
  * @title PlayerVault
@@ -37,8 +37,8 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
     //  Storage
     // --------------------------------------------
 
-    TournamentRegistry public tournamentRegistry;
-    PlayerSetRegistry public playerSetRegistry;
+    ITournamentRegistry public tournamentRegistry;
+    IPlayerSetRegistry public playerSetRegistry;
 
     bytes32 public playerId;
     address public playerToken;
@@ -106,8 +106,8 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
         }
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
 
-        tournamentRegistry = TournamentRegistry(tournamentRegistry_);
-        playerSetRegistry = PlayerSetRegistry(playerSetRegistry_);
+        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         playerId = playerId_;
         playerToken = playerToken_;
         stToken = stToken_;
@@ -228,7 +228,7 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
             address treasuryAddr = tournamentRegistry.getPbrTreasury(key.tournamentId);
             if (treasuryAddr == address(0)) continue;
 
-            PbrTreasury treasury = PbrTreasury(payable(treasuryAddr));
+            IPbrTreasury treasury = IPbrTreasury(treasuryAddr);
             if (treasury.getRound(key.seasonId, key.roundNumber).status != RoundStatus.Claimable) continue;
 
             totalPayout += _claim(user, key.tournamentId, key.seasonId, key.roundNumber, false);
@@ -280,7 +280,7 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
         address treasuryAddr = tournamentRegistry.getPbrTreasury(tournamentId_);
         if (treasuryAddr == address(0)) revert Errors.UnknownTournamentTreasury(tournamentId_);
 
-        PbrTreasury treasury = PbrTreasury(payable(treasuryAddr));
+        IPbrTreasury treasury = IPbrTreasury(treasuryAddr);
         uint256 s = IStakedToken(stToken).balanceOfAt(user, snapId);
         uint256 S = IStakedToken(stToken).totalSupplyAt(snapId);
         uint256 m = treasury.getVaultPoints(seasonId_, roundNumber, address(this));
@@ -303,7 +303,7 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
             address treasuryAddr = tournamentRegistry.getPbrTreasury(key.tournamentId);
             if (treasuryAddr == address(0)) continue;
 
-            if (PbrTreasury(payable(treasuryAddr)).getRound(key.seasonId, key.roundNumber).status != RoundStatus.Locked)
+            if (IPbrTreasury(treasuryAddr).getRound(key.seasonId, key.roundNumber).status != RoundStatus.Locked)
             {
                 continue;
             }

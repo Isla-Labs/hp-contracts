@@ -78,10 +78,16 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     //  Access
     // --------------------------------------------
 
-    /// @dev Automator (cat-3) or MaintenanceTimelock (cat-2) for vault registry repairs.
-    modifier onlyCategoryTwoOrThree() {
+    /// @dev ConstitutionalTimelock (cat-1) for initialization.
+    /// @dev MaintenanceTimelock (cat-2) for manual overrides.
+    /// @dev Automator (cat-3) for per-tournament data upserts.
+    modifier onlyAdmin() {
         address sender = _msgSender();
-        if (!hasRole(Roles.CATEGORY_TWO, sender) && !hasRole(Roles.CATEGORY_THREE, sender)) {
+        if (
+            !hasRole(Roles.CATEGORY_ONE, sender) && 
+            !hasRole(Roles.CATEGORY_TWO, sender) &&
+            !hasRole(Roles.CATEGORY_THREE, sender)
+        ) {
             revert Errors.Unauthorized();
         }
         _;
@@ -130,9 +136,9 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
         tradingRound = 1;
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_THREE, automator_);
-        _grantRole(Roles.CATEGORY_THREE, deployTournament_);
+        _grantRole(Roles.CATEGORY_ONE, deployTournament_);
         _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
+        _grantRole(Roles.CATEGORY_THREE, automator_);
     }
 
     receive() external payable nonReentrant {
@@ -146,24 +152,16 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     //  Player Vault Registration
     // --------------------------------------------
 
-    function registerVault(address vault) external onlyCategoryTwoOrThree {
-        _registerVault(vault);
-    }
-
     /// @notice Bulk `registerVault` for tournament bootstrap.
-    function registerVaults(address[] calldata vaults) external onlyCategoryTwoOrThree {
+    function registerVaults(address[] calldata vaults) external onlyAdmin {
         uint256 length = vaults.length;
         for (uint256 i; i < length; ++i) {
             _registerVault(vaults[i]);
         }
     }
 
-    function unregisterVault(address vault) external onlyCategoryTwoOrThree {
-        _unregisterVault(vault);
-    }
-
     /// @notice Bulk `unregisterVault` (e.g. knockout eliminations after round ingest).
-    function unregisterVaults(address[] calldata vaults) external onlyCategoryTwoOrThree {
+    function unregisterVaults(address[] calldata vaults) external onlyAdmin {
         uint256 length = vaults.length;
         for (uint256 i; i < length; ++i) {
             _unregisterVault(vaults[i]);

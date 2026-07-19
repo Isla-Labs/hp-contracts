@@ -12,11 +12,7 @@ interface IPbrTreasury {
     //  Vault registration — CATEGORY_TWO / THREE
     // --------------------------------------------
 
-    function registerVault(address vault) external;
-
     function registerVaults(address[] calldata vaults) external;
-
-    function unregisterVault(address vault) external;
 
     function unregisterVaults(address[] calldata vaults) external;
 

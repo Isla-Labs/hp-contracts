@@ -84,6 +84,7 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
      * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
      * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE`.
      * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
+     * @param deployTournament_ `DeployTournament` — `CATEGORY_ONE` (destination wiring).
      * @param leagueId_ Domestic league this hub serves.
      * @param leagueTreasury_ Primary domestic league `PbrTreasury`.
      */
@@ -91,12 +92,13 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         address maintenanceTimelock_,
         address constitutionalTimelock_,
         address dao_,
+        address deployTournament_,
         bytes32 leagueId_,
         address leagueTreasury_
     ) external initializer {
         if (
             maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0) || dao_ == address(0)
-                || leagueTreasury_ == address(0)
+                || deployTournament_ == address(0) || leagueTreasury_ == address(0)
         ) revert Errors.ZeroAddress();
         if (leagueId_ == bytes32(0)) revert Errors.ZeroId();
 
@@ -105,6 +107,7 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
         _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
         _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
+        _grantRole(Roles.CATEGORY_ONE, deployTournament_);
 
         domesticBps = 9000;
         continentalBps = 900;

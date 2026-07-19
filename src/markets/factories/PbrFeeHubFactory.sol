@@ -70,7 +70,8 @@ contract PbrFeeHubFactory is IPbrFeeHubFactory {
         if (leagueTreasury == address(0)) revert Errors.ZeroAddress();
 
         bytes memory initData = abi.encodeCall(
-            PbrFeeHub.initialize, (maintenanceTimelock, constitutionalTimelock, dao, leagueId, leagueTreasury)
+            PbrFeeHub.initialize,
+            (maintenanceTimelock, constitutionalTimelock, dao, deployTournament, leagueId, leagueTreasury)
         );
         hub = address(new BeaconProxy(address(beacon), initData));
         emit Events.PbrFeeHubCreated(leagueId, hub);

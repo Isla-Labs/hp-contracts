@@ -17,6 +17,7 @@ import {
     VaultData
 } from "@base/global/types/PlayerSetTypes.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 
 /**
  * @title PlayerSetRegistry
@@ -24,6 +25,8 @@ import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.s
  * @dev Access:
  *      - `CATEGORY_THREE` (`Automator` / `DeployTournament`): registration, status, league /
  *        active tournaments, and Doppler updates.
+ *      - Tournament `PbrTreasury`: `addActiveTournamentForVault` / `removeActiveTournamentForVault`
+ *        (keeps discovery in sync with treasury vault registration).
  *      - Registered vaults: `updateUtilization` via `onlyVault`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
@@ -33,6 +36,8 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
+
+    ITournamentRegistry public immutable tournamentRegistry;
 
     mapping(bytes32 playerId => PlayerSet) private _playerSets;
     mapping(address token => bytes32 playerId) public playerIdOfToken;
@@ -58,12 +63,21 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
         _;
     }
 
+    /// @dev Canonical `PbrTreasury` for `tournamentId` (from `TournamentRegistry`).
+    modifier onlyTournamentTreasury(bytes32 tournamentId) {
+        address treasury = tournamentRegistry.getPbrTreasury(tournamentId);
+        if (treasury == address(0) || msg.sender != treasury) revert Errors.NotAuthorized();
+        _;
+    }
+
     // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor(address tournamentRegistry_) {
+        if (tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
+        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         _disableInitializers();
     }
 
@@ -193,36 +207,35 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
         _addActiveTournament(playerId, tournamentId);
     }
 
-    /// @notice Bulk `addActiveTournament` for the same `tournamentId` across many players.
-    function addActiveTournamentForPlayers(bytes32[] calldata playerIds, bytes32 tournamentId)
-        external
-        onlyCategoryTwoOrThree
-    {
-        uint256 length = playerIds.length;
-        for (uint256 i; i < length; ++i) {
-            _requirePlayer(playerIds[i]);
-            _addActiveTournament(playerIds[i], tournamentId);
-        }
-    }
-
     function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyCategoryTwoOrThree {
         _requirePlayer(playerId);
+        _removeActiveTournament(playerId, tournamentId);
+    }
 
-        bytes32[] storage active = _playerSets[playerId].tournamentData.activeTournaments;
-        uint256 length = active.length;
-        uint256 index = type(uint256).max;
-        for (uint256 i; i < length; ++i) {
-            if (active[i] == tournamentId) {
-                index = i;
-                break;
-            }
-        }
-        if (index == type(uint256).max) revert Errors.TournamentNotActive(tournamentId);
+    /**
+     * @notice Sync path for `PbrTreasury.registerVault(s)` — marks `tournamentId` active for the vault's player.
+     * @dev `msg.sender` must be `TournamentRegistry.getPbrTreasury(tournamentId)`.
+     */
+    function addActiveTournamentForVault(address vault, bytes32 tournamentId)
+        external
+        onlyTournamentTreasury(tournamentId)
+    {
+        bytes32 playerId = playerIdOfVault[vault];
+        if (playerId == bytes32(0)) revert Errors.NotFound();
+        _addActiveTournament(playerId, tournamentId);
+    }
 
-        uint256 last = length - 1;
-        if (index != last) active[index] = active[last];
-        active.pop();
-        emit Events.ActiveTournamentRemoved(playerId, tournamentId);
+    /**
+     * @notice Sync path for `PbrTreasury.unregisterVault(s)` — clears `tournamentId` for the vault's player.
+     * @dev `msg.sender` must be `TournamentRegistry.getPbrTreasury(tournamentId)`.
+     */
+    function removeActiveTournamentForVault(address vault, bytes32 tournamentId)
+        external
+        onlyTournamentTreasury(tournamentId)
+    {
+        bytes32 playerId = playerIdOfVault[vault];
+        if (playerId == bytes32(0)) revert Errors.NotFound();
+        _removeActiveTournament(playerId, tournamentId);
     }
 
     // --------------------------------------------
@@ -297,6 +310,24 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
 
         active.push(tournamentId);
         emit Events.ActiveTournamentAdded(playerId, tournamentId);
+    }
+
+    function _removeActiveTournament(bytes32 playerId, bytes32 tournamentId) internal {
+        bytes32[] storage active = _playerSets[playerId].tournamentData.activeTournaments;
+        uint256 length = active.length;
+        uint256 index = type(uint256).max;
+        for (uint256 i; i < length; ++i) {
+            if (active[i] == tournamentId) {
+                index = i;
+                break;
+            }
+        }
+        if (index == type(uint256).max) revert Errors.TournamentNotActive(tournamentId);
+
+        uint256 last = length - 1;
+        if (index != last) active[index] = active[last];
+        active.pop();
+        emit Events.ActiveTournamentRemoved(playerId, tournamentId);
     }
 
     function _requirePlayer(bytes32 playerId) internal view returns (PlayerSet storage set) {

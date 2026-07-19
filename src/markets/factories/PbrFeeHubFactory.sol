@@ -13,6 +13,7 @@ import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
  * @notice Deploys per-domestic-league `PbrFeeHub` beacon proxies (FeeRouter destinations).
  * @dev Beacon ownership (logic upgrades) is assigned to `ConstitutionalTimelock`. Hubs store
  *      treasury destinations locally; default weights: 90/9/1 top-level, 89% domestic league share.
+ *      `create` is restricted to `deployTournament` (cat-1 orchestrator via ConstitutionalTimelock).
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
@@ -28,18 +29,31 @@ contract PbrFeeHubFactory {
     /// @notice Granted `DEFAULT_ADMIN_ROLE` on each hub
     address public immutable dao;
 
+    /// @notice Sole caller of `create`
+    address public immutable deployTournament;
+
     /**
      * @param maintenanceTimelock_ `MaintenanceTimelock` — cat-2 on each hub.
      * @param constitutionalTimelock_ `ConstitutionalTimelock` — cat-1 + beacon owner.
      * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE` on each hub.
+     * @param deployTournament_ `DeployTournament` — sole caller of `create`.
      */
-    constructor(address maintenanceTimelock_, address constitutionalTimelock_, address dao_) {
-        if (maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0) || dao_ == address(0)) {
+    constructor(
+        address maintenanceTimelock_,
+        address constitutionalTimelock_,
+        address dao_,
+        address deployTournament_
+    ) {
+        if (
+            maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0) || dao_ == address(0)
+                || deployTournament_ == address(0)
+        ) {
             revert Errors.ZeroAddress();
         }
         maintenanceTimelock = maintenanceTimelock_;
         constitutionalTimelock = constitutionalTimelock_;
         dao = dao_;
+        deployTournament = deployTournament_;
         beacon = new UpgradeableBeacon(address(new PbrFeeHub()), constitutionalTimelock_);
     }
 
@@ -50,6 +64,7 @@ contract PbrFeeHubFactory {
      * @param leagueTreasury Primary domestic-league `PbrTreasury`.
      */
     function create(bytes32 leagueId, address leagueTreasury) external returns (address hub) {
+        if (msg.sender != deployTournament) revert Errors.Unauthorized();
         if (leagueId == bytes32(0)) revert Errors.ZeroId();
         if (leagueTreasury == address(0)) revert Errors.ZeroAddress();
 

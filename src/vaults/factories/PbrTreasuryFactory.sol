@@ -44,6 +44,7 @@ contract PbrTreasuryFactory is IPbrTreasuryFactory {
     address public immutable deployTournament;
 
     address public immutable tournamentRegistry;
+    address public immutable playerSetRegistry;
 
     constructor(
         address automator_,
@@ -51,11 +52,13 @@ contract PbrTreasuryFactory is IPbrTreasuryFactory {
         address constitutionalTimelock_,
         address dao_,
         address deployTournament_,
-        address tournamentRegistry_
+        address tournamentRegistry_,
+        address playerSetRegistry_
     ) {
         if (
             automator_ == address(0) || maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0)
                 || dao_ == address(0) || deployTournament_ == address(0) || tournamentRegistry_ == address(0)
+                || playerSetRegistry_ == address(0)
         ) revert Errors.ZeroAddress();
 
         automator = automator_;
@@ -64,7 +67,10 @@ contract PbrTreasuryFactory is IPbrTreasuryFactory {
         dao = dao_;
         deployTournament = deployTournament_;
         tournamentRegistry = tournamentRegistry_;
-        beacon = new UpgradeableBeacon(address(new PbrTreasury(tournamentRegistry_)), constitutionalTimelock_);
+        playerSetRegistry = playerSetRegistry_;
+        beacon = new UpgradeableBeacon(
+            address(new PbrTreasury(tournamentRegistry_, playerSetRegistry_)), constitutionalTimelock_
+        );
     }
 
     /**

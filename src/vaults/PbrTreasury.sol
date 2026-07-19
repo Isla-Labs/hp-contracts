@@ -12,6 +12,7 @@ import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEven
 import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
 import { RoundState, RoundStatus } from "@base/global/types/VaultTypes.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
+import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
 import { IPlayerVault } from "@base/global/interfaces/vaults/IPlayerVault.sol";
 
@@ -24,6 +25,9 @@ import { IPlayerVault } from "@base/global/interfaces/vaults/IPlayerVault.sol";
  *      - `CATEGORY_THREE` (`Automator`): `settle`.
  *      - `CATEGORY_THREE` or `CATEGORY_TWO` (`MaintenanceTimelock`): `registerVault` /
  *        `unregisterVault` (automator path + manual repair).
+ *
+ *      Vault registration is the source of truth for this tournament's participants: each
+ *      register/unregister also syncs `PlayerSetRegistry` active-tournament flags.
  *
  *      Crank: `lock()` → `snapshotBatch()` → `settle(...)`.
  *      Wrap: lock of `finalRound` sets `tradingRound = 1`; settle advances `seasonId`.
@@ -46,6 +50,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     // --------------------------------------------
 
     ITournamentRegistry public immutable tournamentRegistry;
+    IPlayerSetRegistry public immutable playerSetRegistry;
 
     bytes32 public tournamentId;
 
@@ -87,9 +92,10 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address tournamentRegistry_) {
-        if (tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
+    constructor(address tournamentRegistry_, address playerSetRegistry_) {
+        if (tournamentRegistry_ == address(0) || playerSetRegistry_ == address(0)) revert Errors.ZeroAddress();
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         _disableInitializers();
     }
 
@@ -153,6 +159,32 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     }
 
     function unregisterVault(address vault) external onlyCategoryTwoOrThree {
+        _unregisterVault(vault);
+    }
+
+    /// @notice Bulk `unregisterVault` (e.g. knockout eliminations after round ingest).
+    function unregisterVaults(address[] calldata vaults) external onlyCategoryTwoOrThree {
+        uint256 length = vaults.length;
+        for (uint256 i; i < length; ++i) {
+            _unregisterVault(vaults[i]);
+        }
+    }
+
+    function _registerVault(address vault) internal {
+        if (vault == address(0)) revert Errors.ZeroAddress();
+        if (vault.code.length == 0) revert Errors.UnknownVault(vault);
+        if (isVault[vault]) revert Errors.VaultAlreadyRegistered(vault);
+        if (playerSetRegistry.playerIdOfVault(vault) == bytes32(0)) revert Errors.UnknownVault(vault);
+
+        isVault[vault] = true;
+        _vaults.push(vault);
+        _vaultIndex[vault] = _vaults.length;
+        emit Events.VaultRegistered(vault);
+
+        playerSetRegistry.addActiveTournamentForVault(vault, tournamentId);
+    }
+
+    function _unregisterVault(address vault) internal {
         if (!isVault[vault]) revert Errors.UnknownVault(vault);
 
         uint256 index0 = _vaultIndex[vault] - 1;
@@ -166,17 +198,8 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
         delete _vaultIndex[vault];
         isVault[vault] = false;
         emit Events.VaultUnregistered(vault);
-    }
 
-    function _registerVault(address vault) internal {
-        if (vault == address(0)) revert Errors.ZeroAddress();
-        if (vault.code.length == 0) revert Errors.UnknownVault(vault);
-        if (isVault[vault]) revert Errors.VaultAlreadyRegistered(vault);
-
-        isVault[vault] = true;
-        _vaults.push(vault);
-        _vaultIndex[vault] = _vaults.length;
-        emit Events.VaultRegistered(vault);
+        playerSetRegistry.removeActiveTournamentForVault(vault, tournamentId);
     }
 
     // --------------------------------------------

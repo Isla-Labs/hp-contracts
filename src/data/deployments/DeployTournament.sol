@@ -22,8 +22,10 @@ import { IPbrFeeHub } from "@base/global/interfaces/markets/IPbrFeeHub.sol";
  * @title DeployTournament
  * @notice Cat-1 orchestrator for atomic tournament bootstrap via `ConstitutionalTimelock`.
  * @dev Access:
- *        - `CATEGORY_ONE` (`ConstitutionalTimelock`): `configureFactories`, all `deploy*` entrypoints.
- *        - `DEFAULT_ADMIN_ROLE` (Aragon DAO): role admin.
+ *        - `CATEGORY_ONE` (`ConstitutionalTimelock`): `configureFactories`, all `deploy*` entrypoints
+ *          (except genesis).
+ *        - `DEFAULT_ADMIN_ROLE` (Aragon DAO): role admin; `deployDomesticLeagueGenesis` when the
+ *          registry has zero tournaments (day-one bootstrap without the constitutional delay).
  *
  *      After the constitutional delay, Timelock calls a typed `deploy*` entrypoint with
  *      pre-formatted calldata. This contract must also hold:
@@ -175,24 +177,29 @@ contract DeployTournament is AccessControl {
 
     /**
      * @notice Deploy treasury + fee hub, register hub, create league tournament, optional bootstrap.
+     * @dev Constitutional path — subject to the cat-1 timelock delay.
      */
     function deployDomesticLeague(DomesticLeagueParams calldata params)
         external
         onlyRole(Roles.CATEGORY_ONE)
         returns (DeployResult memory result)
     {
-        BootstrapParams calldata b = params.bootstrap;
-        _validateBootstrap(b);
+        result = _deployDomesticLeague(params);
+    }
 
-        result.pbrTreasury = _deployTreasury(b);
-        result.pbrFeeHub = pbrFeeHubFactory.create(b.tournamentId, result.pbrTreasury);
-
-        Hub memory hub = Hub({ leagueId: b.tournamentId, pbrFeeHub: result.pbrFeeHub });
-        tournamentRegistry.registerHub(hub);
-
-        Hub[] memory feeHubs = new Hub[](1);
-        feeHubs[0] = hub;
-        _finalize(TournamentType.DOMESTIC_LEAGUE, b, feeHubs, result.pbrTreasury);
+    /**
+     * @notice Day-one league bootstrap: same as `deployDomesticLeague`, but callable by the DAO
+     *         without the constitutional delay when no tournaments exist yet.
+     * @dev Reverts if `TournamentRegistry.tournamentCount() != 0`.
+     */
+    function deployDomesticLeagueGenesis(DomesticLeagueParams calldata params)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        returns (DeployResult memory result)
+    {
+        uint256 count = tournamentRegistry.tournamentCount();
+        if (count != 0) revert Errors.TournamentsExist(count);
+        result = _deployDomesticLeague(params);
     }
 
     // --------------------------------------------
@@ -299,6 +306,24 @@ contract DeployTournament is AccessControl {
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
+
+    function _deployDomesticLeague(DomesticLeagueParams calldata params)
+        internal
+        returns (DeployResult memory result)
+    {
+        BootstrapParams calldata b = params.bootstrap;
+        _validateBootstrap(b);
+
+        result.pbrTreasury = _deployTreasury(b);
+        result.pbrFeeHub = pbrFeeHubFactory.create(b.tournamentId, result.pbrTreasury);
+
+        Hub memory hub = Hub({ leagueId: b.tournamentId, pbrFeeHub: result.pbrFeeHub });
+        tournamentRegistry.registerHub(hub);
+
+        Hub[] memory feeHubs = new Hub[](1);
+        feeHubs[0] = hub;
+        _finalize(TournamentType.DOMESTIC_LEAGUE, b, feeHubs, result.pbrTreasury);
+    }
 
     function _validateBootstrap(BootstrapParams calldata b) internal view {
         if (!factoriesConfigured) revert Errors.NotConfigured();

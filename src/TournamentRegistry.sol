@@ -191,6 +191,10 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
     //  Views
     // --------------------------------------------
 
+    function tournamentCount() external view returns (uint256) {
+        return _tournamentIds.length;
+    }
+
     /// @notice Domestic fee hubs for unsupported-market even-split (`FeeRouter`)
     function getAllDomesticPbrFeeHubs() external view returns (address[] memory hubs) {
         uint256 length = _leagueIds.length;

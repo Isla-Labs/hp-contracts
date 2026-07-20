@@ -2,6 +2,13 @@
 pragma solidity ^0.8.34;
 
 /**
+ * Deployments:
+ * - Check deployment request against eligibility criteria.
+ * - If eligible, deploy the squad.
+ * - If not eligible, reject the deployment.
+ */
+
+/**
  * When a player moves to a new league:
  * - Needs to update PbrFeeHub address when a player moves to a new league.
  * - Needs to remove the PlayerVault from each PBRTreasury implementation.

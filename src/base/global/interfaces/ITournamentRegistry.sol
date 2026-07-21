@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Hub, RoundSchedule, TournamentType } from "@base/global/types/TournamentTypes.sol";
+import { Hub, RoundSchedule, Season, TournamentType } from "@base/global/types/TournamentTypes.sol";
 
 /**
  * @title ITournamentRegistry
@@ -33,7 +33,7 @@ interface ITournamentRegistry {
     //  Season calendar — CATEGORY_THREE
     // --------------------------------------------
 
-    function openSeason(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound) external;
+    function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) external;
 
     function upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round) external;
 
@@ -55,6 +55,13 @@ interface ITournamentRegistry {
     function getPbrTreasury(bytes32 tournamentId) external view returns (address);
 
     function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32);
+
+    function getSeasonId(bytes32 tournamentId, uint16 seasonStartYear) external view returns (bytes32);
+
+    function getSeason(bytes32 tournamentId, uint16 seasonStartYear) external view returns (Season memory);
+
+    /// @notice All SP tournament calendar ids (`tmcl`), newest `seasonStartYear` first.
+    function getSeasonIdsNewestFirst() external view returns (bytes32[] memory seasonIds);
 
     function getRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)
         external

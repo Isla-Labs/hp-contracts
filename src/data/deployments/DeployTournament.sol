@@ -77,7 +77,7 @@ contract DeployTournament is AccessControl {
      * @param tournamentId Stable tournament id.
      * @param initialSeason Season written into `PbrTreasury.initialize`.
      * @param treasury CREATE3 params for the new `PbrTreasury`.
-     * @param openSeasonData `abi.encode(uint16 seasonStartYear, uint32 finalRound)`; empty skips.
+     * @param openSeasonData `abi.encode(bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound)`; empty skips.
      * @param roundsSeasonStartYear Season key for `upsertRounds` (ignored when `rounds` empty).
      * @param rounds Optional calendar rows; empty skips.
      * @param registeredPlayers Optional playerIds to register vaults (+ sync active flags).
@@ -337,9 +337,12 @@ contract DeployTournament is AccessControl {
         _validateBootstrap(b);
 
         if (b.openSeasonData.length != 0) {
-            if (b.openSeasonData.length != 64) revert Errors.InvalidOpenSeasonData();
-            (uint16 seasonStartYear, uint32 finalRound) = abi.decode(b.openSeasonData, (uint16, uint32));
-            if (seasonStartYear == 0 || finalRound == 0) revert Errors.InvalidOpenSeasonData();
+            if (b.openSeasonData.length != 96) revert Errors.InvalidOpenSeasonData();
+            (bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) =
+                abi.decode(b.openSeasonData, (bytes32, uint16, uint32));
+            if (seasonId == bytes32(0) || seasonStartYear == 0 || finalRound == 0) {
+                revert Errors.InvalidOpenSeasonData();
+            }
         }
 
         if (b.rounds.length != 0 && b.roundsSeasonStartYear == 0) revert Errors.ZeroSeason();
@@ -373,9 +376,10 @@ contract DeployTournament is AccessControl {
         tournamentRegistry.createTournament(b.tournamentId, tournamentType, feeHubs, pbrTreasury);
 
         if (b.openSeasonData.length != 0) {
-            if (b.openSeasonData.length != 64) revert Errors.InvalidOpenSeasonData();
-            (uint16 seasonStartYear, uint32 finalRound) = abi.decode(b.openSeasonData, (uint16, uint32));
-            tournamentRegistry.openSeason(b.tournamentId, seasonStartYear, finalRound);
+            if (b.openSeasonData.length != 96) revert Errors.InvalidOpenSeasonData();
+            (bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) =
+                abi.decode(b.openSeasonData, (bytes32, uint16, uint32));
+            tournamentRegistry.openSeason(b.tournamentId, seasonId, seasonStartYear, finalRound);
         }
 
         if (b.rounds.length != 0) {

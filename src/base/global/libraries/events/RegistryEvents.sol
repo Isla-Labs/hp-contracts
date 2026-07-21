@@ -31,6 +31,8 @@ library RegistryEvents {
     event HubAddedToTournament(bytes32 indexed tournamentId, bytes32 indexed leagueId, address pbrFeeHub);
     event HubRemovedFromTournament(bytes32 indexed tournamentId, bytes32 indexed leagueId);
     event PbrTreasuryUpdated(bytes32 indexed tournamentId, address indexed previous, address indexed pbrTreasury);
-    event SeasonOpened(bytes32 indexed tournamentId, uint16 indexed seasonStartYear, uint32 finalRound);
+    event SeasonOpened(
+        bytes32 indexed tournamentId, bytes32 indexed seasonId, uint16 indexed seasonStartYear, uint32 finalRound
+    );
     event RoundUpserted(bytes32 indexed tournamentId, uint16 indexed seasonStartYear, uint32 roundNumber);
 }

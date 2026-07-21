@@ -149,11 +149,18 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
     //  Season calendar — CATEGORY_THREE
     // --------------------------------------------
 
-    function openSeason(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound)
+    /**
+     * @notice Opens a season calendar for `tournamentId`.
+     * @param tournamentId Tournament HPID.
+     * @param seasonId Season HPID.
+     * @param seasonStartYear Local season key (e.g. 2025 for 2025/26).
+     * @param finalRound Highest round number for the season.
+     */
+    function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound)
         external
         onlyRole(Roles.CATEGORY_THREE)
     {
-        if (seasonStartYear == 0) revert Errors.ZeroId();
+        if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
         if (finalRound == 0) revert Errors.InvalidFinalRound();
 
         Tournament storage t = _requireTournament(tournamentId);
@@ -163,10 +170,14 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
 
         t.seasons.push(
             Season({
-                seasonStartYear: seasonStartYear, finalRound: finalRound, roundCount: 0, rounds: new RoundSchedule[](0)
+                seasonId: seasonId,
+                seasonStartYear: seasonStartYear,
+                finalRound: finalRound,
+                roundCount: 0,
+                rounds: new RoundSchedule[](0)
             })
         );
-        emit Events.SeasonOpened(tournamentId, seasonStartYear, finalRound);
+        emit Events.SeasonOpened(tournamentId, seasonId, seasonStartYear, finalRound);
     }
 
     function upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round)
@@ -247,6 +258,73 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
 
     function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32) {
         return _requireSeason(tournamentId, seasonStartYear).finalRound;
+    }
+
+    /// @notice StatsPerform tournament calendar UUID (`tmcl`) for a season.
+    function getSeasonId(bytes32 tournamentId, uint16 seasonStartYear) external view returns (bytes32) {
+        return _requireSeason(tournamentId, seasonStartYear).seasonId;
+    }
+
+    function getSeason(bytes32 tournamentId, uint16 seasonStartYear) external view returns (Season memory) {
+        return _requireSeason(tournamentId, seasonStartYear);
+    }
+
+    /**
+     * @notice All non-zero season calendar ids, newest `seasonStartYear` first.
+     * @dev CRE birthdate / squads flows should walk this list in order (latest calendar first).
+     */
+    function getSeasonIdsNewestFirst() external view returns (bytes32[] memory seasonIds) {
+        uint256 total;
+        uint256 tLen = _tournamentIds.length;
+        for (uint256 i; i < tLen; ++i) {
+            total += _tournaments[_tournamentIds[i]].seasons.length;
+        }
+
+        seasonIds = new bytes32[](total);
+        uint16[] memory startYears = new uint16[](total);
+        uint256 count;
+
+        for (uint256 i; i < tLen; ++i) {
+            Season[] storage seasons = _tournaments[_tournamentIds[i]].seasons;
+            uint256 sLen = seasons.length;
+            for (uint256 j; j < sLen; ++j) {
+                bytes32 seasonId = seasons[j].seasonId;
+                if (seasonId == bytes32(0)) continue;
+                seasonIds[count] = seasonId;
+                startYears[count] = seasons[j].seasonStartYear;
+                unchecked {
+                    ++count;
+                }
+            }
+        }
+
+        // Shrink if any zero seasonIds were skipped.
+        if (count != total) {
+            bytes32[] memory trimmed = new bytes32[](count);
+            uint16[] memory trimmedYears = new uint16[](count);
+            for (uint256 i; i < count; ++i) {
+                trimmed[i] = seasonIds[i];
+                trimmedYears[i] = startYears[i];
+            }
+            seasonIds = trimmed;
+            startYears = trimmedYears;
+        }
+
+        // Insertion sort by seasonStartYear descending (stable for equal years).
+        for (uint256 i = 1; i < count; ++i) {
+            bytes32 id = seasonIds[i];
+            uint16 startYear = startYears[i];
+            uint256 j = i;
+            while (j > 0 && startYears[j - 1] < startYear) {
+                seasonIds[j] = seasonIds[j - 1];
+                startYears[j] = startYears[j - 1];
+                unchecked {
+                    --j;
+                }
+            }
+            seasonIds[j] = id;
+            startYears[j] = startYear;
+        }
     }
 
     function getRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)

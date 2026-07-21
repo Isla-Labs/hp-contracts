@@ -28,6 +28,7 @@ struct Hub {
 // --------------------------------------------
 
 struct Season {
+    bytes32 seasonId;
     uint16 seasonStartYear;
     uint32 finalRound;
     uint32 roundCount;

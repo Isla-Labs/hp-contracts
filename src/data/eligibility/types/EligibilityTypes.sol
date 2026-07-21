@@ -27,3 +27,24 @@ struct BirthDateReport {
     bytes32[] playerIds;
     uint256[] birthDates;
 }
+
+/// @dev Previous-season minute thresholds (ported from the original Supabase eligibility edge fn).
+uint32 constant THRESHOLD_GK = 361;
+uint32 constant THRESHOLD_UNDER_21 = 181;
+uint32 constant THRESHOLD_OUTFIELD = 901;
+uint256 constant UNDER_21_AGE = 21;
+
+/// @notice Eligibility cohort a candidate falls into (priority: GK → under-21 → outfield).
+enum EligibilityBucket {
+    None,
+    Goalkeeper,
+    Under21,
+    Outfield
+}
+
+/// @notice Eligible, undeployed players grouped by cohort (from one `verifyEligibility` page).
+struct EligibilityGroups {
+    bytes32[] goalkeepers;
+    bytes32[] under21;
+    bytes32[] outfield;
+}

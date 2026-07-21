@@ -5,11 +5,18 @@ import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
 import { IEligibilityVerifier } from "@base/global/interfaces/data/IEligibilityVerifier.sol";
+import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { Position } from "@base/global/types/PlayerSetTypes.sol";
 import {
     Appearance,
+    EligibilityBucket,
+    EligibilityGroups,
     MinutesStore,
-    POSITION_COUNT
+    POSITION_COUNT,
+    THRESHOLD_GK,
+    THRESHOLD_OUTFIELD,
+    THRESHOLD_UNDER_21,
+    UNDER_21_AGE
 } from "@src/data/eligibility/types/EligibilityTypes.sol";
 
 /**
@@ -20,6 +27,14 @@ import {
  *      Solidity cannot pull CRE; missing-DOB detection enqueues + emits `BirthDateFetchNeeded`
  *      for an event/cron-driven CRE workflow that posts back through `onReport`.
  *
+ *      `playerId` values MUST be HPIDs (`hpid-v1` bytes32), not raw Opta personUuids.
+ *      Writers (ingest / CRE) call `toHpid(personUuid, HP_ID_KEY, "person")` before
+ *      `recordAppearances` — see `cre/workflows/lib/hpid`.
+ *
+ *      Eligibility thresholds match the original Supabase edge fn (previous-season mins):
+ *      GK ≥ 361, under-21 ≥ 181, otherwise ≥ 901. Rules may be revised once upstream
+ *      season-scoping nuances are settled.
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
@@ -27,6 +42,8 @@ contract EligibilityVerifier is CreReceiver, IEligibilityVerifier {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
+
+    IPlayerSetRegistry public immutable override playerSetRegistry;
 
     mapping(bytes32 playerId => MinutesStore) private _minutesStore;
 
@@ -44,7 +61,11 @@ contract EligibilityVerifier is CreReceiver, IEligibilityVerifier {
     // --------------------------------------------
 
     /// @param forwarder_ Chainlink `KeystoneForwarder` for this chain.
-    constructor(address forwarder_) CreReceiver(forwarder_) {}
+    /// @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
+    constructor(address forwarder_, address playerSetRegistry_) CreReceiver(forwarder_) {
+        if (playerSetRegistry_ == address(0)) revert Errors.ZeroAddress();
+        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
+    }
 
     // --------------------------------------------
     //  Minutes ingest
@@ -137,6 +158,95 @@ contract EligibilityVerifier is CreReceiver, IEligibilityVerifier {
     }
 
     // --------------------------------------------
+    //  Eligibility
+    // --------------------------------------------
+
+    /// @inheritdoc IEligibilityVerifier
+    function verifyEligibility(uint256 offset, uint256 limit)
+        external
+        view
+        returns (EligibilityGroups memory groups)
+    {
+        uint256 total = _playerIds.length;
+        if (offset >= total || limit == 0) {
+            return groups;
+        }
+
+        uint256 end = offset + limit;
+        if (end > total) end = total;
+
+        uint256 gkCount;
+        uint256 u21Count;
+        uint256 outCount;
+
+        // Pass 1: size cohorts for this page.
+        for (uint256 i = offset; i < end; ++i) {
+            bytes32 playerId = _playerIds[i];
+            if (playerSetRegistry.playerExists(playerId)) continue;
+
+            (bool eligible, EligibilityBucket bucket,) = _evaluate(playerId);
+            if (!eligible) continue;
+
+            if (bucket == EligibilityBucket.Goalkeeper) {
+                unchecked {
+                    ++gkCount;
+                }
+            } else if (bucket == EligibilityBucket.Under21) {
+                unchecked {
+                    ++u21Count;
+                }
+            } else if (bucket == EligibilityBucket.Outfield) {
+                unchecked {
+                    ++outCount;
+                }
+            }
+        }
+
+        groups.goalkeepers = new bytes32[](gkCount);
+        groups.under21 = new bytes32[](u21Count);
+        groups.outfield = new bytes32[](outCount);
+
+        uint256 gkIdx;
+        uint256 u21Idx;
+        uint256 outIdx;
+
+        // Pass 2: fill.
+        for (uint256 i = offset; i < end; ++i) {
+            bytes32 playerId = _playerIds[i];
+            if (playerSetRegistry.playerExists(playerId)) continue;
+
+            (bool eligible, EligibilityBucket bucket,) = _evaluate(playerId);
+            if (!eligible) continue;
+
+            if (bucket == EligibilityBucket.Goalkeeper) {
+                groups.goalkeepers[gkIdx] = playerId;
+                unchecked {
+                    ++gkIdx;
+                }
+            } else if (bucket == EligibilityBucket.Under21) {
+                groups.under21[u21Idx] = playerId;
+                unchecked {
+                    ++u21Idx;
+                }
+            } else if (bucket == EligibilityBucket.Outfield) {
+                groups.outfield[outIdx] = playerId;
+                unchecked {
+                    ++outIdx;
+                }
+            }
+        }
+    }
+
+    /// @inheritdoc IEligibilityVerifier
+    function isEligible(bytes32 playerId)
+        external
+        view
+        returns (bool eligible, EligibilityBucket bucket, uint32 totalMins)
+    {
+        return _evaluate(playerId);
+    }
+
+    // --------------------------------------------
     //  Views
     // --------------------------------------------
 
@@ -153,6 +263,11 @@ contract EligibilityVerifier is CreReceiver, IEligibilityVerifier {
     /// @inheritdoc IEligibilityVerifier
     function getMinutesStore(bytes32 playerId) external view returns (MinutesStore memory) {
         return _minutesStore[playerId];
+    }
+
+    /// @inheritdoc IEligibilityVerifier
+    function totalMinsPlayed(bytes32 playerId) external view returns (uint32) {
+        return _totalMins(_minutesStore[playerId]);
     }
 
     /// @inheritdoc IEligibilityVerifier
@@ -198,6 +313,51 @@ contract EligibilityVerifier is CreReceiver, IEligibilityVerifier {
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
+
+    /**
+     * @dev Mirrors `isPlayerEligible` from the original edge fn:
+     *      missing DOB → false; GK → 361; age < 21 → 181; else → 901.
+     *      Age uses whole years from unix DOB (`(now - birth) / 365 days`).
+     */
+    function _evaluate(bytes32 playerId)
+        private
+        view
+        returns (bool eligible, EligibilityBucket bucket, uint32 totalMins)
+    {
+        MinutesStore storage store = _minutesStore[playerId];
+        totalMins = _totalMins(store);
+
+        if (store.birthDate == 0) {
+            return (false, EligibilityBucket.None, totalMins);
+        }
+
+        if (store.expectedPosition == Position.GK) {
+            bucket = EligibilityBucket.Goalkeeper;
+            eligible = totalMins >= THRESHOLD_GK;
+            return (eligible, bucket, totalMins);
+        }
+
+        if (_ageYears(store.birthDate) < UNDER_21_AGE) {
+            bucket = EligibilityBucket.Under21;
+            eligible = totalMins >= THRESHOLD_UNDER_21;
+            return (eligible, bucket, totalMins);
+        }
+
+        bucket = EligibilityBucket.Outfield;
+        eligible = totalMins >= THRESHOLD_OUTFIELD;
+    }
+
+    function _totalMins(MinutesStore storage store) private view returns (uint32 total) {
+        for (uint256 i; i < POSITION_COUNT; ++i) {
+            total += store.minsByPosition[i];
+        }
+    }
+
+    /// @dev Whole years since unix DOB; leap years are ignored (same spirit as a simple day-count age).
+    function _ageYears(uint256 birthDate) private view returns (uint256) {
+        if (birthDate == 0 || birthDate >= block.timestamp) return 0;
+        return (block.timestamp - birthDate) / 365 days;
+    }
 
     /// @dev Ties keep the current `expectedPosition` (no change when the new max equals the old).
     function _deriveExpectedPosition(MinutesStore storage store) private view returns (Position) {

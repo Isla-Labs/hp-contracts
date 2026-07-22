@@ -19,4 +19,12 @@ library DeploymentsErrors {
     error VaultMissing(bytes32 playerId);
     error InvalidOpenSeasonData();
     error AddressMismatch(address actual, address expected);
+
+    //  DopplerConfig
+    error InvalidLaunchSupply();
+    error InvalidTickSpacing();
+    error EmptyCurves();
+    error InvalidCurve();
+    error InvalidCurveShares(uint256 totalShares);
+    error InvalidFeeDistribution();
 }

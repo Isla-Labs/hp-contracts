@@ -5,6 +5,8 @@ import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/Deplo
 import { DeploymentsEvents as Events } from "@base/global/libraries/events/DeploymentsEvents.sol";
 import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
 import { EligibilityBucket, EligibilityGroups } from "@src/data/eligibility/types/EligibilityTypes.sol";
+import { DopplerConfig } from "@src/data/deployments/types/DopplerConfig.sol";
+import { DopplerTypes } from "@src/data/deployments/types/DopplerTypes.sol";
 
 /**
  * Two completely different flows live in this contract:
@@ -12,40 +14,47 @@ import { EligibilityBucket, EligibilityGroups } from "@src/data/eligibility/type
  * 0) Eligibility waiting room (from EligibilityVerifier)
  *    - `enqueueEligible` stores cohort-tagged playerIds for later deploy formatting.
  *    - Only the configured `eligibilityVerifier` may write.
+ *    - Name/symbol filled later (Chainlink Functions); see `DopplerTypes.PendingEligible`.
  *
  * 1) Initial market deployment (gated)
  *    - Requires zk proof of eligibility (trustlessEligibility).
  *    - Held behind a timelock / DelayedBatchExecutor schedule path.
  *    - Creates the bonding market only — no VaultSet / AdvancedTradeSet yet.
+ *    - `Airlock.create` params assembled via `DopplerTypes.buildCreateParams(marketLaunchConfig())`.
  *
  * 2) Bonding → graduated (public / permissionless)
- *    - No zk proof. Readiness is onchain Doppler state (tick vs farTick / PoolStatus).
+ *    - No zk proof. Readiness is onchain Doppler state (tick vs farTick / PoolStatus)
+ *      OR HP soft path: raised ≥ `minGraduateProceeds` after `launch + minBondingDuration`.
  *    - Offchain runners scan PlayerSetRegistry for status == BONDING, then call below.
  *    - Anyone may call; checks revert if the market is not ready or already processed.
+ *
+ * Shared launch recipe is inherited from `DopplerConfig` (defaults in constructor;
+ * `CATEGORY_ONE` may update without redeploying this stack).
  *
  * Scanner (offchain):
  * - Enumerate PlayerSetRegistry players with PlayerStatus.BONDING.
  * - For each: read DopplerHookInitializer.getState(token) + PoolManager.slot0.
  * - If already Graduated on Doppler → finalizeGraduatedMarket.
  * - If not graduated but tick has crossed farTick → migrateAndFinalizeMarket.
+ * - Else if age ≥ minBondingDuration and proceeds ≥ minGraduateProceeds → migrateAndFinalizeMarket.
  * - Else skip until next scan.
  */
-contract DeployDoppler is IDeployDoppler {
+contract DeployDoppler is DopplerConfig, IDeployDoppler {
     // -------------------------------------------------------------------------
     //  Eligibility waiting room
     // -------------------------------------------------------------------------
 
-    /// @dev One pending deploy candidate (cohort preserved for DeployDoppler formatting).
-    struct PendingEligible {
-        bytes32 playerId;
-        EligibilityBucket bucket;
-    }
-
     /// @notice Sole writer for `enqueueEligible` (set once after EligibilityVerifier deploy).
     address public eligibilityVerifier;
 
-    PendingEligible[] private _pending;
+    DopplerTypes.PendingEligible[] private _pending;
     mapping(bytes32 playerId => bool) private _queued;
+
+    /**
+     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE` (config overrides).
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
+     */
+    constructor(address constitutionalTimelock_, address dao_) DopplerConfig(constitutionalTimelock_, dao_) { }
 
     /// @notice One-time wire from EligibilityVerifier → this waiting room.
     function setEligibilityVerifier(address eligibilityVerifier_) external {
@@ -77,17 +86,21 @@ contract DeployDoppler is IDeployDoppler {
     }
 
     /// @notice Page pending waiting-room entries (independent of EligibilityVerifier storage).
-    function pendingEligible(uint256 offset, uint256 limit) external view returns (PendingEligible[] memory out) {
+    function pendingEligible(uint256 offset, uint256 limit)
+        external
+        view
+        returns (DopplerTypes.PendingEligible[] memory out)
+    {
         uint256 total = _pending.length;
         if (offset >= total || limit == 0) {
-            return new PendingEligible[](0);
+            return new DopplerTypes.PendingEligible[](0);
         }
 
         uint256 end = offset + limit;
         if (end > total) end = total;
 
         uint256 n = end - offset;
-        out = new PendingEligible[](n);
+        out = new DopplerTypes.PendingEligible[](n);
         for (uint256 i; i < n; ++i) {
             out[i] = _pending[offset + i];
         }
@@ -103,7 +116,15 @@ contract DeployDoppler is IDeployDoppler {
             if (playerId == bytes32(0) || _queued[playerId]) continue;
 
             _queued[playerId] = true;
-            _pending.push(PendingEligible({ playerId: playerId, bucket: bucket }));
+            _pending.push(
+                DopplerTypes.PendingEligible({
+                    playerId: playerId,
+                    bucket: bucket,
+                    name: "",
+                    symbol: "",
+                    metadataSet: false
+                })
+            );
             unchecked {
                 ++added;
             }
@@ -128,6 +149,7 @@ contract DeployDoppler is IDeployDoppler {
      */
     function deployBondingMarket(/* playerId, eligibilityProof, publicInputs, deployParams */) external {
         // gated: zk + timelock
+        // use marketLaunchConfig() + DopplerTypes.buildCreateParams(...)
     }
 
     // -------------------------------------------------------------------------
@@ -154,7 +176,8 @@ contract DeployDoppler is IDeployDoppler {
 
     /**
      * If bonding market has not graduated but is ready to
-     * (tick has crossed farTick; Doppler status still Initialized or Locked):
+     * (tick has crossed farTick; Doppler status still Initialized or Locked)
+     * OR HP soft path (age ≥ minBondingDuration and proceeds ≥ minGraduateProceeds):
      * - Require PlayerSetRegistry status == BONDING.
      * - If Locked + graduation hook path: call DopplerHookInitializer.graduate(token)
      *     when required by config, then proceed.
@@ -165,7 +188,7 @@ contract DeployDoppler is IDeployDoppler {
      *     update PlayerSetRegistry (vault / AT / doppler data),
      *     setStatus(GRADUATED).
      *
-     * Access: public — no role. Reverts if tick has not crossed farTick,
+     * Access: public — no role. Reverts if neither farTick nor soft path is satisfied,
      *         if already Exited/Graduated incorrectly for this branch,
      *         or if HP registry is not still BONDING.
      *
@@ -184,6 +207,7 @@ contract DeployDoppler is IDeployDoppler {
      * Convenience for offchain runners:
      * - If Doppler status == Graduated → finalizeGraduatedMarket.
      * - Else if ready to migrate (tick vs farTick) → migrateAndFinalizeMarket.
+     * - Else if soft path (30d + ≥50 ETH defaults) → migrateAndFinalizeMarket.
      * - Else revert NotReady.
      *
      * Access: public — no role.

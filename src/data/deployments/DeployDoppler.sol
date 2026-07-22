@@ -1,8 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/DeploymentsErrors.sol";
+import { DeploymentsEvents as Events } from "@base/global/libraries/events/DeploymentsEvents.sol";
+import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
+import { EligibilityBucket, EligibilityGroups } from "@src/data/eligibility/types/EligibilityTypes.sol";
+
 /**
  * Two completely different flows live in this contract:
+ *
+ * 0) Eligibility waiting room (from EligibilityVerifier)
+ *    - `enqueueEligible` stores cohort-tagged playerIds for later deploy formatting.
+ *    - Only the configured `eligibilityVerifier` may write.
  *
  * 1) Initial market deployment (gated)
  *    - Requires zk proof of eligibility (trustlessEligibility).
@@ -21,7 +30,86 @@ pragma solidity ^0.8.34;
  * - If not graduated but tick has crossed farTick → migrateAndFinalizeMarket.
  * - Else skip until next scan.
  */
-contract DeployDoppler {
+contract DeployDoppler is IDeployDoppler {
+    // -------------------------------------------------------------------------
+    //  Eligibility waiting room
+    // -------------------------------------------------------------------------
+
+    /// @dev One pending deploy candidate (cohort preserved for DeployDoppler formatting).
+    struct PendingEligible {
+        bytes32 playerId;
+        EligibilityBucket bucket;
+    }
+
+    /// @notice Sole writer for `enqueueEligible` (set once after EligibilityVerifier deploy).
+    address public eligibilityVerifier;
+
+    PendingEligible[] private _pending;
+    mapping(bytes32 playerId => bool) private _queued;
+
+    /// @notice One-time wire from EligibilityVerifier → this waiting room.
+    function setEligibilityVerifier(address eligibilityVerifier_) external {
+        if (eligibilityVerifier != address(0)) revert Errors.AlreadySet();
+        if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
+        eligibilityVerifier = eligibilityVerifier_;
+        emit Events.EligibilityVerifierSet(eligibilityVerifier_);
+    }
+
+    /// @inheritdoc IDeployDoppler
+    function enqueueEligible(EligibilityGroups calldata groups) external {
+        if (msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
+
+        uint256 added;
+        added += _enqueueCohort(groups.goalkeepers, EligibilityBucket.Goalkeeper);
+        added += _enqueueCohort(groups.under21, EligibilityBucket.Under21);
+        added += _enqueueCohort(groups.outfield, EligibilityBucket.Outfield);
+        added += _enqueueCohort(groups.newTransfers, EligibilityBucket.NewTransfer);
+
+        emit Events.EligiblePlayersEnqueued(added, _pending.length);
+    }
+
+    function pendingCount() external view returns (uint256) {
+        return _pending.length;
+    }
+
+    function isQueued(bytes32 playerId) external view returns (bool) {
+        return _queued[playerId];
+    }
+
+    /// @notice Page pending waiting-room entries (independent of EligibilityVerifier storage).
+    function pendingEligible(uint256 offset, uint256 limit) external view returns (PendingEligible[] memory out) {
+        uint256 total = _pending.length;
+        if (offset >= total || limit == 0) {
+            return new PendingEligible[](0);
+        }
+
+        uint256 end = offset + limit;
+        if (end > total) end = total;
+
+        uint256 n = end - offset;
+        out = new PendingEligible[](n);
+        for (uint256 i; i < n; ++i) {
+            out[i] = _pending[offset + i];
+        }
+    }
+
+    function _enqueueCohort(bytes32[] calldata playerIds, EligibilityBucket bucket)
+        private
+        returns (uint256 added)
+    {
+        uint256 length = playerIds.length;
+        for (uint256 i; i < length; ++i) {
+            bytes32 playerId = playerIds[i];
+            if (playerId == bytes32(0) || _queued[playerId]) continue;
+
+            _queued[playerId] = true;
+            _pending.push(PendingEligible({ playerId: playerId, bucket: bucket }));
+            unchecked {
+                ++added;
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
     //  1) Initial deployment — zk + timelock (NOT public)
     // -------------------------------------------------------------------------
@@ -106,7 +194,7 @@ contract DeployDoppler {
         // if bonding curve is ready but not migrated yet, migrate then deploy and update
         //
         // Note: this is an important distinction because the migrate function on Doppler curves
-        // is public by default, so there is potential for mismatches. This runner can help to 
+        // is public by default, so there is potential for mismatches. This runner can help to
         // reduce any gaps while maintaining data integrity.
         //
         // Note Note: it might be best to recursively check all markets that have a BONDING status.

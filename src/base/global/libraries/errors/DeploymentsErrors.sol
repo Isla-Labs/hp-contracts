@@ -9,6 +9,7 @@ library DeploymentsErrors {
     error ZeroSalt();
     error ZeroSeason();
     error Unauthorized();
+    error AlreadySet();
     error NotConfigured();
     error InvalidTournamentType(TournamentType actual, TournamentType expected);
     error UnsupportedTournamentType(TournamentType tournamentType);

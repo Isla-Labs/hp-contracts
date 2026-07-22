@@ -4,6 +4,7 @@ pragma solidity ^0.8.34;
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
+import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
@@ -40,7 +41,7 @@ import {
  *        G(year, round) = (year - baseYear) * roundsPerSeason + round
  *      `recordAppearances` only stores raw minutes / Appearance[]; it does not touch scores.
  *      The offchain eligibility runner pages `verifyEligibility(offset, limit)`, which recomputes
- *      each player on the page against `G_now` then returns DeployDoppler cohorts.
+ *      each player on the page against `G_now`, enqueues cohorts to `DeployDoppler`, and returns them.
  *
  *      Cohorts / thresholds (effective minutes ≈ stored score / 1e18):
  *        newTransfer / backFromLoan (DeployDoppler flag):
@@ -58,6 +59,7 @@ contract EligibilityVerifier2 is CreReceiver {
 
     IPlayerSetRegistry public immutable playerSetRegistry;
     ITournamentRegistry public immutable tournamentRegistry;
+    IDeployDoppler public immutable deployDoppler;
 
     /// @dev Domestic-league `tournamentId` whose calendars count toward the rolling score.
     bytes32 public immutable leagueId;
@@ -88,9 +90,10 @@ contract EligibilityVerifier2 is CreReceiver {
 
     /// @param forwarder_ Chainlink `KeystoneForwarder` for this chain.
     /// @param expectedWorkflowId_ Squad-fill CRE workflow id (required; non-zero).
-    /// @param appearancesCaller_ Authorized minutes ingest caller (required; non-zero).
+    /// @param appearancesCaller_ Authorized minutes ingest caller (PpmVerifier; required; non-zero).
     /// @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
     /// @param tournamentRegistry_ Season calendars + treasury lookup for the league clock.
+    /// @param deployDoppler_ Waiting-room receiver for eligible cohorts (required; non-zero).
     /// @param leagueId_ Domestic-league tournament id (score filter + clock source).
     /// @param baseYear_ G-index origin season start year.
     /// @param roundsPerSeason_ Fixed rounds per season for G (e.g. 38).
@@ -100,6 +103,7 @@ contract EligibilityVerifier2 is CreReceiver {
         address appearancesCaller_,
         address playerSetRegistry_,
         address tournamentRegistry_,
+        address deployDoppler_,
         bytes32 leagueId_,
         uint16 baseYear_,
         uint32 roundsPerSeason_
@@ -107,7 +111,7 @@ contract EligibilityVerifier2 is CreReceiver {
         if (expectedWorkflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
         if (
             appearancesCaller_ == address(0) || playerSetRegistry_ == address(0)
-                || tournamentRegistry_ == address(0)
+                || tournamentRegistry_ == address(0) || deployDoppler_ == address(0)
         ) {
             revert Errors.ZeroAddress();
         }
@@ -117,6 +121,7 @@ contract EligibilityVerifier2 is CreReceiver {
         _APPEARANCES_CALLER = appearancesCaller_;
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+        deployDoppler = IDeployDoppler(deployDoppler_);
         leagueId = leagueId_;
         baseYear = baseYear_;
         roundsPerSeason = roundsPerSeason_;
@@ -200,15 +205,14 @@ contract EligibilityVerifier2 is CreReceiver {
     // --------------------------------------------
 
     /**
-     * @notice Recompute weighted scores for a page, then return undeployed eligible cohorts.
-     * @dev Sole write path for `weightedScoreWad`. Gated to `appearancesCaller`.
+     * @notice Recompute weighted scores for a page, enqueue eligible cohorts to DeployDoppler, return them.
+     * @dev Sole write path for `weightedScoreWad`. Public (anyone may run the page).
      *      1) Replay domestic-league `Appearance[]` → score at `G_now` for every player on the page
      *      2) Cohort-check (skip missing DOB / already-deployed)
+     *      3) `deployDoppler.enqueueEligible(groups)` — waiting-room write
      *      `groups.newTransfers` = DeployDoppler newTransfer / backFromLoan flag.
      */
     function verifyEligibility(uint256 offset, uint256 limit) external returns (EligibilityGroups memory groups) {
-        if (msg.sender != _APPEARANCES_CALLER) revert Errors.Unauthorized();
-
         uint256 total = _playerIds.length;
         if (offset >= total || limit == 0) {
             return groups;
@@ -303,6 +307,11 @@ contract EligibilityVerifier2 is CreReceiver {
                     ++ntIdx;
                 }
             }
+        }
+
+        // Pass 3: hand off to DeployDoppler waiting room (skip empty pages).
+        if (gkCount + u21Count + outCount + ntCount != 0) {
+            deployDoppler.enqueueEligible(groups);
         }
     }
 

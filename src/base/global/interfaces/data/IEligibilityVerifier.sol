@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import {
@@ -19,7 +20,7 @@ interface IEligibilityVerifier {
         external;
 
     /**
-     * @notice Recompute weighted scores for a page, then return undeployed eligible cohorts.
+     * @notice Recompute weighted scores for a page, enqueue to DeployDoppler, return cohorts.
      * @dev Offchain runner entrypoint — sole write path for `weightedScoreWad`.
      *      Skips unset `birthDate` and any `playerId` already present in `PlayerSetRegistry`.
      *      `groups.newTransfers` is the DeployDoppler flag for newTransfer / backFromLoan.
@@ -46,6 +47,8 @@ interface IEligibilityVerifier {
     function playerSetRegistry() external view returns (IPlayerSetRegistry);
 
     function tournamentRegistry() external view returns (ITournamentRegistry);
+
+    function deployDoppler() external view returns (IDeployDoppler);
 
     function leagueId() external view returns (bytes32);
 

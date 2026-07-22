@@ -14,4 +14,9 @@ library DeploymentsEvents {
     );
 
     event FactoriesConfigured(address pbrTreasuryFactory, address pbrFeeHubFactory);
+
+    event EligibilityVerifierSet(address indexed eligibilityVerifier);
+
+    /// @notice Waiting-room intake from EligibilityVerifier (`added` new ids this call).
+    event EligiblePlayersEnqueued(uint256 added, uint256 pendingTotal);
 }

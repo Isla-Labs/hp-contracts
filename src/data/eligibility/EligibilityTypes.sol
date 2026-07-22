@@ -4,14 +4,21 @@ pragma solidity ^0.8.34;
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
+import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { Position } from "@base/global/types/PlayerSetTypes.sol";
 import {
     Appearance,
+    EligibilityBucket,
+    EligibilityGroups,
     MinutesStore,
     POSITION_COUNT,
     SeasonMinutes,
-    SQUAD_FILL_PAGE_DONE
-} from "@src/data/eligibility/types/EligibilityTypes2.sol";
+    SQUAD_FILL_PAGE_DONE,
+    THRESHOLD_GK,
+    THRESHOLD_OUTFIELD,
+    THRESHOLD_UNDER_21,
+    UNDER_21_AGE
+} from "@src/data/eligibility/types/EligibilityTypes.sol";
 
 /**
  * @title EligibilityVerifier2
@@ -37,6 +44,9 @@ import {
  *      Minutes ingest: `recordAppearances` (gated by `appearancesCaller`, not squad-fill CRE).
  *      Players must already exist from squad-fill; find-or-push `SeasonMinutes` per calendar.
  *
+ *      Eligibility (same thresholds as v1 / edge fn): GK ≥ 361, under-21 ≥ 181, else ≥ 901.
+ *      `totalMins` sums across all `seasonMinutes` rows for now (season-scoped rules TBD).
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
@@ -44,6 +54,8 @@ contract EligibilityVerifier2 is CreReceiver {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
+
+    IPlayerSetRegistry public immutable playerSetRegistry;
 
     mapping(bytes32 playerId => MinutesStore) private _minutesStore;
 
@@ -66,11 +78,18 @@ contract EligibilityVerifier2 is CreReceiver {
     /// @param forwarder_ Chainlink `KeystoneForwarder` for this chain.
     /// @param expectedWorkflowId_ Squad-fill CRE workflow id (required; non-zero).
     /// @param appearancesCaller_ Authorized minutes ingest caller (required; non-zero).
-    constructor(address forwarder_, bytes32 expectedWorkflowId_, address appearancesCaller_) CreReceiver(forwarder_) {
+    /// @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
+    constructor(
+        address forwarder_,
+        bytes32 expectedWorkflowId_,
+        address appearancesCaller_,
+        address playerSetRegistry_
+    ) CreReceiver(forwarder_) {
         if (expectedWorkflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
-        if (appearancesCaller_ == address(0)) revert Errors.ZeroAddress();
+        if (appearancesCaller_ == address(0) || playerSetRegistry_ == address(0)) revert Errors.ZeroAddress();
         _setExpectedWorkflowId(expectedWorkflowId_);
         _APPEARANCES_CALLER = appearancesCaller_;
+        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
     }
 
     // --------------------------------------------
@@ -126,6 +145,100 @@ contract EligibilityVerifier2 is CreReceiver {
 
     function getAppearancesCaller() external view returns (address) {
         return _APPEARANCES_CALLER;
+    }
+
+    function totalMinsPlayed(bytes32 playerId) external view returns (uint32) {
+        return _totalMins(_minutesStore[playerId]);
+    }
+
+    // --------------------------------------------
+    //  Eligibility
+    // --------------------------------------------
+
+    /// @notice Page over tracked players and return undeployed candidates that clear their cohort threshold.
+    /// @dev Skips unset `birthDate` and any `playerId` already present in `PlayerSetRegistry`.
+    function verifyEligibility(uint256 offset, uint256 limit)
+        external
+        view
+        returns (EligibilityGroups memory groups)
+    {
+        uint256 total = _playerIds.length;
+        if (offset >= total || limit == 0) {
+            return groups;
+        }
+
+        uint256 end = offset + limit;
+        if (end > total) end = total;
+
+        uint256 gkCount;
+        uint256 u21Count;
+        uint256 outCount;
+
+        // Pass 1: size cohorts for this page.
+        for (uint256 i = offset; i < end; ++i) {
+            bytes32 playerId = _playerIds[i];
+            if (playerSetRegistry.playerExists(playerId)) continue;
+
+            (bool eligible, EligibilityBucket bucket,) = _evaluate(playerId);
+            if (!eligible) continue;
+
+            if (bucket == EligibilityBucket.Goalkeeper) {
+                unchecked {
+                    ++gkCount;
+                }
+            } else if (bucket == EligibilityBucket.Under21) {
+                unchecked {
+                    ++u21Count;
+                }
+            } else if (bucket == EligibilityBucket.Outfield) {
+                unchecked {
+                    ++outCount;
+                }
+            }
+        }
+
+        groups.goalkeepers = new bytes32[](gkCount);
+        groups.under21 = new bytes32[](u21Count);
+        groups.outfield = new bytes32[](outCount);
+
+        uint256 gkIdx;
+        uint256 u21Idx;
+        uint256 outIdx;
+
+        // Pass 2: fill.
+        for (uint256 i = offset; i < end; ++i) {
+            bytes32 playerId = _playerIds[i];
+            if (playerSetRegistry.playerExists(playerId)) continue;
+
+            (bool eligible, EligibilityBucket bucket,) = _evaluate(playerId);
+            if (!eligible) continue;
+
+            if (bucket == EligibilityBucket.Goalkeeper) {
+                groups.goalkeepers[gkIdx] = playerId;
+                unchecked {
+                    ++gkIdx;
+                }
+            } else if (bucket == EligibilityBucket.Under21) {
+                groups.under21[u21Idx] = playerId;
+                unchecked {
+                    ++u21Idx;
+                }
+            } else if (bucket == EligibilityBucket.Outfield) {
+                groups.outfield[outIdx] = playerId;
+                unchecked {
+                    ++outIdx;
+                }
+            }
+        }
+    }
+
+    /// @notice Single-player check (does not filter on deployment status).
+    function isEligible(bytes32 playerId)
+        external
+        view
+        returns (bool eligible, EligibilityBucket bucket, uint32 totalMins)
+    {
+        return _evaluate(playerId);
     }
 
     // --------------------------------------------
@@ -255,6 +368,56 @@ contract EligibilityVerifier2 is CreReceiver {
     // --------------------------------------------
     //  Internal
     // --------------------------------------------
+
+    /**
+     * @dev Mirrors v1 / original edge fn:
+     *      missing DOB → false; GK → 361; age < 21 → 181; else → 901.
+     *      Age uses whole years from unix DOB (`(now - birth) / 365 days`).
+     *      `totalMins` is the sum across all `seasonMinutes` rows.
+     */
+    function _evaluate(bytes32 playerId)
+        private
+        view
+        returns (bool eligible, EligibilityBucket bucket, uint32 totalMins)
+    {
+        MinutesStore storage store = _minutesStore[playerId];
+        totalMins = _totalMins(store);
+
+        if (store.birthDate == 0) {
+            return (false, EligibilityBucket.None, totalMins);
+        }
+
+        if (store.expectedPosition == Position.GK) {
+            bucket = EligibilityBucket.Goalkeeper;
+            eligible = totalMins >= THRESHOLD_GK;
+            return (eligible, bucket, totalMins);
+        }
+
+        if (_ageYears(store.birthDate) < UNDER_21_AGE) {
+            bucket = EligibilityBucket.Under21;
+            eligible = totalMins >= THRESHOLD_UNDER_21;
+            return (eligible, bucket, totalMins);
+        }
+
+        bucket = EligibilityBucket.Outfield;
+        eligible = totalMins >= THRESHOLD_OUTFIELD;
+    }
+
+    function _totalMins(MinutesStore storage store) private view returns (uint32 total) {
+        uint256 n = store.seasonMinutes.length;
+        for (uint256 s; s < n; ++s) {
+            uint32[POSITION_COUNT] storage mins = store.seasonMinutes[s].minsByPosition;
+            for (uint256 i; i < POSITION_COUNT; ++i) {
+                total += mins[i];
+            }
+        }
+    }
+
+    /// @dev Whole years since unix DOB; leap years are ignored (same spirit as a simple day-count age).
+    function _ageYears(uint256 birthDate) private view returns (uint256) {
+        if (birthDate == 0 || birthDate >= block.timestamp) return 0;
+        return (block.timestamp - birthDate) / 365 days;
+    }
 
     /// @dev Find `seasonId` row or push a new empty `SeasonMinutes`.
     function _getOrCreateSeasonMinutes(

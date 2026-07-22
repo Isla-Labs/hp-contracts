@@ -21,7 +21,9 @@ import {
  *      Constructor pins `expectedWorkflowId` so only the squad-fill workflow may write.
  *
  *      Report ABI (encoded by CRE):
- *        `(bytes32 seasonId, uint16 pageFetched, uint16 nextPage, bytes32[] playerIds, uint256[] birthDates)`
+ *        `(bytes32 seasonId, uint16 seasonStartYear, uint16 pageFetched, uint16 nextPage,
+ *          bytes32[] playerIds, uint256[] birthDates)`
+ *      New players get `earliestSeasonStartYear = seasonStartYear` (set once at create).
  *
  *      `squadFillPage[seasonId]`:
  *        - `0` = not started (next SP `_pgNm` is 1)
@@ -175,13 +177,14 @@ contract EligibilityVerifier2 is CreReceiver {
     function _processReport(bytes calldata, bytes calldata report) internal override {
         (
             bytes32 seasonId,
+            uint16 seasonStartYear,
             uint16 pageFetched,
             uint16 nextPage,
             bytes32[] memory playerIds_,
             uint256[] memory birthDates
-        ) = abi.decode(report, (bytes32, uint16, uint16, bytes32[], uint256[]));
+        ) = abi.decode(report, (bytes32, uint16, uint16, uint16, bytes32[], uint256[]));
 
-        if (seasonId == bytes32(0)) revert Errors.ZeroId();
+        if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
         if (pageFetched == 0 || pageFetched >= SQUAD_FILL_PAGE_DONE) {
             revert Errors.InvalidSquadFillNextPage(pageFetched, nextPage);
         }
@@ -227,6 +230,7 @@ contract EligibilityVerifier2 is CreReceiver {
 
             MinutesStore storage store = _minutesStore[playerId];
             store.birthDate = birthDate;
+            store.earliestSeasonStartYear = seasonStartYear;
             // `expectedPosition` defaults to Position(0); `seasonMinutes` stays empty until PPM.
 
             _tracked[playerId] = true;

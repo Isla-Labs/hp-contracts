@@ -12,6 +12,8 @@ uint16 constant SQUAD_FILL_PAGE_DONE = 1000;
 
 /// @notice Per-player eligibility store; name/symbol deferred to DeployDoppler.
 struct MinutesStore {
+    /// @dev `seasonStartYear` of the squad-fill report that first created this player.
+    uint16 earliestSeasonStartYear;
     /// @dev Argmax of season minutes; default `Position(0)` until PPM derives it.
     Position expectedPosition;
     /// @dev Unix timestamp; set by squad-fill CRE report.
@@ -41,6 +43,7 @@ struct Appearance {
  */
 struct SquadFillReport {
     bytes32 seasonId;
+    uint16 seasonStartYear;
     uint16 pageFetched;
     uint16 nextPage;
     bytes32[] playerIds;

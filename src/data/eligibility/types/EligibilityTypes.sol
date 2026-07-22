@@ -20,15 +20,11 @@ uint16 constant SQUAD_FILL_PAGE_DONE = 1000;
 
 /// @notice Per-player eligibility store; name/symbol deferred to DeployDoppler.
 struct MinutesStore {
-    /// @dev Season start year of the squad-fill report that first created this player (set once).
     uint16 earliestSeasonStartYear;
     Position expectedPosition;
     uint256 birthDate;
     SeasonMinutes[] seasonMinutes;
-    /// @dev Σ mins * λ^age, WAD-scaled. Written only by `verifyEligibility` (full replay).
     uint256 weightedScoreWad;
-    /// @dev Global round index G at last `verifyEligibility` recompute for this player.
-    uint32 scoreAsOfGlobalRound;
 }
 
 /// @notice Minutes for one competition calendar (`seasonId` = HPID of tournamentCalendarUuid).
@@ -85,18 +81,12 @@ uint256 constant UNDER_21_AGE = 21;
 
 /// @notice Eligibility cohort a candidate falls into.
 /// @dev Priority: newTransfer/backFromLoan → GK → under-21 → outfield.
-///
-///      newTransfer / backFromLoan predicate (DeployDoppler flag):
-///        `weightedScoreWad == 0 && earliestSeasonStartYear == currentSeasonYear`
-///      After the first league-weighted minute, `weightedScoreWad > 0`, but the player remains in
-///      this cohort for the season while `earliestSeasonStartYear == currentSeasonYear` so
-///      DeployDoppler still receives the flag once they clear `THRESHOLD_NEW_TRANSFER`.
+///      newTransfer / backFromLoan: `earliestSeasonStartYear == currentSeasonYear` (DeployDoppler flag).
 enum EligibilityBucket {
     None,
     Goalkeeper,
     Under21,
     Outfield,
-    /// @dev Shared flag for newTransfer and backFromLoan (identical onchain predicate).
     NewTransfer
 }
 

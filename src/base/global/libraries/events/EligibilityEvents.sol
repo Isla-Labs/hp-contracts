@@ -16,10 +16,12 @@ library EligibilityEvents {
         Position expectedPosition
     );
 
-    /// @notice Emitted when one or more tracked players need a CRE DOB fetch.
-    event BirthDateFetchNeeded(bytes32[] playerIds);
+    event WeightedScoreUpdated(
+        bytes32 indexed playerId, uint256 weightedScoreWad, uint32 scoreAsOfGlobalRound
+    );
 
-    event BirthDateUpdated(bytes32 indexed playerId, uint256 birthDate);
+    /// @notice Paged score sync completed for `[offset, offset+updated)`.
+    event WeightedScoresSynced(uint256 offset, uint256 limit, uint256 updated, uint32 globalRound);
 
     /// @notice Squad-fill CRE upsert: new `MinutesStore` rows (skips already-tracked ids).
     event SquadPlayersCreated(bytes32 indexed seasonId, uint16 pageFetched, uint256 created, uint256 skipped);

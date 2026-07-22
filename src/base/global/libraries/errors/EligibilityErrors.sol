@@ -7,12 +7,8 @@ library EligibilityErrors {
     error ZeroWorkflowId();
     error Unauthorized();
     error ZeroBirthDate(bytes32 playerId);
-    error EmptyName(bytes32 playerId);
-    error EmptySymbol(bytes32 playerId);
     error UnknownPlayer(bytes32 playerId);
-    error BirthDateAlreadySet(bytes32 playerId, uint256 existing);
     error LengthMismatch(uint256 playerIdsLength, uint256 birthDatesLength);
-    error EmptyReport();
     error SquadFillSeasonDone(bytes32 seasonId);
     error SquadFillPageMismatch(bytes32 seasonId, uint16 expected, uint16 received);
     error InvalidSquadFillNextPage(uint16 pageFetched, uint16 nextPage);

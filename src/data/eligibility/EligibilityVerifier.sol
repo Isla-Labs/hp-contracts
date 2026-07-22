@@ -5,16 +5,22 @@ import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
+import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
 import { Position } from "@base/global/types/PlayerSetTypes.sol";
 import {
     Appearance,
     EligibilityBucket,
     EligibilityGroups,
+    LAMBDA_WAD,
     MinutesStore,
     POSITION_COUNT,
+    SCORE_WAD,
     SeasonMinutes,
+    SquadFillReport,
     SQUAD_FILL_PAGE_DONE,
     THRESHOLD_GK,
+    THRESHOLD_NEW_TRANSFER,
     THRESHOLD_OUTFIELD,
     THRESHOLD_UNDER_21,
     UNDER_21_AGE
@@ -22,30 +28,25 @@ import {
 
 /**
  * @title EligibilityVerifier2
- * @notice Squad-first eligibility store: CRE upserts `birthDate` from raw SP squads pages;
- *         season minutes are filled later by the PPM path. Name/symbol deferred to DeployDoppler.
+ * @notice Squad-first eligibility store with a recency-weighted rolling minutes score.
  * @dev CRE report path: KeystoneForwarder → `onReport` → `_processReport`.
  *      Constructor pins `expectedWorkflowId` so only the squad-fill workflow may write.
  *
- *      Report ABI (encoded by CRE):
- *        `(bytes32 seasonId, uint16 seasonStartYear, uint16 pageFetched, uint16 nextPage,
- *          bytes32[] playerIds, uint256[] birthDates)`
+ *      Report ABI (encoded by CRE): `SquadFillReport` — same tuple layout as the struct fields.
  *      New players get `earliestSeasonStartYear = seasonStartYear` (set once at create).
  *
- *      `squadFillPage[seasonId]`:
- *        - `0` = not started (next SP `_pgNm` is 1)
- *        - `1..999` = next `_pgNm` to fetch
- *        - `SQUAD_FILL_PAGE_DONE` (1000) = season sweep complete
+ *      Rolling score (domestic league calendars only) — ringfenced to `verifyEligibility`:
+ *        score = Σ mins_i * λ^(G_now - G_i), λ = 0.97
+ *        G(year, round) = (year - baseYear) * roundsPerSeason + round
+ *      `recordAppearances` only stores raw minutes / Appearance[]; it does not touch scores.
+ *      The offchain eligibility runner pages `verifyEligibility(offset, limit)`, which recomputes
+ *      each player on the page against `G_now` then returns DeployDoppler cohorts.
  *
- *      Historical seasons stay at DONE. Active seasons (chosen by CRE from wall-clock year)
- *      may restart from `_pgNm = 1` after DONE for a daily resweep; `lastSquadFillSweepAt`
- *      records when DONE was last reached.
- *
- *      Minutes ingest: `recordAppearances` (gated by `appearancesCaller`, not squad-fill CRE).
- *      Players must already exist from squad-fill; find-or-push `SeasonMinutes` per calendar.
- *
- *      Eligibility (same thresholds as v1 / edge fn): GK ≥ 361, under-21 ≥ 181, else ≥ 901.
- *      `totalMins` sums across all `seasonMinutes` rows for now (season-scoped rules TBD).
+ *      Cohorts / thresholds (effective minutes ≈ stored score / 1e18):
+ *        newTransfer / backFromLoan (DeployDoppler flag):
+ *          pending: weightedScoreWad == 0 && earliestSeasonStartYear == currentSeasonYear
+ *          eligible path (≥ 1): earliestSeasonStartYear == currentSeasonYear
+ *        GK ≥ 361, under-21 ≥ 181, else ≥ 901.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -56,6 +57,16 @@ contract EligibilityVerifier2 is CreReceiver {
     // --------------------------------------------
 
     IPlayerSetRegistry public immutable playerSetRegistry;
+    ITournamentRegistry public immutable tournamentRegistry;
+
+    /// @dev Domestic-league `tournamentId` whose calendars count toward the rolling score.
+    bytes32 public immutable leagueId;
+
+    /// @dev Earliest season start year used as G-index origin (e.g. 2024).
+    uint16 public immutable baseYear;
+
+    /// @dev Fixed season stride for G (e.g. 38 for EPL). Independent of live `finalRound`.
+    uint32 public immutable roundsPerSeason;
 
     mapping(bytes32 playerId => MinutesStore) private _minutesStore;
 
@@ -79,17 +90,36 @@ contract EligibilityVerifier2 is CreReceiver {
     /// @param expectedWorkflowId_ Squad-fill CRE workflow id (required; non-zero).
     /// @param appearancesCaller_ Authorized minutes ingest caller (required; non-zero).
     /// @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
+    /// @param tournamentRegistry_ Season calendars + treasury lookup for the league clock.
+    /// @param leagueId_ Domestic-league tournament id (score filter + clock source).
+    /// @param baseYear_ G-index origin season start year.
+    /// @param roundsPerSeason_ Fixed rounds per season for G (e.g. 38).
     constructor(
         address forwarder_,
         bytes32 expectedWorkflowId_,
         address appearancesCaller_,
-        address playerSetRegistry_
+        address playerSetRegistry_,
+        address tournamentRegistry_,
+        bytes32 leagueId_,
+        uint16 baseYear_,
+        uint32 roundsPerSeason_
     ) CreReceiver(forwarder_) {
         if (expectedWorkflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
-        if (appearancesCaller_ == address(0) || playerSetRegistry_ == address(0)) revert Errors.ZeroAddress();
+        if (
+            appearancesCaller_ == address(0) || playerSetRegistry_ == address(0)
+                || tournamentRegistry_ == address(0)
+        ) {
+            revert Errors.ZeroAddress();
+        }
+        if (leagueId_ == bytes32(0) || baseYear_ == 0 || roundsPerSeason_ == 0) revert Errors.ZeroId();
+
         _setExpectedWorkflowId(expectedWorkflowId_);
         _APPEARANCES_CALLER = appearancesCaller_;
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
+        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+        leagueId = leagueId_;
+        baseYear = baseYear_;
+        roundsPerSeason = roundsPerSeason_;
     }
 
     // --------------------------------------------
@@ -151,17 +181,34 @@ contract EligibilityVerifier2 is CreReceiver {
         return _totalMins(_minutesStore[playerId]);
     }
 
+    /// @notice Stored score from the last `verifyEligibility` page that touched this player.
+    function weightedScore(bytes32 playerId) external view returns (uint256 scoreWad, uint32 effectiveMins) {
+        scoreWad = _minutesStore[playerId].weightedScoreWad;
+        // effective minutes stay well below uint32 max
+        // forge-lint: disable-next-line(unsafe-typecast)
+        effectiveMins = uint32(scoreWad / SCORE_WAD);
+    }
+
+    /// @notice Pending newTransfer / backFromLoan: no league score yet, first seen this season.
+    function isPendingSeasonEntrant(bytes32 playerId) external view returns (bool) {
+        MinutesStore storage store = _minutesStore[playerId];
+        return _isPendingSeasonEntrant(store, _currentSeasonYear());
+    }
+
     // --------------------------------------------
-    //  Eligibility
+    //  Eligibility (offchain runner)
     // --------------------------------------------
 
-    /// @notice Page over tracked players and return undeployed candidates that clear their cohort threshold.
-    /// @dev Skips unset `birthDate` and any `playerId` already present in `PlayerSetRegistry`.
-    function verifyEligibility(uint256 offset, uint256 limit)
-        external
-        view
-        returns (EligibilityGroups memory groups)
-    {
+    /**
+     * @notice Recompute weighted scores for a page, then return undeployed eligible cohorts.
+     * @dev Sole write path for `weightedScoreWad`. Gated to `appearancesCaller`.
+     *      1) Replay domestic-league `Appearance[]` → score at `G_now` for every player on the page
+     *      2) Cohort-check (skip missing DOB / already-deployed)
+     *      `groups.newTransfers` = DeployDoppler newTransfer / backFromLoan flag.
+     */
+    function verifyEligibility(uint256 offset, uint256 limit) external returns (EligibilityGroups memory groups) {
+        if (msg.sender != _APPEARANCES_CALLER) revert Errors.Unauthorized();
+
         uint256 total = _playerIds.length;
         if (offset >= total || limit == 0) {
             return groups;
@@ -170,9 +217,25 @@ contract EligibilityVerifier2 is CreReceiver {
         uint256 end = offset + limit;
         if (end > total) end = total;
 
+        uint32 gNow = _globalRoundNow();
+        uint256 synced;
+
+        // Pass 0: ringfenced score sync for the whole page (including idle / already-deployed).
+        for (uint256 i = offset; i < end; ++i) {
+            bytes32 playerId = _playerIds[i];
+            MinutesStore storage store = _minutesStore[playerId];
+            _recomputeWeightedScore(store, gNow);
+            unchecked {
+                ++synced;
+            }
+            emit Events.WeightedScoreUpdated(playerId, store.weightedScoreWad, store.scoreAsOfGlobalRound);
+        }
+        emit Events.WeightedScoresSynced(offset, limit, synced, gNow);
+
         uint256 gkCount;
         uint256 u21Count;
         uint256 outCount;
+        uint256 ntCount;
 
         // Pass 1: size cohorts for this page.
         for (uint256 i = offset; i < end; ++i) {
@@ -194,16 +257,22 @@ contract EligibilityVerifier2 is CreReceiver {
                 unchecked {
                     ++outCount;
                 }
+            } else if (bucket == EligibilityBucket.NewTransfer) {
+                unchecked {
+                    ++ntCount;
+                }
             }
         }
 
         groups.goalkeepers = new bytes32[](gkCount);
         groups.under21 = new bytes32[](u21Count);
         groups.outfield = new bytes32[](outCount);
+        groups.newTransfers = new bytes32[](ntCount);
 
         uint256 gkIdx;
         uint256 u21Idx;
         uint256 outIdx;
+        uint256 ntIdx;
 
         // Pass 2: fill.
         for (uint256 i = offset; i < end; ++i) {
@@ -228,17 +297,26 @@ contract EligibilityVerifier2 is CreReceiver {
                 unchecked {
                     ++outIdx;
                 }
+            } else if (bucket == EligibilityBucket.NewTransfer) {
+                groups.newTransfers[ntIdx] = playerId;
+                unchecked {
+                    ++ntIdx;
+                }
             }
         }
     }
 
     /// @notice Single-player check (does not filter on deployment status).
+    /// @dev View-only appearance replay (no storage write). Runner should use `verifyEligibility`.
+    /// @return eligible Whether the recomputed weighted score clears the cohort threshold.
+    /// @return bucket Cohort used for the threshold (newTransfer / GK / u21 / outfield).
+    /// @return effectiveMins Truncated recomputed weighted score (`scoreWad / 1e18`).
     function isEligible(bytes32 playerId)
         external
         view
-        returns (bool eligible, EligibilityBucket bucket, uint32 totalMins)
+        returns (bool eligible, EligibilityBucket bucket, uint32 effectiveMins)
     {
-        return _evaluate(playerId);
+        return _evaluateLive(playerId);
     }
 
     // --------------------------------------------
@@ -248,6 +326,7 @@ contract EligibilityVerifier2 is CreReceiver {
     /// @notice Accumulate appearance minutes into an existing player's `SeasonMinutes` row.
     /// @dev Squad-fill must have created the `MinutesStore` already. No DOB enqueue.
     ///      One batch = one calendar (`seasonId` / `seasonStartYear`); each row carries its `roundNumber`.
+    ///      Does not update `weightedScoreWad` — that happens in `verifyEligibility`.
     function recordAppearances(
         bytes32 seasonId,
         uint16 seasonStartYear,
@@ -295,48 +374,42 @@ contract EligibilityVerifier2 is CreReceiver {
     // --------------------------------------------
 
     /// @inheritdoc CreReceiver
+    /// @dev CRE payload is ABI-encoded `SquadFillReport` (flat tuple of its fields).
     function _processReport(bytes calldata, bytes calldata report) internal override {
-        (
-            bytes32 seasonId,
-            uint16 seasonStartYear,
-            uint16 pageFetched,
-            uint16 nextPage,
-            bytes32[] memory playerIds_,
-            uint256[] memory birthDates
-        ) = abi.decode(report, (bytes32, uint16, uint16, uint16, bytes32[], uint256[]));
+        SquadFillReport memory r = abi.decode(report, (SquadFillReport));
 
-        if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
-        if (pageFetched == 0 || pageFetched >= SQUAD_FILL_PAGE_DONE) {
-            revert Errors.InvalidSquadFillNextPage(pageFetched, nextPage);
+        if (r.seasonId == bytes32(0) || r.seasonStartYear == 0) revert Errors.ZeroId();
+        if (r.pageFetched == 0 || r.pageFetched >= SQUAD_FILL_PAGE_DONE) {
+            revert Errors.InvalidSquadFillNextPage(r.pageFetched, r.nextPage);
         }
-        if (nextPage == 0 || nextPage > SQUAD_FILL_PAGE_DONE) {
-            revert Errors.InvalidSquadFillNextPage(pageFetched, nextPage);
+        if (r.nextPage == 0 || r.nextPage > SQUAD_FILL_PAGE_DONE) {
+            revert Errors.InvalidSquadFillNextPage(r.pageFetched, r.nextPage);
         }
         // Allow stay-on-page (partial drain), advance, or DONE — not rewind / skip ahead arbitrarily.
-        if (!(nextPage == pageFetched || nextPage == pageFetched + 1 || nextPage == SQUAD_FILL_PAGE_DONE)) {
-            revert Errors.InvalidSquadFillNextPage(pageFetched, nextPage);
+        if (!(r.nextPage == r.pageFetched || r.nextPage == r.pageFetched + 1 || r.nextPage == SQUAD_FILL_PAGE_DONE)) {
+            revert Errors.InvalidSquadFillNextPage(r.pageFetched, r.nextPage);
         }
 
-        uint16 stored = _squadFillPage[seasonId];
+        uint16 stored = _squadFillPage[r.seasonId];
 
         if (stored == SQUAD_FILL_PAGE_DONE) {
             // Active-season daily resweep: only restart from page 1.
-            if (pageFetched != 1) revert Errors.SquadFillSeasonDone(seasonId);
+            if (r.pageFetched != 1) revert Errors.SquadFillSeasonDone(r.seasonId);
         } else {
             uint16 expectedFetch = stored == 0 ? 1 : stored;
-            if (pageFetched != expectedFetch) {
-                revert Errors.SquadFillPageMismatch(seasonId, expectedFetch, pageFetched);
+            if (r.pageFetched != expectedFetch) {
+                revert Errors.SquadFillPageMismatch(r.seasonId, expectedFetch, r.pageFetched);
             }
         }
 
-        uint256 length = playerIds_.length;
-        if (length != birthDates.length) revert Errors.LengthMismatch(length, birthDates.length);
+        uint256 length = r.playerIds.length;
+        if (length != r.birthDates.length) revert Errors.LengthMismatch(length, r.birthDates.length);
 
         uint256 created;
         uint256 skipped;
 
         for (uint256 i; i < length; ++i) {
-            bytes32 playerId = playerIds_[i];
+            bytes32 playerId = r.playerIds[i];
             if (playerId == bytes32(0)) revert Errors.ZeroId();
 
             if (_tracked[playerId]) {
@@ -346,13 +419,14 @@ contract EligibilityVerifier2 is CreReceiver {
                 continue;
             }
 
-            uint256 birthDate = birthDates[i];
+            uint256 birthDate = r.birthDates[i];
             if (birthDate == 0) revert Errors.ZeroBirthDate(playerId);
 
             MinutesStore storage store = _minutesStore[playerId];
             store.birthDate = birthDate;
-            store.earliestSeasonStartYear = seasonStartYear;
-            // `expectedPosition` defaults to Position(0); `seasonMinutes` stays empty until PPM.
+            store.earliestSeasonStartYear = r.seasonStartYear;
+            // `expectedPosition` defaults to Position(0); score / seasonMinutes stay empty until PPM.
+            // Pending newTransfer/backFromLoan when this year == treasury season and score stays 0.
 
             _tracked[playerId] = true;
             _playerIds.push(playerId);
@@ -364,51 +438,92 @@ contract EligibilityVerifier2 is CreReceiver {
             emit Events.SquadPlayerCreated(playerId, birthDate);
         }
 
-        _squadFillPage[seasonId] = nextPage;
-        if (nextPage == SQUAD_FILL_PAGE_DONE) {
-            _lastSquadFillSweepAt[seasonId] = block.timestamp;
+        _squadFillPage[r.seasonId] = r.nextPage;
+        if (r.nextPage == SQUAD_FILL_PAGE_DONE) {
+            _lastSquadFillSweepAt[r.seasonId] = block.timestamp;
         }
 
-        emit Events.SquadFillPageUpdated(seasonId, stored, nextPage);
-        emit Events.SquadPlayersCreated(seasonId, pageFetched, created, skipped);
+        emit Events.SquadFillPageUpdated(r.seasonId, stored, r.nextPage);
+        emit Events.SquadPlayersCreated(r.seasonId, r.pageFetched, created, skipped);
     }
 
     // --------------------------------------------
-    //  Internal
+    //  Internal — eligibility
     // --------------------------------------------
 
     /**
-     * @dev Mirrors v1 / original edge fn:
-     *      missing DOB → false; GK → 361; age < 21 → 181; else → 901.
-     *      Age uses whole years from unix DOB (`(now - birth) / 365 days`).
-     *      `totalMins` is the sum across all `seasonMinutes` rows.
+     * @dev Uses stored `weightedScoreWad` (fresh after pass 0 of `verifyEligibility`).
+     *      missing DOB → false;
+     *      newTransfer/backFromLoan (earliestSeasonStartYear == current) → ≥ 1;
+     *      GK → 361; age < 21 → 181; else → 901.
      */
     function _evaluate(bytes32 playerId)
         private
         view
-        returns (bool eligible, EligibilityBucket bucket, uint32 totalMins)
+        returns (bool eligible, EligibilityBucket bucket, uint32 effectiveMins)
     {
         MinutesStore storage store = _minutesStore[playerId];
-        totalMins = _totalMins(store);
+        // effective minutes stay well below uint32 max
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return _evaluateWithScore(store, uint32(store.weightedScoreWad / SCORE_WAD));
+    }
 
+    /// @dev View path for `isEligible`: replay appearances without writing storage.
+    function _evaluateLive(bytes32 playerId)
+        private
+        view
+        returns (bool eligible, EligibilityBucket bucket, uint32 effectiveMins)
+    {
+        MinutesStore storage store = _minutesStore[playerId];
+        uint256 scoreWad = _computeWeightedScoreWad(store, _globalRoundNow());
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return _evaluateWithScore(store, uint32(scoreWad / SCORE_WAD));
+    }
+
+    function _evaluateWithScore(MinutesStore storage store, uint32 effectiveMins)
+        private
+        view
+        returns (bool eligible, EligibilityBucket bucket, uint32)
+    {
         if (store.birthDate == 0) {
-            return (false, EligibilityBucket.None, totalMins);
+            return (false, EligibilityBucket.None, 0);
+        }
+
+        uint16 currentYear = _currentSeasonYear();
+
+        // DeployDoppler flag: newTransfer / backFromLoan.
+        // Pending form: weightedScoreWad == 0 && earliest == currentYear.
+        // After first league minute, keep the cohort for the season via earliest == currentYear.
+        if (store.earliestSeasonStartYear == currentYear) {
+            bucket = EligibilityBucket.NewTransfer;
+            eligible = effectiveMins >= THRESHOLD_NEW_TRANSFER;
+            return (eligible, bucket, effectiveMins);
         }
 
         if (store.expectedPosition == Position.GK) {
             bucket = EligibilityBucket.Goalkeeper;
-            eligible = totalMins >= THRESHOLD_GK;
-            return (eligible, bucket, totalMins);
+            eligible = effectiveMins >= THRESHOLD_GK;
+            return (eligible, bucket, effectiveMins);
         }
 
         if (_ageYears(store.birthDate) < UNDER_21_AGE) {
             bucket = EligibilityBucket.Under21;
-            eligible = totalMins >= THRESHOLD_UNDER_21;
-            return (eligible, bucket, totalMins);
+            eligible = effectiveMins >= THRESHOLD_UNDER_21;
+            return (eligible, bucket, effectiveMins);
         }
 
         bucket = EligibilityBucket.Outfield;
-        eligible = totalMins >= THRESHOLD_OUTFIELD;
+        eligible = effectiveMins >= THRESHOLD_OUTFIELD;
+        return (eligible, bucket, effectiveMins);
+    }
+
+    /// @dev `weightedScoreWad == 0 && earliestSeasonStartYear == currentSeasonYear`.
+    function _isPendingSeasonEntrant(MinutesStore storage store, uint16 currentYear)
+        private
+        view
+        returns (bool)
+    {
+        return store.weightedScoreWad == 0 && store.earliestSeasonStartYear == currentYear;
     }
 
     function _totalMins(MinutesStore storage store) private view returns (uint32 total) {
@@ -423,6 +538,85 @@ contract EligibilityVerifier2 is CreReceiver {
         if (birthDate == 0 || birthDate >= block.timestamp) return 0;
         return (block.timestamp - birthDate) / 365 days;
     }
+
+    // --------------------------------------------
+    //  Internal — rolling score / league clock
+    // --------------------------------------------
+
+    function _currentSeasonYear() private view returns (uint16 season) {
+        address treasury = tournamentRegistry.getPbrTreasury(leagueId);
+        if (treasury == address(0)) revert Errors.ZeroAddress();
+        (season,,) = IPbrTreasury(treasury).getCursors();
+        if (season == 0) revert Errors.ZeroId();
+    }
+
+    function _toGlobalRound(uint16 year, uint32 round) private view returns (uint32) {
+        if (year < baseYear) return round;
+        return uint32(uint256(year - baseYear) * uint256(roundsPerSeason) + uint256(round));
+    }
+
+    function _globalRoundNow() private view returns (uint32) {
+        address treasury = tournamentRegistry.getPbrTreasury(leagueId);
+        if (treasury == address(0)) revert Errors.ZeroAddress();
+        (uint16 season, uint32 active,) = IPbrTreasury(treasury).getCursors();
+        if (season == 0 || active == 0) revert Errors.ZeroId();
+        return _toGlobalRound(season, active);
+    }
+
+    function _decay(uint256 scoreWad, uint32 deltaRounds) private pure returns (uint256) {
+        if (deltaRounds == 0 || scoreWad == 0) return scoreWad;
+
+        uint256 result = scoreWad;
+        uint256 base = LAMBDA_WAD;
+        uint256 exp = deltaRounds;
+
+        while (exp > 0) {
+            if (exp & 1 == 1) {
+                result = (result * base) / SCORE_WAD;
+            }
+            base = (base * base) / SCORE_WAD;
+            exp >>= 1;
+        }
+        return result;
+    }
+
+    /// @dev Full replay of domestic-league appearances → score at `gNow` (view-safe).
+    function _computeWeightedScoreWad(MinutesStore storage store, uint32 gNow) private view returns (uint256 scoreWad) {
+        uint256 n = store.seasonMinutes.length;
+
+        for (uint256 s; s < n; ++s) {
+            SeasonMinutes storage season = store.seasonMinutes[s];
+            if (!_isLeagueSeason(season.seasonId, season.seasonStartYear)) continue;
+
+            uint256 aLen = season.appearances.length;
+            for (uint256 a; a < aLen; ++a) {
+                Appearance storage app = season.appearances[a];
+                if (app.minsPlayed == 0) continue;
+
+                uint32 gApp = _toGlobalRound(season.seasonStartYear, app.roundNumber);
+                uint32 age = gNow > gApp ? gNow - gApp : 0;
+                scoreWad += _decay(uint256(app.minsPlayed) * SCORE_WAD, age);
+            }
+        }
+    }
+
+    /// @dev Write path used by `verifyEligibility`.
+    function _recomputeWeightedScore(MinutesStore storage store, uint32 gNow) private {
+        store.weightedScoreWad = _computeWeightedScoreWad(store, gNow);
+        store.scoreAsOfGlobalRound = gNow;
+    }
+
+    function _isLeagueSeason(bytes32 seasonId, uint16 seasonStartYear) private view returns (bool) {
+        try tournamentRegistry.getSeasonId(leagueId, seasonStartYear) returns (bytes32 expected) {
+            return expected != bytes32(0) && expected == seasonId;
+        } catch {
+            return false;
+        }
+    }
+
+    // --------------------------------------------
+    //  Internal — minutes store helpers
+    // --------------------------------------------
 
     /// @dev Find `seasonId` row or push a new empty `SeasonMinutes`.
     function _getOrCreateSeasonMinutes(

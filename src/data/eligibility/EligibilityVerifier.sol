@@ -247,7 +247,7 @@ contract EligibilityVerifier2 is CreReceiver {
 
     /// @notice Accumulate appearance minutes into an existing player's `SeasonMinutes` row.
     /// @dev Squad-fill must have created the `MinutesStore` already. No DOB enqueue.
-    ///      One batch = one calendar (`seasonId` / `seasonStartYear`).
+    ///      One batch = one calendar (`seasonId` / `seasonStartYear`); each row carries its `roundNumber`.
     function recordAppearances(
         bytes32 seasonId,
         uint16 seasonStartYear,
@@ -259,7 +259,7 @@ contract EligibilityVerifier2 is CreReceiver {
         uint256 length = appearances.length;
         for (uint256 i; i < length; ++i) {
             Appearance calldata appearance = appearances[i];
-            if (appearance.playerId == bytes32(0)) revert Errors.ZeroId();
+            if (appearance.playerId == bytes32(0) || appearance.roundNumber == 0) revert Errors.ZeroId();
             if (appearance.minsPlayed == 0) continue;
             if (!_tracked[appearance.playerId]) revert Errors.UnknownPlayer(appearance.playerId);
 
@@ -272,10 +272,18 @@ contract EligibilityVerifier2 is CreReceiver {
 
             uint32 cumulative = season.minsByPosition[posIndex] + appearance.minsPlayed;
             season.minsByPosition[posIndex] = cumulative;
+            season.totalMinutes += appearance.minsPlayed;
+            season.appearances.push(appearance);
             store.expectedPosition = _deriveExpectedPosition(store);
 
             emit Events.MinutesUpdated(
-                appearance.playerId, appearance.position, appearance.minsPlayed, cumulative, store.expectedPosition
+                appearance.playerId,
+                seasonId,
+                appearance.roundNumber,
+                appearance.position,
+                appearance.minsPlayed,
+                cumulative,
+                store.expectedPosition
             );
         }
 
@@ -406,10 +414,7 @@ contract EligibilityVerifier2 is CreReceiver {
     function _totalMins(MinutesStore storage store) private view returns (uint32 total) {
         uint256 n = store.seasonMinutes.length;
         for (uint256 s; s < n; ++s) {
-            uint32[POSITION_COUNT] storage mins = store.seasonMinutes[s].minsByPosition;
-            for (uint256 i; i < POSITION_COUNT; ++i) {
-                total += mins[i];
-            }
+            total += store.seasonMinutes[s].totalMinutes;
         }
     }
 

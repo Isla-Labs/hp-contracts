@@ -7,7 +7,13 @@ library EligibilityEvents {
     event AppearancesRecorded(uint256 count);
 
     event MinutesUpdated(
-        bytes32 indexed playerId, Position indexed position, uint32 addedMins, uint32 cumulativeMins, Position expectedPosition
+        bytes32 indexed playerId,
+        bytes32 indexed seasonId,
+        uint32 indexed roundNumber,
+        Position position,
+        uint32 addedMins,
+        uint32 cumulativeMins,
+        Position expectedPosition
     );
 
     /// @notice Emitted when one or more tracked players need a CRE DOB fetch.

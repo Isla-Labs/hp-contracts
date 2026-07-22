@@ -3,6 +3,10 @@ pragma solidity ^0.8.34;
 
 import { Position } from "@base/global/types/PlayerSetTypes.sol";
 
+// --------------------------------------------
+//  Utils
+// --------------------------------------------
+
 /// @dev `Position` has 14 variants (GK … ST); index = `uint8(Position)`.
 uint256 constant POSITION_COUNT = 14;
 
@@ -10,13 +14,14 @@ uint256 constant POSITION_COUNT = 14;
 ///      Historical seasons stay here; daily-active seasons may restart from page 1 after an interval.
 uint16 constant SQUAD_FILL_PAGE_DONE = 1000;
 
+// --------------------------------------------
+//  Core
+// --------------------------------------------
+
 /// @notice Per-player eligibility store; name/symbol deferred to DeployDoppler.
 struct MinutesStore {
-    /// @dev `seasonStartYear` of the squad-fill report that first created this player.
     uint16 earliestSeasonStartYear;
-    /// @dev Argmax of season minutes; default `Position(0)` until PPM derives it.
     Position expectedPosition;
-    /// @dev Unix timestamp; set by squad-fill CRE report.
     uint256 birthDate;
     SeasonMinutes[] seasonMinutes;
 }
@@ -25,21 +30,25 @@ struct MinutesStore {
 struct SeasonMinutes {
     bytes32 seasonId; // tournamentCalendar
     uint16 seasonStartYear;
+    uint32 totalMinutes;
+    Appearance[] appearances;
     uint32[POSITION_COUNT] minsByPosition;
 }
+
+// --------------------------------------------
+//  Reports
+// --------------------------------------------
 
 /// @notice Single-match appearance delta; season is passed once per `recordAppearances` batch.
 struct Appearance {
     bytes32 playerId;
+    uint32 roundNumber;
     Position position;
     uint32 minsPlayed;
 }
 
 /**
- * @notice CRE squads-historical report.
- * @dev `pageFetched` is the SP `_pgNm` (1-indexed) that produced this batch.
- *      `nextPage` is stored as the cursor: `pageFetched + 1`, same page (partial drain),
- *      or `SQUAD_FILL_PAGE_DONE`.
+ * @notice CRE squad-fill report.
  */
 struct SquadFillReport {
     bytes32 seasonId;
@@ -49,6 +58,10 @@ struct SquadFillReport {
     bytes32[] playerIds;
     uint256[] birthDates;
 }
+
+// --------------------------------------------
+//  Eligibility Criteria
+// --------------------------------------------
 
 /// @dev Previous-season minute thresholds (ported from the original Supabase eligibility edge fn).
 uint32 constant THRESHOLD_GK = 361;

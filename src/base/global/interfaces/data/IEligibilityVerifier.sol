@@ -6,7 +6,6 @@ import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.s
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import {
     Appearance,
-    EligibilityBucket,
     EligibilityGroups,
     MinutesStore
 } from "@src/data/eligibility/types/EligibilityTypes.sol";
@@ -27,22 +26,8 @@ interface IEligibilityVerifier {
      */
     function verifyEligibility(uint256 offset, uint256 limit) external returns (EligibilityGroups memory groups);
 
-    /// @notice Single-player check (does not filter on deployment status).
-    /// @dev View-only replay of appearances (does not write storage). Prefer `verifyEligibility` for the runner.
-    /// @return eligible Whether the recomputed weighted score clears the cohort threshold.
-    /// @return bucket Cohort used for the threshold (newTransfer / GK / u21 / outfield).
-    /// @return effectiveMins Truncated recomputed weighted score (`scoreWad / 1e18`).
-    function isEligible(bytes32 playerId)
-        external
-        view
-        returns (bool eligible, EligibilityBucket bucket, uint32 effectiveMins);
-
     /// @notice Stored score from the last `verifyEligibility` page that touched this player.
     function weightedScore(bytes32 playerId) external view returns (uint256 scoreWad, uint32 effectiveMins);
-
-    /// @notice True when `weightedScoreWad == 0 && earliestSeasonStartYear == currentSeasonYear`.
-    /// @dev Pending newTransfer / backFromLoan flag (no league-weighted minutes yet this season).
-    function isPendingSeasonEntrant(bytes32 playerId) external view returns (bool);
 
     function playerSetRegistry() external view returns (IPlayerSetRegistry);
 
@@ -50,17 +35,25 @@ interface IEligibilityVerifier {
 
     function deployDoppler() external view returns (IDeployDoppler);
 
+    function ppmVerifier() external view returns (address);
+
     function leagueId() external view returns (bytes32);
 
     function baseYear() external view returns (uint16);
-
-    function roundsPerSeason() external view returns (uint32);
 
     function playerCount() external view returns (uint256);
 
     function playerIds(uint256 offset, uint256 limit) external view returns (bytes32[] memory);
 
+    function playerExists(bytes32 playerId) external view returns (bool);
+
     function getMinutesStore(bytes32 playerId) external view returns (MinutesStore memory);
 
     function totalMinsPlayed(bytes32 playerId) external view returns (uint32);
+
+    /// @notice CRE cursor: SP `_pgNm` to request next (`0` → `1`; done → `(0, true)`).
+    function nextSquadFillPageToFetch(bytes32 seasonId) external view returns (uint16 pageToFetch, bool done);
+
+    /// @notice Timestamp when `seasonId` last hit `SQUAD_FILL_PAGE_DONE` (0 if never).
+    function getLastSquadFillSweepAt(bytes32 seasonId) external view returns (uint256);
 }

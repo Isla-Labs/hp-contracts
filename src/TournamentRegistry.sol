@@ -270,10 +270,16 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
     }
 
     /**
-     * @notice All non-zero season calendar ids, newest `seasonStartYear` first.
-     * @dev CRE birthdate / squads flows should walk this list in order (latest calendar first).
+     * @notice All non-zero season calendar ids with start years, oldest `seasonStartYear` first.
+     * @dev CRE squad-fill walks this list in order (historical catch-up before newer calendars).
+     *      Oldest-first also supports later-season status checks (e.g. newTransfer / backFromLoan)
+     *      against already-filled prior seasons. `seasonStartYears[i]` aligns with `seasonIds[i]`.
      */
-    function getSeasonIdsNewestFirst() external view returns (bytes32[] memory seasonIds) {
+    function getSeasonIdsOldestFirst()
+        external
+        view
+        returns (bytes32[] memory seasonIds, uint16[] memory seasonStartYears)
+    {
         uint256 total;
         uint256 tLen = _tournamentIds.length;
         for (uint256 i; i < tLen; ++i) {
@@ -281,7 +287,7 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
         }
 
         seasonIds = new bytes32[](total);
-        uint16[] memory startYears = new uint16[](total);
+        seasonStartYears = new uint16[](total);
         uint256 count;
 
         for (uint256 i; i < tLen; ++i) {
@@ -291,7 +297,7 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
                 bytes32 seasonId = seasons[j].seasonId;
                 if (seasonId == bytes32(0)) continue;
                 seasonIds[count] = seasonId;
-                startYears[count] = seasons[j].seasonStartYear;
+                seasonStartYears[count] = seasons[j].seasonStartYear;
                 unchecked {
                     ++count;
                 }
@@ -304,26 +310,26 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
             uint16[] memory trimmedYears = new uint16[](count);
             for (uint256 i; i < count; ++i) {
                 trimmed[i] = seasonIds[i];
-                trimmedYears[i] = startYears[i];
+                trimmedYears[i] = seasonStartYears[i];
             }
             seasonIds = trimmed;
-            startYears = trimmedYears;
+            seasonStartYears = trimmedYears;
         }
 
-        // Insertion sort by seasonStartYear descending (stable for equal years).
+        // Insertion sort by seasonStartYear ascending (stable for equal years).
         for (uint256 i = 1; i < count; ++i) {
             bytes32 id = seasonIds[i];
-            uint16 startYear = startYears[i];
+            uint16 startYear = seasonStartYears[i];
             uint256 j = i;
-            while (j > 0 && startYears[j - 1] < startYear) {
+            while (j > 0 && seasonStartYears[j - 1] > startYear) {
                 seasonIds[j] = seasonIds[j - 1];
-                startYears[j] = startYears[j - 1];
+                seasonStartYears[j] = seasonStartYears[j - 1];
                 unchecked {
                     --j;
                 }
             }
             seasonIds[j] = id;
-            startYears[j] = startYear;
+            seasonStartYears[j] = startYear;
         }
     }
 

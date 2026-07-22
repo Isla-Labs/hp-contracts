@@ -60,8 +60,11 @@ interface ITournamentRegistry {
 
     function getSeason(bytes32 tournamentId, uint16 seasonStartYear) external view returns (Season memory);
 
-    /// @notice All SP tournament calendar ids (`tmcl`), newest `seasonStartYear` first.
-    function getSeasonIdsNewestFirst() external view returns (bytes32[] memory seasonIds);
+    /// @notice All SP tournament calendar ids (`tmcl`) with start years, oldest `seasonStartYear` first.
+    function getSeasonIdsOldestFirst()
+        external
+        view
+        returns (bytes32[] memory seasonIds, uint16[] memory seasonStartYears);
 
     function getRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)
         external

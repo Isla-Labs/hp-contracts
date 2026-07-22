@@ -16,7 +16,9 @@ library EligibilityEvents {
     event BirthDateUpdated(bytes32 indexed playerId, uint256 birthDate);
 
     /// @notice Squad-fill CRE upsert: new `MinutesStore` rows (skips already-tracked ids).
-    event SquadPlayersCreated(uint256 created, uint256 skipped);
+    event SquadPlayersCreated(bytes32 indexed seasonId, uint16 pageFetched, uint256 created, uint256 skipped);
 
-    event SquadPlayerCreated(bytes32 indexed playerId, string name, string symbol, uint256 birthDate);
+    event SquadPlayerCreated(bytes32 indexed playerId, uint256 birthDate);
+
+    event SquadFillPageUpdated(bytes32 indexed seasonId, uint16 previousPage, uint16 nextPage);
 }

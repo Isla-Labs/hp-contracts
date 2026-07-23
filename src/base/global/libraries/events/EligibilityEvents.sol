@@ -31,13 +31,13 @@ library EligibilityEvents {
 
     event SquadFillPageUpdated(bytes32 indexed seasonId, uint16 previousPage, uint16 nextPage);
 
-    /// @notice Deployed market marked `INACTIVE` after falling under continuity threshold.
+    /// @notice Deployed player queued to ManageLifecycle (continuity under-threshold).
     event PlayerDiscontinued(bytes32 indexed playerId, uint32 effectiveMins);
 
     /// @notice Daily-active club squad overwritten (`playerCount` = active roster size).
     event SquadListUpdated(bytes32 indexed clubId, uint256 playerCount);
 
-    /// @notice Deployed player left the league (no club after full daily-active sweep) → `INACTIVE`.
+    /// @notice Deployed player left the league (queued to ManageLifecycle after full sweep).
     event PlayerLeftLeague(bytes32 indexed playerId);
 
     /// @notice New `TransparentUpgradeableProxy` for a league EligibilityVerifier.

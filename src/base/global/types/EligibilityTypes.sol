@@ -106,7 +106,7 @@ enum EligibilityBucket {
 
 /// @notice Results from one `verifyEligibility` page.
 /// @dev Deploy cohorts (`goalkeepers`…`newTransfers`) → DeployDoppler waiting room.
-///      `toDiscontinue` → already-deployed markets under continuity threshold (soft-inactive).
+///      `toDiscontinue` → ManageLifecycle waiting room (continuity under-threshold).
 struct EligibilityGroups {
     bytes32[] goalkeepers;
     bytes32[] under21;

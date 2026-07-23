@@ -7,10 +7,11 @@ import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 
 import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
-import { IAutomator } from "@base/global/interfaces/governance/IAutomator.sol";
+import { IManageLifecycle } from "@base/global/interfaces/data/IManageLifecycle.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
+import { LifecycleReason } from "@base/global/types/LifecycleTypes.sol";
 import { PlayerStatus, Position } from "@base/global/types/PlayerSetTypes.sol";
 
 import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
@@ -54,15 +55,13 @@ import {
  *      The offchain eligibility runner pages `verifyEligibility(offset, limit)`, which recomputes
  *      each player on the page against `G_now`, then:
  *        - undeployed + above threshold → enqueue deploy cohorts to `DeployDoppler`
- *        - deployed + below continuity threshold → discontinue via `Automator` →
- *          `PlayerSetRegistry.setStatus(INACTIVE)`
+ *        - deployed + below continuity threshold → enqueue to `ManageLifecycle`
+ *      League-leavers from CRE membership DONE also enqueue to `ManageLifecycle`.
+ *      Actual `INACTIVE` writes happen later in ManageLifecycle (waiting room + review).
  *      `verifyEligibility` is globally `rateLimited` — size `cooldown` for page cadence.
  *
  *      Deploy / continuity thresholds: see `EligibilityCriteria` (defaults GK 361 / u21 181 /
  *      outfield 901 / newTransfer 1; continuity omits the newTransfer shortcut).
- *
- *      Privileged registry writes go through `Automator` (proxy holds `CATEGORY_THREE`
- *      on Automator; Automator holds `CATEGORY_THREE` on `PlayerSetRegistry`).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -75,8 +74,8 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     IPlayerSetRegistry public playerSetRegistry;
     ITournamentRegistry public tournamentRegistry;
     IDeployDoppler public deployDoppler;
-    /// @notice Cat-3 relay for privileged writes (e.g. `PlayerSetRegistry.setStatus`).
-    IAutomator public automator;
+    /// @notice Waiting-room receiver for soft-inactivity candidates.
+    IManageLifecycle public manageLifecycle;
 
     /// @dev Domestic-league `tournamentId` whose calendars count toward the rolling score.
     bytes32 public leagueId;
@@ -137,7 +136,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
      * @param tournamentRegistry_ Season calendars + treasury lookup for the league clock.
      * @param ppmVerifier_ Authorized minutes ingest caller (PPMVerifier; required; non-zero).
      * @param deployDoppler_ Waiting-room receiver for eligible cohorts (required; non-zero).
-     * @param automator_ Cat-3 `Automator` relay (this proxy must be granted `CATEGORY_THREE` on it).
+     * @param manageLifecycle_ Waiting-room receiver for soft-inactivity candidates (required).
      * @param leagueId_ Domestic-league tournament id (score filter + clock source).
      * @param baseYear_ G-index origin season start year.
      */
@@ -150,7 +149,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         address tournamentRegistry_,
         address ppmVerifier_,
         address deployDoppler_,
-        address automator_,
+        address manageLifecycle_,
         bytes32 leagueId_,
         uint16 baseYear_
     ) external initializer {
@@ -158,7 +157,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         if (
             ppmVerifier_ == address(0) || playerSetRegistry_ == address(0)
                 || tournamentRegistry_ == address(0) || deployDoppler_ == address(0)
-                || automator_ == address(0)
+                || manageLifecycle_ == address(0)
         ) {
             revert Errors.ZeroAddress();
         }
@@ -172,7 +171,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         deployDoppler = IDeployDoppler(deployDoppler_);
-        automator = IAutomator(automator_);
+        manageLifecycle = IManageLifecycle(manageLifecycle_);
         leagueId = leagueId_;
         baseYear = baseYear_;
     }
@@ -275,12 +274,12 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     // --------------------------------------------
 
     /**
-     * @notice Recompute weighted scores for a page; deploy new markets / discontinue under-threshold ones.
+     * @notice Recompute weighted scores for a page; enqueue eligibles / lifecycle candidates.
      * @dev Sole write path for `weightedScoreWad`. Public (anyone may run the page).
      *      1) Replay domestic-league `Appearance[]` → score at `G_now` for every player on the page
      *      2) Undeployed + eligible → deploy cohorts; deployed + below continuity → `toDiscontinue`
      *      3) `deployDoppler.enqueueEligible` for deploy cohorts;
-     *         discontinue via `automator.executeAutomation` → `setStatus(INACTIVE)`
+     *         `manageLifecycle.enqueueLifecycle` for continuity failures
      *      `groups.newTransfers` = DeployDoppler newTransfer / backFromLoan flag.
      *      Continuity uses GK/u21/outfield thresholds only (not the newTransfer ≥ 1 shortcut).
      */
@@ -367,6 +366,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         uint256 outIdx;
         uint256 ntIdx;
         uint256 discIdx;
+        uint32[] memory discMins = new uint32[](discCount);
 
         // Pass 2: fill.
         for (uint256 i = offset; i < end; ++i) {
@@ -378,10 +378,10 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
                 if (stillActive) continue;
 
                 groups.toDiscontinue[discIdx] = playerId;
+                discMins[discIdx] = effectiveMins;
                 unchecked {
                     ++discIdx;
                 }
-                _discontinue(playerId);
                 emit Events.PlayerDiscontinued(playerId, effectiveMins);
                 continue;
             }
@@ -412,9 +412,14 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
             }
         }
 
-        // Pass 3: hand off deploy cohorts to DeployDoppler waiting room (skip empty pages).
+        // Pass 3: hand off to waiting rooms (skip empty pages).
         if (gkCount + u21Count + outCount + ntCount != 0) {
             deployDoppler.enqueueEligible(groups);
+        }
+        if (discCount != 0) {
+            manageLifecycle.enqueueLifecycle(
+                groups.toDiscontinue, LifecycleReason.ContinuityUnderThreshold, discMins
+            );
         }
     }
 
@@ -618,21 +623,36 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
 
     /**
      * @dev After a full membership sweep: any player who was on some `SquadList` and is now on
-     *      none (`_playerClub == 0`) has left the league. If still active in PlayerSetRegistry → INACTIVE.
+     *      none (`_playerClub == 0`) has left the league. Enqueue deployed actives to ManageLifecycle.
      *      Intra-league transfers re-acquire `_playerClub` before DONE and are skipped.
      */
     function _finalizeLeagueRemovals() private {
         uint256 n = _leftDuringSweep.length;
+        bytes32[] memory leavers = new bytes32[](n);
+        uint256 leaverCount;
+
         for (uint256 i; i < n; ++i) {
             bytes32 playerId = _leftDuringSweep[i];
             if (_playerClub[playerId] != bytes32(0)) continue;
             if (!playerSetRegistry.playerExists(playerId)) continue;
             if (playerSetRegistry.getPlayerSet(playerId).status == PlayerStatus.INACTIVE) continue;
 
-            _discontinue(playerId);
+            leavers[leaverCount] = playerId;
+            unchecked {
+                ++leaverCount;
+            }
             emit Events.PlayerLeftLeague(playerId);
         }
         delete _leftDuringSweep;
+
+        if (leaverCount == 0) return;
+
+        // Compact before enqueue (ManageLifecycle skips zeros, but keep the array tight).
+        bytes32[] memory compact = new bytes32[](leaverCount);
+        for (uint256 i; i < leaverCount; ++i) {
+            compact[i] = leavers[i];
+        }
+        manageLifecycle.enqueueLifecycle(compact, LifecycleReason.LeftLeague, new uint32[](0));
     }
 
     function _contains(bytes32[] memory arr, bytes32 value) private pure returns (bool) {
@@ -646,15 +666,6 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     // --------------------------------------------
     //  Internal — eligibility
     // --------------------------------------------
-
-    /// @dev Soft-discontinue via Automator relay (`msg.sender` on registry = Automator).
-    function _discontinue(bytes32 playerId) private {
-        automator.executeAutomation(
-            address(playerSetRegistry),
-            0,
-            abi.encodeCall(IPlayerSetRegistry.setStatus, (playerId, PlayerStatus.INACTIVE))
-        );
-    }
 
     /**
      * @dev Deploy path. Uses stored `weightedScoreWad` (fresh after pass 0).

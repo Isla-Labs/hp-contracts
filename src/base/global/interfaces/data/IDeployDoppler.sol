@@ -11,7 +11,8 @@ interface IDeployDoppler {
     /**
      * @notice Persist a page of eligible deploy cohorts for later formatting / final checks.
      * @dev Called by `EligibilityVerifier` after score sync + cohort selection.
-     *      Only deploy arrays are consumed (`goalkeepers`…`newTransfers`); `toDiscontinue` is ignored.
+     *      Only deploy arrays are consumed (`goalkeepers`…`newTransfers`);
+     *      `toDiscontinue` is handled by `ManageLifecycle`.
      */
     function enqueueEligible(EligibilityGroups calldata groups) external;
 }

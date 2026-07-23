@@ -2,7 +2,7 @@
 pragma solidity ^0.8.34;
 
 import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
-import { IAutomator } from "@base/global/interfaces/governance/IAutomator.sol";
+import { IManageLifecycle } from "@base/global/interfaces/data/IManageLifecycle.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import {
@@ -27,7 +27,7 @@ interface IEligibilityVerifier {
         address tournamentRegistry_,
         address ppmVerifier_,
         address deployDoppler_,
-        address automator_,
+        address manageLifecycle_,
         bytes32 leagueId_,
         uint16 baseYear_
     ) external;
@@ -36,10 +36,10 @@ interface IEligibilityVerifier {
         external;
 
     /**
-     * @notice Recompute scores for a page; enqueue undeployed eligibles; discontinue under-threshold deployed.
+     * @notice Recompute scores for a page; enqueue undeployed eligibles; queue lifecycle candidates.
      * @dev Sole write path for `weightedScoreWad`. Globally rate-limited (`RateLimit`).
      *      `groups.newTransfers` = DeployDoppler newTransfer / backFromLoan flag.
-     *      `groups.toDiscontinue` = deployed markets marked `INACTIVE` this page (via Automator).
+     *      `groups.toDiscontinue` → ManageLifecycle (continuity under-threshold).
      */
     function verifyEligibility(uint256 offset, uint256 limit) external returns (EligibilityGroups memory groups);
 
@@ -68,7 +68,7 @@ interface IEligibilityVerifier {
 
     function deployDoppler() external view returns (IDeployDoppler);
 
-    function automator() external view returns (IAutomator);
+    function manageLifecycle() external view returns (IManageLifecycle);
 
     function ppmVerifier() external view returns (address);
 

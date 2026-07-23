@@ -12,7 +12,8 @@ import { EligibilityVerifier } from "@src/data/eligibility/EligibilityVerifier.s
  * @notice Deploys per-league `EligibilityVerifier` behind `TransparentUpgradeableProxy`.
  * @dev Shared implementation (cooldown baked in). Each `create` deploys a new proxy whose
  *      `ProxyAdmin` owner is `proxyAdminOwner` (typically `ConstitutionalTimelock`).
- *      Grant Automator `CATEGORY_THREE` to the **proxy** address, not the implementation.
+ *      Wire `DeployDoppler.setEligibilityVerifier(proxy)` and
+ *      `ManageLifecycle.setEligibilityVerifier(proxy)` after create.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -62,7 +63,7 @@ contract EligibilityVerifierFactory {
         address tournamentRegistry,
         address ppmVerifier,
         address deployDoppler,
-        address automator,
+        address manageLifecycle,
         bytes32 leagueId,
         uint16 baseYear
     ) external returns (address proxy) {
@@ -77,7 +78,7 @@ contract EligibilityVerifierFactory {
                 tournamentRegistry,
                 ppmVerifier,
                 deployDoppler,
-                automator,
+                manageLifecycle,
                 leagueId,
                 baseYear
             )

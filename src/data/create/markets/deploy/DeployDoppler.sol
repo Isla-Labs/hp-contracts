@@ -7,7 +7,7 @@ import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol"
 import { IEligibilityVerifier } from "@base/global/interfaces/data/IEligibilityVerifier.sol";
 import { EligibilityBucket, EligibilityGroups, MinutesStore } from "@base/global/types/EligibilityTypes.sol";
 
-import { DopplerConfig } from "@data/deployments/config/DopplerConfig.sol";
+import { DopplerConfig } from "@data/create/markets/deploy/config/DopplerConfig.sol";
 import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
 
 /**
@@ -16,7 +16,7 @@ import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
  * 0) Eligibility waiting room (from EligibilityVerifier)
  *    - `enqueueEligible` stores cohort-tagged playerIds for later deploy formatting.
  *    - Only the configured `eligibilityVerifier` may write.
- *    - Consumes deploy cohorts only; `groups.toDiscontinue` is handled in EligibilityVerifier.
+ *    - Consumes deploy cohorts only; `groups.toDiscontinue` goes to `ManageLifecycle`.
  *    - Name/symbol copied from `EligibilityVerifier` when CRE has filled them; else empty
  *      until waiting-room manual override (`DopplerTypes.PendingEligible`).
  *

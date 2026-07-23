@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
-import { IManageLifecycle } from "@base/global/interfaces/data/IManageLifecycle.sol";
+import { IDopplerLocker } from "@base/global/interfaces/governance/IDopplerLocker.sol";
+import { ITransferLocker } from "@base/global/interfaces/governance/ITransferLocker.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import {
@@ -26,8 +26,8 @@ interface IEligibilityVerifier {
         address playerSetRegistry_,
         address tournamentRegistry_,
         address ppmVerifier_,
-        address deployDoppler_,
-        address manageLifecycle_,
+        address dopplerLocker_,
+        address transferLocker_,
         bytes32 leagueId_,
         uint16 baseYear_
     ) external;
@@ -38,8 +38,9 @@ interface IEligibilityVerifier {
     /**
      * @notice Recompute scores for a page; enqueue undeployed eligibles; queue lifecycle candidates.
      * @dev Sole write path for `weightedScoreWad`. Globally rate-limited (`RateLimit`).
-     *      `groups.newTransfers` = DeployDoppler newTransfer / backFromLoan flag.
-     *      `groups.toDiscontinue` → ManageLifecycle (continuity under-threshold).
+     *      `groups.newTransfers` = DopplerLocker newTransfer / backFromLoan flag.
+     *      `groups.toDiscontinue` → TransferLocker (continuity under-threshold).
+     *      `groups.toReactivate` → TransferLocker (`INACTIVE` back above continuity).
      */
     function verifyEligibility(uint256 offset, uint256 limit) external returns (EligibilityGroups memory groups);
 
@@ -66,9 +67,9 @@ interface IEligibilityVerifier {
 
     function tournamentRegistry() external view returns (ITournamentRegistry);
 
-    function deployDoppler() external view returns (IDeployDoppler);
+    function dopplerLocker() external view returns (IDopplerLocker);
 
-    function manageLifecycle() external view returns (IManageLifecycle);
+    function transferLocker() external view returns (ITransferLocker);
 
     function ppmVerifier() external view returns (address);
 

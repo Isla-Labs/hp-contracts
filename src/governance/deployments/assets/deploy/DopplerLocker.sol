@@ -16,7 +16,7 @@ import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
  * 0) Eligibility waiting room (from EligibilityVerifier)
  *    - `enqueueEligible` stores cohort-tagged playerIds for later deploy formatting.
  *    - Only the configured `eligibilityVerifier` may write.
- *    - Consumes deploy cohorts only; `groups.toDiscontinue` goes to `ManageLifecycle`.
+ *    - Consumes deploy cohorts only; lifecycle arrays go to `TransferLocker`.
  *    - Name/symbol copied from `EligibilityVerifier` when CRE has filled them; else empty
  *      until waiting-room manual override (`DopplerTypes.PendingEligible`).
  *

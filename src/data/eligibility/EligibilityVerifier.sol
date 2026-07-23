@@ -54,10 +54,11 @@ import {
  *      `recordAppearances` only stores raw minutes / Appearance[]; it does not touch scores.
  *      The offchain eligibility runner pages `verifyEligibility(offset, limit)`, which recomputes
  *      each player on the page against `G_now`, then:
- *        - undeployed + above threshold → enqueue deploy cohorts to `DeployDoppler`
- *        - deployed + below continuity threshold → enqueue to `ManageLifecycle`
- *      League-leavers from CRE membership DONE also enqueue to `ManageLifecycle`.
- *      Actual `INACTIVE` writes happen later in ManageLifecycle (waiting room + review).
+ *        - undeployed + above threshold → enqueue deploy cohorts to `DopplerLocker`
+ *        - deployed + below continuity → enqueue deactivate to `TransferLocker`
+ *        - deployed + `INACTIVE` + back above continuity → enqueue reactivate to `TransferLocker`
+ *      League-leavers from CRE membership DONE also enqueue deactivate to `TransferLocker`.
+ *      Actual status writes happen later in TransferLocker (waiting room + review).
  *      `verifyEligibility` is globally `rateLimited` — size `cooldown` for page cadence.
  *
  *      Deploy / continuity thresholds: see `EligibilityCriteria` (defaults GK 361 / u21 181 /
@@ -277,10 +278,11 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
      * @notice Recompute weighted scores for a page; enqueue eligibles / lifecycle candidates.
      * @dev Sole write path for `weightedScoreWad`. Public (anyone may run the page).
      *      1) Replay domestic-league `Appearance[]` → score at `G_now` for every player on the page
-     *      2) Undeployed + eligible → deploy cohorts; deployed + below continuity → `toDiscontinue`
-     *      3) `deployDoppler.enqueueEligible` for deploy cohorts;
-     *         `manageLifecycle.enqueueLifecycle` for continuity failures
-     *      `groups.newTransfers` = DeployDoppler newTransfer / backFromLoan flag.
+     *      2) Undeployed + eligible → deploy cohorts
+     *         Deployed + below continuity → `toDiscontinue`
+     *         Deployed + `INACTIVE` + above continuity → `toReactivate`
+     *      3) `dopplerLocker.enqueueEligible` for deploy cohorts;
+     *         `transferLocker.enqueueLifecycle` for deactivate / reactivate
      *      Continuity uses GK/u21/outfield thresholds only (not the newTransfer ≥ 1 shortcut).
      */
     function verifyEligibility(uint256 offset, uint256 limit)
@@ -317,14 +319,25 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         uint256 outCount;
         uint256 ntCount;
         uint256 discCount;
+        uint256 reactCount;
 
-        // Pass 1: size deploy cohorts + discontinue set for this page.
+        // Pass 1: size deploy cohorts + lifecycle sets for this page.
         for (uint256 i = offset; i < end; ++i) {
             bytes32 playerId = _playerIds[i];
 
             if (playerSetRegistry.playerExists(playerId)) {
-                if (playerSetRegistry.getPlayerSet(playerId).status == PlayerStatus.INACTIVE) continue;
+                PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
                 (bool stillActive,) = _evaluateContinuity(playerId);
+
+                if (status == PlayerStatus.INACTIVE) {
+                    if (stillActive) {
+                        unchecked {
+                            ++reactCount;
+                        }
+                    }
+                    continue;
+                }
+
                 if (!stillActive) {
                     unchecked {
                         ++discCount;
@@ -360,21 +373,36 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         groups.outfield = new bytes32[](outCount);
         groups.newTransfers = new bytes32[](ntCount);
         groups.toDiscontinue = new bytes32[](discCount);
+        groups.toReactivate = new bytes32[](reactCount);
 
         uint256 gkIdx;
         uint256 u21Idx;
         uint256 outIdx;
         uint256 ntIdx;
         uint256 discIdx;
+        uint256 reactIdx;
         uint32[] memory discMins = new uint32[](discCount);
+        uint32[] memory reactMins = new uint32[](reactCount);
 
         // Pass 2: fill.
         for (uint256 i = offset; i < end; ++i) {
             bytes32 playerId = _playerIds[i];
 
             if (playerSetRegistry.playerExists(playerId)) {
-                if (playerSetRegistry.getPlayerSet(playerId).status == PlayerStatus.INACTIVE) continue;
+                PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
                 (bool stillActive, uint32 effectiveMins) = _evaluateContinuity(playerId);
+
+                if (status == PlayerStatus.INACTIVE) {
+                    if (!stillActive) continue;
+                    groups.toReactivate[reactIdx] = playerId;
+                    reactMins[reactIdx] = effectiveMins;
+                    unchecked {
+                        ++reactIdx;
+                    }
+                    emit Events.PlayerReactivateQueued(playerId, effectiveMins);
+                    continue;
+                }
+
                 if (stillActive) continue;
 
                 groups.toDiscontinue[discIdx] = playerId;
@@ -420,6 +448,9 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
             transferLocker.enqueueLifecycle(
                 groups.toDiscontinue, LifecycleReason.ContinuityUnderThreshold, discMins
             );
+        }
+        if (reactCount != 0) {
+            transferLocker.enqueueLifecycle(groups.toReactivate, LifecycleReason.Reactivate, reactMins);
         }
     }
 

@@ -8,13 +8,15 @@ import { LifecycleReason, PendingLifecycle } from "@base/global/types/LifecycleT
 
 /**
  * @title TransferLocker
- * @notice Waiting room for soft-inactivity candidates (mirrors DeployDoppler intake).
+ * @notice Waiting room for soft-inactivity / reactivation candidates (mirrors DopplerLocker).
  * @dev Flow:
- *      0) EligibilityVerifier enqueues continuity failures / league-leavers.
+ *      0) EligibilityVerifier enqueues continuity failures, league-leavers, or reactivations.
  *      1) Offchain / manual review (webhook + email — TBD) confirms or rejects.
- *      2) Confirmed → Automator → `PlayerSetRegistry.setStatus(INACTIVE)` (not wired yet).
+ *      2) Confirmed deactivate → Automator → `setStatus(INACTIVE)` (not wired yet).
+ *      3) Confirmed reactivate → Automator → restore prior active status (not wired yet).
  *
- *      Only the configured `eligibilityVerifier` may call `enqueueLifecycle`.
+ *      Deactivate and reactivate queues are independent so a prior deactivate enqueue
+ *      does not block a later reactivate enqueue (and vice versa).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -24,7 +26,10 @@ contract TransferLocker is ITransferLocker {
     address public eligibilityVerifier;
 
     PendingLifecycle[] private _pending;
-    mapping(bytes32 playerId => bool) private _queued;
+    /// @dev ContinuityUnderThreshold / LeftLeague — pending soft-inactive review.
+    mapping(bytes32 playerId => bool) private _queuedDeactivate;
+    /// @dev Reactivate — pending restore-from-INACTIVE review.
+    mapping(bytes32 playerId => bool) private _queuedReactivate;
 
     /// @notice One-time wire from EligibilityVerifier → this waiting room.
     function setEligibilityVerifier(address eligibilityVerifier_) external {
@@ -47,14 +52,21 @@ contract TransferLocker is ITransferLocker {
             revert Errors.LengthMismatch(length, effectiveMins.length);
         }
 
+        bool isReactivate = reason == LifecycleReason.Reactivate;
         uint256 added;
         for (uint256 i; i < length; ++i) {
             bytes32 playerId = playerIds[i];
-            if (playerId == bytes32(0) || _queued[playerId]) continue;
+            if (playerId == bytes32(0)) continue;
+
+            if (isReactivate) {
+                if (_queuedReactivate[playerId]) continue;
+                _queuedReactivate[playerId] = true;
+            } else {
+                if (_queuedDeactivate[playerId]) continue;
+                _queuedDeactivate[playerId] = true;
+            }
 
             uint32 mins = effectiveMins.length == 0 ? 0 : effectiveMins[i];
-
-            _queued[playerId] = true;
             _pending.push(
                 PendingLifecycle({ playerId: playerId, reason: reason, effectiveMins: mins })
             );
@@ -73,7 +85,13 @@ contract TransferLocker is ITransferLocker {
 
     /// @inheritdoc ITransferLocker
     function isQueued(bytes32 playerId) external view returns (bool) {
-        return _queued[playerId];
+        return _queuedDeactivate[playerId] || _queuedReactivate[playerId];
+    }
+
+    /// @inheritdoc ITransferLocker
+    function isQueuedFor(bytes32 playerId, LifecycleReason reason) external view returns (bool) {
+        if (reason == LifecycleReason.Reactivate) return _queuedReactivate[playerId];
+        return _queuedDeactivate[playerId];
     }
 
     /// @inheritdoc ITransferLocker
@@ -98,18 +116,30 @@ contract TransferLocker is ITransferLocker {
     }
 
     // -------------------------------------------------------------------------
-    //  Confirm inactivity — manual / gated (NOT public yet)
+    //  Confirm — manual / gated (NOT public yet)
     // -------------------------------------------------------------------------
 
     /**
      * After waiting-room review confirms soft-inactivity:
      * - Require still deployed and not already INACTIVE.
      * - Automator → PlayerSetRegistry.setStatus(INACTIVE).
-     * - Mark pending entry consumed (TBD storage shape).
+     * - Clear `_queuedDeactivate` for the player.
      *
-     * Access: gated (timelock / proposer) — mirror DeployDoppler deploy path.
+     * Access: gated (timelock / proposer) — mirror DopplerLocker deploy path.
      */
     function confirmInactive(/* playerId */) external {
         // gated: manual review + Automator setStatus(INACTIVE)
+    }
+
+    /**
+     * After waiting-room review confirms PBR reactivation:
+     * - Require status == INACTIVE and continuity still holds.
+     * - Automator → restore prior active status (typically GRADUATED).
+     * - Clear `_queuedReactivate` for the player.
+     *
+     * Access: gated (timelock / proposer).
+     */
+    function confirmReactivate(/* playerId */) external {
+        // gated: manual review + Automator setStatus(GRADUATED) / prior status
     }
 }

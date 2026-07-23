@@ -105,13 +105,15 @@ enum EligibilityBucket {
 }
 
 /// @notice Results from one `verifyEligibility` page.
-/// @dev Deploy cohorts (`goalkeepers`…`newTransfers`) → DeployDoppler waiting room.
-///      `toDiscontinue` → ManageLifecycle waiting room (continuity under-threshold).
+/// @dev Deploy cohorts (`goalkeepers`…`newTransfers`) → DopplerLocker waiting room.
+///      `toDiscontinue` / `toReactivate` → TransferLocker waiting room.
 struct EligibilityGroups {
     bytes32[] goalkeepers;
     bytes32[] under21;
     bytes32[] outfield;
     bytes32[] newTransfers;
-    /// @dev Deployed + not already `INACTIVE` + below GK/u21/outfield continuity threshold.
+    /// @dev Deployed + not `INACTIVE` + below GK/u21/outfield continuity threshold.
     bytes32[] toDiscontinue;
+    /// @dev Deployed + `INACTIVE` + back above GK/u21/outfield continuity threshold.
+    bytes32[] toReactivate;
 }

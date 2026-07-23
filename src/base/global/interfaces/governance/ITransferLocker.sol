@@ -5,14 +5,15 @@ import { LifecycleReason, PendingLifecycle } from "@base/global/types/LifecycleT
 
 /**
  * @title ITransferLocker
- * @notice Waiting-room intake for deployed players flagged for soft-inactivity.
- * @dev Mirrors `IDeployDoppler` / DeployDoppler waiting room. Actual `INACTIVE` writes
- *      happen later after manual review (Automator path), not at enqueue time.
+ * @notice Waiting-room intake for deployed players flagged for deactivate / reactivate.
+ * @dev Mirrors DopplerLocker waiting room. Actual status writes happen later after
+ *      manual review (Automator path), not at enqueue time.
  */
 interface ITransferLocker {
     /**
      * @notice Queue players for lifecycle review (same `reason` / parallel `effectiveMins`).
-     * @dev Called by `EligibilityVerifier` only. Skips zero ids and already-queued players.
+     * @dev Called by `EligibilityVerifier` only. Skips zero ids and already-queued players
+     *      for that direction (deactivate vs reactivate).
      *      `effectiveMins.length` must be 0 (treated as all zeros) or equal `playerIds.length`.
      */
     function enqueueLifecycle(
@@ -23,7 +24,11 @@ interface ITransferLocker {
 
     function pendingCount() external view returns (uint256);
 
+    /// @notice True if queued for deactivate and/or reactivate.
     function isQueued(bytes32 playerId) external view returns (bool);
+
+    /// @notice True if queued for the given reason's direction.
+    function isQueuedFor(bytes32 playerId, LifecycleReason reason) external view returns (bool);
 
     function pendingLifecycle(uint256 offset, uint256 limit)
         external

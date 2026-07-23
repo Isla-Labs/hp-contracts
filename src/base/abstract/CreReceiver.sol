@@ -19,6 +19,9 @@ import { ICreReceiver } from "@base/global/interfaces/data/ICreReceiver.sol";
  *      id / owner / name checks. Admin setters are `internal` so children can gate them with
  *      AccessControl / Ownable as they prefer (same pattern as `Oracle`'s `_setSubscriptionId`).
  *
+ *      Proxy-safe: children behind ERC-1967 proxies must call `__CreReceiver_init` from
+ *      `initialize` so `_forwarder` lands in proxy storage (not implementation storage).
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  * @custom:see https://docs.chain.link/cre/guides/workflow/using-evm-client/onchain-write/building-consumer-contracts
@@ -72,11 +75,15 @@ abstract contract CreReceiver is ICreReceiver, ERC165 {
     event ReportReceived(bytes32 indexed workflowId, address indexed workflowOwner, bytes2 reportId);
 
     // --------------------------------------------
-    //  Construction
+    //  Initialization (proxy-safe)
     // --------------------------------------------
 
-    /// @param forwarder_ Chainlink `KeystoneForwarder` for this chain (required; non-zero).
-    constructor(address forwarder_) {
+    /**
+     * @dev Sets the Keystone forwarder. Call from the child's `initialize` (proxy storage)
+     *      or from a non-proxy constructor that writes implementation storage intentionally.
+     * @param forwarder_ Chainlink `KeystoneForwarder` for this chain (required; non-zero).
+     */
+    function __CreReceiver_init(address forwarder_) internal {
         if (forwarder_ == address(0)) revert InvalidForwarderAddress();
         _forwarder = forwarder_;
         emit ForwarderAddressUpdated(address(0), forwarder_);

@@ -9,9 +9,9 @@ import { EligibilityGroups } from "@src/data/eligibility/types/EligibilityTypes.
  */
 interface IDeployDoppler {
     /**
-     * @notice Persist a page of eligible cohorts for later deploy formatting / final checks.
+     * @notice Persist a page of eligible deploy cohorts for later formatting / final checks.
      * @dev Called by `EligibilityVerifier` after score sync + cohort selection.
-     *      DeployDoppler parses `groups` independently (no shared mutable session).
+     *      Only deploy arrays are consumed (`goalkeepers`…`newTransfers`); `toDiscontinue` is ignored.
      */
     function enqueueEligible(EligibilityGroups calldata groups) external;
 }

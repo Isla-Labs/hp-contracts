@@ -14,6 +14,7 @@ import { DopplerTypes } from "@src/data/deployments/types/DopplerTypes.sol";
  * 0) Eligibility waiting room (from EligibilityVerifier)
  *    - `enqueueEligible` stores cohort-tagged playerIds for later deploy formatting.
  *    - Only the configured `eligibilityVerifier` may write.
+ *    - Consumes deploy cohorts only; `groups.toDiscontinue` is handled in EligibilityVerifier.
  *    - Name/symbol filled later (Chainlink Functions); see `DopplerTypes.PendingEligible`.
  *
  * 1) Initial market deployment (gated)

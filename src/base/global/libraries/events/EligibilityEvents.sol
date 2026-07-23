@@ -27,4 +27,12 @@ library EligibilityEvents {
     event SquadPlayerCreated(bytes32 indexed playerId, uint256 birthDate);
 
     event SquadFillPageUpdated(bytes32 indexed seasonId, uint16 previousPage, uint16 nextPage);
+
+    /// @notice Deployed market marked `INACTIVE` after falling under continuity threshold.
+    event PlayerDiscontinued(bytes32 indexed playerId, uint32 effectiveMins);
+
+    /// @notice New `TransparentUpgradeableProxy` for a league EligibilityVerifier.
+    event EligibilityVerifierProxyCreated(
+        address indexed proxy, bytes32 indexed leagueId, address implementation
+    );
 }

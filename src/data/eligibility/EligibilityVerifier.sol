@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
+import { RateLimit } from "@base/abstract/RateLimit.sol";
 import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
 import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
+import { IAutomator } from "@base/global/interfaces/governance/IAutomator.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
-import { Position } from "@base/global/types/PlayerSetTypes.sol";
+import { PlayerStatus, Position } from "@base/global/types/PlayerSetTypes.sol";
 import {
     Appearance,
     EligibilityBucket,
@@ -27,11 +31,19 @@ import {
     UNDER_21_AGE
 } from "@src/data/eligibility/types/EligibilityTypes.sol";
 
+struct SquadList {
+    bytes32 clubId; // HPID for contestantUuid
+    bytes32[] playerIds;
+}
+
 /**
- * @title EligibilityVerifier2
+ * @title EligibilityVerifier
  * @notice Squad-first eligibility store with a recency-weighted rolling minutes score.
- * @dev CRE report path: KeystoneForwarder → `onReport` → `_processReport`.
- *      Constructor pins `expectedWorkflowId` so only the squad-fill workflow may write.
+ * @dev Deploy behind `TransparentUpgradeableProxy`. Logic constructor only sets `RateLimit`
+ *      cooldown + disables initializers; all domain config is in `initialize`.
+ *
+ *      CRE report path: KeystoneForwarder → `onReport` → `_processReport`.
+ *      `initialize` pins `expectedWorkflowId` so only the squad-fill workflow may write.
  *
  *      Report ABI (encoded by CRE): `SquadFillReport` — same tuple layout as the struct fields.
  *      New players get `earliestSeasonStartYear = seasonStartYear` (set once at create).
@@ -42,29 +54,42 @@ import {
  *        (`finalRound` from TournamentRegistry; tx-local memory cache during recompute)
  *      `recordAppearances` only stores raw minutes / Appearance[]; it does not touch scores.
  *      The offchain eligibility runner pages `verifyEligibility(offset, limit)`, which recomputes
- *      each player on the page against `G_now`, enqueues cohorts to `DeployDoppler`, and returns them.
+ *      each player on the page against `G_now`, then:
+ *        - undeployed + above threshold → enqueue deploy cohorts to `DeployDoppler`
+ *        - deployed + below continuity threshold → discontinue via `Automator` →
+ *          `PlayerSetRegistry.setStatus(INACTIVE)`
+ *      `verifyEligibility` is globally `rateLimited` — size `cooldown` for page cadence.
  *
- *      Cohorts / thresholds (effective minutes ≈ stored score / 1e18):
- *        newTransfer / backFromLoan (DeployDoppler flag): earliestSeasonStartYear == currentSeasonYear (≥ 1)
+ *      Deploy thresholds (effective minutes ≈ stored score / 1e18):
+ *        newTransfer / backFromLoan: earliestSeasonStartYear == currentSeasonYear (≥ 1)
  *        GK ≥ 361, under-21 ≥ 181, else ≥ 901.
+ *      Continuity (already deployed): same GK / u21 / outfield thresholds (no newTransfer shortcut).
+ *
+ *      Privileged registry writes go through `Automator` (proxy holds `CATEGORY_THREE`
+ *      on Automator; Automator holds `CATEGORY_THREE` on `PlayerSetRegistry`).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract EligibilityVerifier is CreReceiver {
+contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
 
-    IPlayerSetRegistry public immutable playerSetRegistry;
-    ITournamentRegistry public immutable tournamentRegistry;
-    IDeployDoppler public immutable deployDoppler;
+    IPlayerSetRegistry public playerSetRegistry;
+    ITournamentRegistry public tournamentRegistry;
+    IDeployDoppler public deployDoppler;
+    /// @notice Cat-3 relay for privileged writes (e.g. `PlayerSetRegistry.setStatus`).
+    IAutomator public automator;
 
     /// @dev Domestic-league `tournamentId` whose calendars count toward the rolling score.
-    bytes32 public immutable leagueId;
+    bytes32 public leagueId;
 
     /// @dev Earliest season start year used as G-index origin (e.g. 2024).
-    uint16 public immutable baseYear;
+    uint16 public baseYear;
+
+    /// @notice Sole address allowed to call `recordAppearances` (PpmVerifier).
+    address public ppmVerifier;
 
     /// @dev Max distinct season years cached in one recompute (memory).
     uint256 private constant _FINAL_ROUND_CACHE_CAP = 16;
@@ -87,45 +112,57 @@ contract EligibilityVerifier is CreReceiver {
     /// @dev Timestamp when `seasonId` last transitioned to `SQUAD_FILL_PAGE_DONE`.
     mapping(bytes32 seasonId => uint256) private _lastSquadFillSweepAt;
 
-    /// @notice Sole address allowed to call `recordAppearances` (PpmVerifier).
-    address public immutable ppmVerifier;
-
     // --------------------------------------------
-    //  Construction
+    //  Construction / initialization
     // --------------------------------------------
 
-    /// @param forwarder_ Chainlink `KeystoneForwarder` for this chain.
-    /// @param expectedWorkflowId_ Squad-fill CRE workflow id (required; non-zero).
-    /// @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
-    /// @param tournamentRegistry_ Season calendars + treasury lookup for the league clock.
-    /// @param ppmVerifier_ Authorized minutes ingest caller (PPMVerifier; required; non-zero).
-    /// @param deployDoppler_ Waiting-room receiver for eligible cohorts (required; non-zero).
-    /// @param leagueId_ Domestic-league tournament id (score filter + clock source).
-    /// @param baseYear_ G-index origin season start year.
-    constructor(
+    /// @param cooldown_ Global cooldown for `verifyEligibility` (implementation immutable).
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(uint256 cooldown_) RateLimit(cooldown_) {
+        _disableInitializers();
+    }
+
+    /**
+     * @notice Initialize proxy storage (call via `TransparentUpgradeableProxy` constructor data).
+     * @param forwarder_ Chainlink `KeystoneForwarder` for this chain.
+     * @param expectedWorkflowId_ Squad-fill CRE workflow id (required; non-zero).
+     * @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
+     * @param tournamentRegistry_ Season calendars + treasury lookup for the league clock.
+     * @param ppmVerifier_ Authorized minutes ingest caller (PPMVerifier; required; non-zero).
+     * @param deployDoppler_ Waiting-room receiver for eligible cohorts (required; non-zero).
+     * @param automator_ Cat-3 `Automator` relay (this proxy must be granted `CATEGORY_THREE` on it).
+     * @param leagueId_ Domestic-league tournament id (score filter + clock source).
+     * @param baseYear_ G-index origin season start year.
+     */
+    function initialize(
         address forwarder_,
         bytes32 expectedWorkflowId_,
         address playerSetRegistry_,
         address tournamentRegistry_,
         address ppmVerifier_,
         address deployDoppler_,
+        address automator_,
         bytes32 leagueId_,
         uint16 baseYear_
-    ) CreReceiver(forwarder_) {
+    ) external initializer {
         if (expectedWorkflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
         if (
             ppmVerifier_ == address(0) || playerSetRegistry_ == address(0)
                 || tournamentRegistry_ == address(0) || deployDoppler_ == address(0)
+                || automator_ == address(0)
         ) {
             revert Errors.ZeroAddress();
         }
         if (leagueId_ == bytes32(0) || baseYear_ == 0) revert Errors.ZeroId();
 
+        __CreReceiver_init(forwarder_);
         _setExpectedWorkflowId(expectedWorkflowId_);
+
         ppmVerifier = ppmVerifier_;
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         deployDoppler = IDeployDoppler(deployDoppler_);
+        automator = IAutomator(automator_);
         leagueId = leagueId_;
         baseYear = baseYear_;
     }
@@ -174,14 +211,20 @@ contract EligibilityVerifier is CreReceiver {
     // --------------------------------------------
 
     /**
-     * @notice Recompute weighted scores for a page, enqueue eligible cohorts to DeployDoppler, return them.
+     * @notice Recompute weighted scores for a page; deploy new markets / discontinue under-threshold ones.
      * @dev Sole write path for `weightedScoreWad`. Public (anyone may run the page).
      *      1) Replay domestic-league `Appearance[]` → score at `G_now` for every player on the page
-     *      2) Cohort-check (skip missing DOB / already-deployed)
-     *      3) `deployDoppler.enqueueEligible(groups)` — waiting-room write
+     *      2) Undeployed + eligible → deploy cohorts; deployed + below continuity → `toDiscontinue`
+     *      3) `deployDoppler.enqueueEligible` for deploy cohorts;
+     *         discontinue via `automator.executeAutomation` → `setStatus(INACTIVE)`
      *      `groups.newTransfers` = DeployDoppler newTransfer / backFromLoan flag.
+     *      Continuity uses GK/u21/outfield thresholds only (not the newTransfer ≥ 1 shortcut).
      */
-    function verifyEligibility(uint256 offset, uint256 limit) external returns (EligibilityGroups memory groups) {
+    function verifyEligibility(uint256 offset, uint256 limit)
+        external
+        rateLimited
+        returns (EligibilityGroups memory groups)
+    {
         uint256 total = _playerIds.length;
         if (offset >= total || limit == 0) {
             return groups;
@@ -210,13 +253,24 @@ contract EligibilityVerifier is CreReceiver {
         uint256 u21Count;
         uint256 outCount;
         uint256 ntCount;
+        uint256 discCount;
 
-        // Pass 1: size cohorts for this page.
+        // Pass 1: size deploy cohorts + discontinue set for this page.
         for (uint256 i = offset; i < end; ++i) {
             bytes32 playerId = _playerIds[i];
-            if (playerSetRegistry.playerExists(playerId)) continue;
 
-            (bool eligible, EligibilityBucket bucket,) = _evaluate(playerId);
+            if (playerSetRegistry.playerExists(playerId)) {
+                if (playerSetRegistry.getPlayerSet(playerId).status == PlayerStatus.INACTIVE) continue;
+                (bool stillActive,) = _evaluateContinuity(playerId);
+                if (!stillActive) {
+                    unchecked {
+                        ++discCount;
+                    }
+                }
+                continue;
+            }
+
+            (bool eligible, EligibilityBucket bucket,) = _evaluateForDeploy(playerId);
             if (!eligible) continue;
 
             if (bucket == EligibilityBucket.Goalkeeper) {
@@ -242,18 +296,33 @@ contract EligibilityVerifier is CreReceiver {
         groups.under21 = new bytes32[](u21Count);
         groups.outfield = new bytes32[](outCount);
         groups.newTransfers = new bytes32[](ntCount);
+        groups.toDiscontinue = new bytes32[](discCount);
 
         uint256 gkIdx;
         uint256 u21Idx;
         uint256 outIdx;
         uint256 ntIdx;
+        uint256 discIdx;
 
         // Pass 2: fill.
         for (uint256 i = offset; i < end; ++i) {
             bytes32 playerId = _playerIds[i];
-            if (playerSetRegistry.playerExists(playerId)) continue;
 
-            (bool eligible, EligibilityBucket bucket,) = _evaluate(playerId);
+            if (playerSetRegistry.playerExists(playerId)) {
+                if (playerSetRegistry.getPlayerSet(playerId).status == PlayerStatus.INACTIVE) continue;
+                (bool stillActive, uint32 effectiveMins) = _evaluateContinuity(playerId);
+                if (stillActive) continue;
+
+                groups.toDiscontinue[discIdx] = playerId;
+                unchecked {
+                    ++discIdx;
+                }
+                _discontinue(playerId);
+                emit Events.PlayerDiscontinued(playerId, effectiveMins);
+                continue;
+            }
+
+            (bool eligible, EligibilityBucket bucket,) = _evaluateForDeploy(playerId);
             if (!eligible) continue;
 
             if (bucket == EligibilityBucket.Goalkeeper) {
@@ -279,7 +348,7 @@ contract EligibilityVerifier is CreReceiver {
             }
         }
 
-        // Pass 3: hand off to DeployDoppler waiting room (skip empty pages).
+        // Pass 3: hand off deploy cohorts to DeployDoppler waiting room (skip empty pages).
         if (gkCount + u21Count + outCount + ntCount != 0) {
             deployDoppler.enqueueEligible(groups);
         }
@@ -416,13 +485,22 @@ contract EligibilityVerifier is CreReceiver {
     //  Internal — eligibility
     // --------------------------------------------
 
+    /// @dev Soft-discontinue via Automator relay (`msg.sender` on registry = Automator).
+    function _discontinue(bytes32 playerId) private {
+        automator.executeAutomation(
+            address(playerSetRegistry),
+            0,
+            abi.encodeCall(IPlayerSetRegistry.setStatus, (playerId, PlayerStatus.INACTIVE))
+        );
+    }
+
     /**
-     * @dev Uses stored `weightedScoreWad` (fresh after pass 0 of `verifyEligibility`).
+     * @dev Deploy path. Uses stored `weightedScoreWad` (fresh after pass 0).
      *      missing DOB → false;
      *      newTransfer/backFromLoan (earliestSeasonStartYear == current) → ≥ 1;
      *      GK → 361; age < 21 → 181; else → 901.
      */
-    function _evaluate(bytes32 playerId)
+    function _evaluateForDeploy(bytes32 playerId)
         private
         view
         returns (bool eligible, EligibilityBucket bucket, uint32 effectiveMins)
@@ -432,32 +510,58 @@ contract EligibilityVerifier is CreReceiver {
             return (false, EligibilityBucket.None, 0);
         }
 
-        // effective minutes stay well below uint32 max
         // forge-lint: disable-next-line(unsafe-typecast)
         effectiveMins = uint32(store.weightedScoreWad / SCORE_WAD);
-        uint16 currentYear = _currentSeasonYear();
 
         // DeployDoppler flag: newTransfer / backFromLoan for the current season.
-        if (store.earliestSeasonStartYear == currentYear) {
+        if (store.earliestSeasonStartYear == _currentSeasonYear()) {
             bucket = EligibilityBucket.NewTransfer;
             eligible = effectiveMins >= THRESHOLD_NEW_TRANSFER;
             return (eligible, bucket, effectiveMins);
         }
 
+        (eligible, bucket) = _continuityGate(store, effectiveMins);
+    }
+
+    /**
+     * @dev Continuity path for already-deployed markets (no newTransfer ≥ 1 shortcut).
+     *      missing DOB → false; GK → 361; age < 21 → 181; else → 901.
+     */
+    function _evaluateContinuity(bytes32 playerId)
+        private
+        view
+        returns (bool stillActive, uint32 effectiveMins)
+    {
+        MinutesStore storage store = _minutesStore[playerId];
+        if (store.birthDate == 0) {
+            return (false, 0);
+        }
+
+        // forge-lint: disable-next-line(unsafe-typecast)
+        effectiveMins = uint32(store.weightedScoreWad / SCORE_WAD);
+        (stillActive,) = _continuityGate(store, effectiveMins);
+    }
+
+    /// @dev Shared GK / u21 / outfield threshold gate.
+    function _continuityGate(MinutesStore storage store, uint32 effectiveMins)
+        private
+        view
+        returns (bool ok, EligibilityBucket bucket)
+    {
         if (store.expectedPosition == Position.GK) {
             bucket = EligibilityBucket.Goalkeeper;
-            eligible = effectiveMins >= THRESHOLD_GK;
-            return (eligible, bucket, effectiveMins);
+            ok = effectiveMins >= THRESHOLD_GK;
+            return (ok, bucket);
         }
 
         if (_ageYears(store.birthDate) < UNDER_21_AGE) {
             bucket = EligibilityBucket.Under21;
-            eligible = effectiveMins >= THRESHOLD_UNDER_21;
-            return (eligible, bucket, effectiveMins);
+            ok = effectiveMins >= THRESHOLD_UNDER_21;
+            return (ok, bucket);
         }
 
         bucket = EligibilityBucket.Outfield;
-        eligible = effectiveMins >= THRESHOLD_OUTFIELD;
+        ok = effectiveMins >= THRESHOLD_OUTFIELD;
     }
 
     /// @dev Whole years since unix DOB; leap years are ignored (same spirit as a simple day-count age).

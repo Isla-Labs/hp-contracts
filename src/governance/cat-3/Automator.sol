@@ -5,6 +5,7 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
 import { GovernanceEvents as Events } from "@base/global/libraries/events/GovernanceEvents.sol";
 import { GovernanceErrors as Errors } from "@base/global/libraries/errors/GovernanceErrors.sol";
+import { IAutomator } from "@base/global/interfaces/governance/IAutomator.sol";
 
 /**
  * @title Automator
@@ -12,25 +13,34 @@ import { GovernanceErrors as Errors } from "@base/global/libraries/errors/Govern
  * @dev Allowlisted automators (`CATEGORY_THREE`) execute arbitrary calls as this contract.
  *      Targets see `msg.sender == address(this)`. `ConstitutionalTimelock` (`CATEGORY_ONE`)
  *      may add/remove automators. Aragon DAO holds `DEFAULT_ADMIN_ROLE`.
+ *
+ *      Initial `CATEGORY_THREE` operators: Doppler, EligibilityVerifier, matchweeks.
+ *      `PlayerSetRegistry` / treasuries grant this contract `CATEGORY_THREE` so relays succeed.
  */
-contract Automator is AccessControl {
+contract Automator is AccessControl, IAutomator {
     /**
      * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
      * @param constitutional_ `ConstitutionalTimelock` — `CATEGORY_ONE` (add/remove automators).
      * @param doppler_ Initial Doppler automator — `CATEGORY_THREE`.
-     * @param lifecycles_ Initial lifecycle automator — `CATEGORY_THREE`.
+     * @param eligibilityVerifier_ `EligibilityVerifier` — `CATEGORY_THREE` (lifecycle / discontinue).
      * @param matchweeks_ Initial matchweek automator — `CATEGORY_THREE`.
      */
-    constructor(address dao_, address constitutional_, address doppler_, address lifecycles_, address matchweeks_) {
+    constructor(
+        address dao_,
+        address constitutional_,
+        address doppler_,
+        address eligibilityVerifier_,
+        address matchweeks_
+    ) {
         if (
-            dao_ == address(0) || constitutional_ == address(0) || doppler_ == address(0) || lifecycles_ == address(0)
-                || matchweeks_ == address(0)
+            dao_ == address(0) || constitutional_ == address(0) || doppler_ == address(0)
+                || eligibilityVerifier_ == address(0) || matchweeks_ == address(0)
         ) revert Errors.ZeroAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
         _grantRole(Roles.CATEGORY_ONE, constitutional_);
         _grantRole(Roles.CATEGORY_THREE, doppler_);
-        _grantRole(Roles.CATEGORY_THREE, lifecycles_);
+        _grantRole(Roles.CATEGORY_THREE, eligibilityVerifier_);
         _grantRole(Roles.CATEGORY_THREE, matchweeks_);
     }
 
@@ -58,6 +68,7 @@ contract Automator is AccessControl {
      * @param data Calldata for `target`.
      * @return result Return data from the call.
      */
+    /// @inheritdoc IAutomator
     function executeAutomation(address target, uint256 value, bytes calldata data)
         external
         payable

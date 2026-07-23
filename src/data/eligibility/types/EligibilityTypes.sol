@@ -90,11 +90,14 @@ enum EligibilityBucket {
     NewTransfer
 }
 
-/// @notice Eligible, undeployed players grouped by cohort (from one `verifyEligibility` page).
-/// @dev `newTransfers` carries the DeployDoppler newTransfer / backFromLoan flag.
+/// @notice Results from one `verifyEligibility` page.
+/// @dev Deploy cohorts (`goalkeepers`…`newTransfers`) → DeployDoppler waiting room.
+///      `toDiscontinue` → already-deployed markets under continuity threshold (soft-inactive).
 struct EligibilityGroups {
     bytes32[] goalkeepers;
     bytes32[] under21;
     bytes32[] outfield;
     bytes32[] newTransfers;
+    /// @dev Deployed + not already `INACTIVE` + below GK/u21/outfield continuity threshold.
+    bytes32[] toDiscontinue;
 }

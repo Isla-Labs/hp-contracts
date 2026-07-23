@@ -10,12 +10,8 @@ import { IAutomator } from "@base/global/interfaces/governance/IAutomator.sol";
 /**
  * @title Automator
  * @notice Cat-3 privileged caller for automated / data-driven protocol actions.
- * @dev Allowlisted automators (`CATEGORY_THREE`) execute arbitrary calls as this contract.
- *      Targets see `msg.sender == address(this)`. `ConstitutionalTimelock` (`CATEGORY_ONE`)
- *      may add/remove automators. Aragon DAO holds `DEFAULT_ADMIN_ROLE`.
- *
- *      Initial `CATEGORY_THREE` operators: Doppler, EligibilityVerifier, matchweeks.
- *      `PlayerSetRegistry` / treasuries grant this contract `CATEGORY_THREE` so relays succeed.
+ * @dev Allowlisted `CATEGORY_THREE` operators call `executeAutomation`; targets see this contract
+ *      as `msg.sender`. See `../README.md` for the cat-1 / cat-2 / cat-3 privilege model.
  */
 contract Automator is AccessControl, IAutomator {
     /**

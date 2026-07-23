@@ -7,13 +7,7 @@ import { GovernanceErrors as Errors } from "@base/global/libraries/errors/Govern
 /**
  * @title MaintenanceTimelock
  * @notice Cat-2 short-delay executor for standard manual upkeep (sweeps, pause/resume, status fixes).
- * @dev Same shape as `ConstitutionalTimelock`: Aragon DAO is sole proposer/canceller; open execution
- *      after `minDelay`. Multisig / TokenVoting reach this via `DAO.execute` → `schedule`.
- *      Targets see `msg.sender == address(this)`.
- *
- *      Wire this contract as holder of maintenance / CATEGORY_TWO roles on protocol contracts.
- *      Not for upgrades, fee-split constitution, or beacon admin — those stay on cat-1.
- *      Automation stays on cat-3 (`Automator`).
+ * @dev Thin OZ `TimelockController`. See `../README.md` for the cat-1 / cat-2 / cat-3 privilege model.
  */
 contract MaintenanceTimelock is TimelockController {
     /// @notice Default ops notice window (shorter than constitutional).

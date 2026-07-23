@@ -7,17 +7,7 @@ import { GovernanceErrors as Errors } from "@base/global/libraries/errors/Govern
 /**
  * @title ConstitutionalTimelock
  * @notice Cat-1 long-delay executor for upgrades, fee splits, and other constitutional actions.
- * @dev Thin OZ `TimelockController`. The Aragon DAO is the sole proposer (and canceller). Multisig /
- *      TokenVoting / VE reach this contract only via `DAO.execute` → `schedule` / `scheduleBatch`.
- *      After `minDelay`, anyone may `execute` / `executeBatch` (`EXECUTOR_ROLE` on `address(0)`).
- *      Targets see `msg.sender == address(this)`.
- *
- *      Wire this contract as:
- *      - `UpgradeableBeacon` owner / Transparent `ProxyAdmin` owner / UUPS upgrade authority
- *      - Holder of constitutional / CATEGORY_ONE roles on protocol contracts
- *
- *      Day-one: `admin` = DAO for bootstrap; later renounce so role/delay changes go through the
- *      timelock itself. Ops upkeep is cat-2; automation is cat-3 (`Automator`).
+ * @dev Thin OZ `TimelockController`. See `../README.md` for the cat-1 / cat-2 / cat-3 privilege model.
  */
 contract ConstitutionalTimelock is TimelockController {
     /// @notice Default constitutional notice window.

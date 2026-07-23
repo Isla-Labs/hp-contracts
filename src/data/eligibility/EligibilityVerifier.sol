@@ -34,35 +34,8 @@ import {
 /**
  * @title EligibilityVerifier
  * @notice Squad-first eligibility store with a recency-weighted rolling minutes score.
- * @dev Deploy behind `TransparentUpgradeableProxy`. Logic constructor only sets `RateLimit`
- *      cooldown + disables initializers; all domain config is in `initialize`.
- *      Extends `EligibilityCriteria` — cohort thresholds are CATEGORY_ONE updatable.
- *
- *      CRE report path: KeystoneForwarder → `onReport` → `_processReport`.
- *      `initialize` pins `expectedWorkflowId` so only the squad-fill workflow may write.
- *
- *      Report ABI (encoded by CRE): `SquadFillReport` — same tuple layout as the struct fields.
- *      New players get `earliestSeasonStartYear = seasonStartYear` (set once at create).
- *      Optional `metaPlayerIds` / `names` / `symbols` fill `MinutesStore` metadata (first write only).
- *      Daily-active reports also set `clubId` + `squadPlayerIds` to overwrite `SquadList` and
- *      track league membership; at season DONE, players with no club are soft-discontinued.
- *
- *      Rolling score (domestic league calendars only) — ringfenced to `verifyEligibility`:
- *        score = Σ mins_i * λ^(G_now - G_i), λ = 0.97
- *        G(year, round) = Σ finalRound(y) for y in [baseYear, year) + round
- *        (`finalRound` from TournamentRegistry; tx-local memory cache during recompute)
- *      `recordAppearances` only stores raw minutes / Appearance[]; it does not touch scores.
- *      The offchain eligibility runner pages `verifyEligibility(offset, limit)`, which recomputes
- *      each player on the page against `G_now`, then:
- *        - undeployed + above threshold → enqueue deploy cohorts to `DopplerLocker`
- *        - deployed + below continuity → enqueue deactivate to `TransferLocker`
- *        - deployed + `INACTIVE` + back above continuity → enqueue reactivate to `TransferLocker`
- *      League-leavers from CRE membership DONE also enqueue deactivate to `TransferLocker`.
- *      Actual status writes happen later in TransferLocker (waiting room + review).
- *      `verifyEligibility` is globally `rateLimited` — size `cooldown` for page cadence.
- *
- *      Deploy / continuity thresholds: see `EligibilityCriteria` (defaults GK 361 / u21 181 /
- *      outfield 901 / newTransfer 1; continuity omits the newTransfer shortcut).
+ * @dev Deploy behind `TransparentUpgradeableProxy`. See `README.md` in this directory for
+ *      CRE report shape, score formula, thresholds, and DopplerLocker / TransferLocker routing.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co

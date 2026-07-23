@@ -49,11 +49,7 @@ See [`src/data/eligibility/README.md`](./src/data/eligibility/README.md) for eli
 
 ### Markets & vaults
 
-- **FeeRouter / PbrFeeHub** — trading fee routing into rewards
-- **PbrTreasury / PlayerVault / StakedToken** — matchweek distribution and staking
-- **DopplerLocker / TransferLocker** — deploy and lifecycle waiting rooms
-- **PlayerSetRegistry** — token / Doppler / vault / status per player
-- **TournamentRegistry** — seasons, calendars, treasury wiring
+Trading fees flow through `FeeRouter` / `PbrFeeHub` into `PbrTreasury`, which distributes matchweek yield to `PlayerVault` / `StakedToken` stakers. `DopplerLocker` and `TransferLocker` are the deploy and lifecycle waiting rooms; `PlayerSetRegistry` and `TournamentRegistry` are the canonical indexes for player markets and tournament topology.
 
 ## Features
 

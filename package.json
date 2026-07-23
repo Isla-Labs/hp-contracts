@@ -3,6 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "deployments:history": "bun run ./deployments/cli.ts --output history"
+    "deployments:history": "bun run ./deployments/cli.ts --output history",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "bun-types": "latest",
+    "typescript": "^7.0.2"
   }
 }

@@ -33,26 +33,25 @@ See [`src/data/eligibility/README.md`](./src/data/eligibility/README.md) for thr
 
 ## Modules
 
-### Access (`src/governance/access`)
+HighPotential’s onchain surface splits into governance, CRE data intake, and markets/vaults (plus registries). Each area has a clear privilege or write path so automation, DAO proposals, and user staking do not collide.
+
+### Governance
 
 Three-tier privilege stack: cat-1 `ConstitutionalTimelock` (7d), cat-2 `MaintenanceTimelock` (1d), cat-3 `Automator`. Aragon DAO proposes into timelocks; keepers relay through Automator.
 
 See [`src/governance/access/README.md`](./src/governance/access/README.md).
 
-### Eligibility (`src/data/eligibility`)
+### Data
 
-Squad-first store, CRE squad-fill intake, weighted minutes score, handoff to DopplerLocker (new markets) and TransferLocker (deactivate / reactivate).
+CRE-backed onchain data plane: eligibility (squad-fill, weighted minutes, DopplerLocker / TransferLocker handoff), matchweeks (fixture commitments, round apply), and PBR stats intake.
 
-See [`src/data/eligibility/README.md`](./src/data/eligibility/README.md).
+See [`src/data/eligibility/README.md`](./src/data/eligibility/README.md) for eligibility thresholds and cohort routing.
 
 ### Markets & vaults
 
 - **FeeRouter / PbrFeeHub** — trading fee routing into rewards
 - **PbrTreasury / PlayerVault / StakedToken** — matchweek distribution and staking
 - **DopplerLocker / TransferLocker** — deploy and lifecycle waiting rooms
-
-### Registries
-
 - **PlayerSetRegistry** — token / Doppler / vault / status per player
 - **TournamentRegistry** — seasons, calendars, treasury wiring
 
@@ -69,46 +68,13 @@ See [`src/data/eligibility/README.md`](./src/data/eligibility/README.md).
 | Area | Examples | Description |
 |------|----------|-------------|
 | Access | `ConstitutionalTimelock`, `MaintenanceTimelock`, `Automator` | Privilege stack |
-| Eligibility | `EligibilityVerifier`, `EligibilityCriteria` | Squad store + score + cohort handoff |
+| Data | `EligibilityVerifier`, `FixtureCommitment`, `RoundManager` | CRE intake, eligibility, matchweeks |
 | Deploy / lifecycle | `DopplerLocker`, `TransferLocker` | Waiting rooms for markets and status |
 | Markets | `FeeRouter`, `PbrFeeHub` | Fee collection and hub splits |
 | Vaults | `PbrTreasury`, `PlayerVault`, `StakedToken` | Rewards and staking |
 | Registries | `PlayerSetRegistry`, `TournamentRegistry` | Canonical onchain indexes |
 
 Latest deployments can be found [here](./Deployments.md) and historical deployment logs can be found in the [deployments](./deployments/) folder.
-
-## Protocol access vs. API access
-
-These contracts are the protocol. Interacting with them onchain (directly, via a self-hosted UI, MetaMask/viem, or any other client) is not gated by HighPotential middleware credentials.
-
-**The public HTTP API (`api.highpotential.io`) exposes free, rate-limited data reads and authenticated account/exchange surfaces.** Calling that API (or forking the UI that uses it) is not a license to use the protocol beyond what the contracts and applicable law / product Terms already allow. Programmatic trading credentials, when issued, are separate secret keys for server-side use — not browser-visible deployment keys.
-
-## Getting Started
-
-Install Foundry: `curl -L https://foundry.paradigm.xyz | bash && source ~/.bashrc && foundryup`
-
-```bash
-forge build
-forge test
-forge fmt
-```
-
-## Deployment Instructions
-
-Core singletons are upgradeable (`TransparentUpgradeableProxy`). Bootstrap uses `InitGuard` as a temporary implementation so proxy addresses can be reserved before real implementations (and immutables) are wired. Each proxy's `ProxyAdmin` is owned by the deployer during bootstrap, then transferred to `ConstitutionalTimelock`.
-
-```bash
-# Copy .env.example to .env and set PRIVATE_KEY, RPC URLs, API keys, DAO_ADDRESS
-cp .env.example .env
-
-# Base Sepolia (DAO_ADDRESS optional — defaults to deployer)
-make deploy-base-sepolia
-
-# Base mainnet (DAO_ADDRESS required)
-make deploy-base
-```
-
-`DeployAll` currently deploys the core stack: InitGuard, timelocks, Automator, DopplerLocker, TransferLocker, and upgradeable TournamentRegistry / PlayerSetRegistry / FixtureCommitment / RoundManager. Factories, EligibilityVerifier, DeployTournament, and market beacons are follow-on scripts.
 
 ## Blueprint
 

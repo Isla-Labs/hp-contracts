@@ -139,7 +139,28 @@ deployments/        — history logs + cli.ts
 
 ## Attribution
 
-HighPotential builds on the [Doppler](https://github.com/whetstoneresearch/doppler) Protocol for liquidity bootstrapping and migration ([docs](https://docs.doppler.lol/), [whitepaper](https://github.com/whetstoneresearch/docs/blob/main/whitepapers/doppler/Dutch_auction_Dynamic_Bonding_Curves.pdf)).
+### Doppler
+
+HighPotential uses the [Doppler](https://github.com/whetstoneresearch/doppler) Protocol for liquidity bootstrapping and migration into Uniswap V4. Player markets launch through Doppler’s Airlock / initializer path, then graduate to concentrated liquidity once bonding conditions are met.
+
+We integrate a **later Multicurve** release of Doppler (not the original single Dutch-auction bonding curve). Multicurve lets launches seed multiple contiguous price curves in one pool — the shape HighPotential uses for shared market-launch parameters. For the composable upstream protocol, see the canonical [Doppler](https://github.com/whetstoneresearch/doppler) repository.
+
+Further reading:
+
+- [Doppler documentation](https://docs.doppler.lol/)
+- [Multicurve overview (PDF)](https://www.doppler.lol/multicurve.pdf)
+- [Multicurve examples](https://docs.doppler.lol/reference/examples/multicurve)
+- Original dynamic bonding-curve [whitepaper](https://github.com/whetstoneresearch/docs/blob/main/whitepapers/doppler/Dutch_auction_Dynamic_Bonding_Curves.pdf) (pre-Multicurve)
+
+### Chainlink Runtime Environment (CRE)
+
+Onchain player / matchweek data is delivered through the [Chainlink Runtime Environment (CRE)](https://docs.chain.link/cre): offchain workflows produce signed Keystone reports that `KeystoneForwarder` routes into HighPotential consumers (`CreReceiver` → e.g. `EligibilityVerifier`, fixture / PBR paths). CRE replaces the older Functions request/fulfill pull model with a push-based report consumer interface (`IReceiver.onReport`).
+
+Further reading:
+
+- [CRE documentation](https://docs.chain.link/cre)
+- [Building CRE consumer contracts](https://docs.chain.link/cre/guides/workflow/using-evm-client/onchain-write/building-consumer-contracts)
+- [chainlink-evm CRE contracts](https://github.com/smartcontractkit/chainlink-evm/tree/develop/contracts/cre) (`IReceiver`, `KeystoneForwarder`)
 
 ## Security
 

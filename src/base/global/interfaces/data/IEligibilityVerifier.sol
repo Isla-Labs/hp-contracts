@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { IDopplerLocker } from "@base/global/interfaces/governance/IDopplerLocker.sol";
-import { ITransferLocker } from "@base/global/interfaces/governance/ITransferLocker.sol";
-import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
-import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
-import { Appearance, EligibilityGroups, MinutesStore, SquadList } from "@base/global/types/data/EligibilityTypes.sol";
+import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
+import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
+import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { Appearance, EligibilityGroups, MinutesStore, SquadList } from "@types/data/EligibilityTypes.sol";
 
 /**
  * @title IEligibilityVerifier

@@ -4,9 +4,9 @@ pragma solidity ^0.8.34;
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 
-import { MarketsErrors as Errors } from "@base/global/libraries/errors/markets/MarketsErrors.sol";
-import { MarketsEvents as Events } from "@base/global/libraries/events/markets/MarketsEvents.sol";
-import { IPbrFeeHubFactory } from "@base/global/interfaces/markets/factories/IPbrFeeHubFactory.sol";
+import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
+import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
+import { IPbrFeeHubFactory } from "@interfaces/markets/factories/IPbrFeeHubFactory.sol";
 import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
 
 /**

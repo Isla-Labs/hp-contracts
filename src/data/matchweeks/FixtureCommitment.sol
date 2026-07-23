@@ -4,11 +4,11 @@ pragma solidity ^0.8.34;
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
-import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { MatchweekErrors as Errors } from "@base/global/libraries/errors/data/MatchweekErrors.sol";
-import { MatchweekEvents as Events } from "@base/global/libraries/events/data/MatchweekEvents.sol";
-import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
-import { IFixtureCommitment } from "@base/global/interfaces/data/IFixtureCommitment.sol";
+import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+import { MatchweekErrors as Errors } from "@errors/data/MatchweekErrors.sol";
+import { MatchweekEvents as Events } from "@events/data/MatchweekEvents.sol";
+import { RoundSchedule } from "@types/TournamentTypes.sol";
+import { IFixtureCommitment } from "@interfaces/data/IFixtureCommitment.sol";
 import { DigestSource, FixtureDigest } from "@src/data/matchweeks/types/MatchweekTypes.sol";
 
 /**

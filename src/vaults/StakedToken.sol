@@ -4,8 +4,8 @@ pragma solidity ^0.8.34;
 import { ERC20 } from "@openzeppelin/token/ERC20/ERC20.sol";
 import { ERC20Permit } from "@openzeppelin/token/ERC20/extensions/ERC20Permit.sol";
 
-import { VaultsErrors as Errors } from "@base/global/libraries/errors/vaults/VaultsErrors.sol";
-import { VaultsEvents as Events } from "@base/global/libraries/events/vaults/VaultsEvents.sol";
+import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
 import { ERC20Snapshot } from "@base/abstract/ERC20Snapshot.sol";
 
 /**

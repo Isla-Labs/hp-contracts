@@ -1,5 +1,11 @@
 forge-std/=lib/forge-std/src/
 
+@errors/=src/base/global/libraries/errors/
+@events/=src/base/global/libraries/events/
+@roles/=src/base/global/libraries/roles/
+@types/=src/base/global/types/
+@interfaces/=src/base/global/interfaces/
+
 @src/=src/
 @base/=src/base/
 @markets/=src/markets/

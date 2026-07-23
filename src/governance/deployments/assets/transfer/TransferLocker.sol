@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { LifecycleErrors as Errors } from "@base/global/libraries/errors/governance/LifecycleErrors.sol";
-import { LifecycleEvents as Events } from "@base/global/libraries/events/governance/LifecycleEvents.sol";
-import { ITransferLocker } from "@base/global/interfaces/governance/ITransferLocker.sol";
-import { LifecycleReason, PendingLifecycle } from "@base/global/types/governance/LifecycleTypes.sol";
+import { LifecycleErrors as Errors } from "@errors/governance/LifecycleErrors.sol";
+import { LifecycleEvents as Events } from "@events/governance/LifecycleEvents.sol";
+import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
+import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTypes.sol";
 
 /**
  * @title TransferLocker

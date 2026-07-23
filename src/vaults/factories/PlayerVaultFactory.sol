@@ -6,8 +6,8 @@ import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.
 import { ICreateX } from "@createx/ICreateX.sol";
 
 import { CreateXAddresses } from "@base/global/libraries/addresses/CreateX.sol";
-import { VaultsErrors as Errors } from "@base/global/libraries/errors/vaults/VaultsErrors.sol";
-import { VaultsEvents as Events } from "@base/global/libraries/events/vaults/VaultsEvents.sol";
+import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
 import { PlayerVault } from "@vaults/PlayerVault.sol";
 import { StakedToken } from "@vaults/StakedToken.sol";
 

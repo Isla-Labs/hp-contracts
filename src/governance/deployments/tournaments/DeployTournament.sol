@@ -3,20 +3,20 @@ pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 
-import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/governance/DeploymentsErrors.sol";
-import { DeploymentsEvents as Events } from "@base/global/libraries/events/governance/DeploymentsEvents.sol";
+import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
+import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 
-import { Hub, RoundSchedule, TournamentType } from "@base/global/types/TournamentTypes.sol";
-import { VaultData } from "@base/global/types/PlayerSetTypes.sol";
+import { Hub, RoundSchedule, TournamentType } from "@types/TournamentTypes.sol";
+import { VaultData } from "@types/PlayerSetTypes.sol";
 
-import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
-import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 
-import { IPbrTreasuryFactory } from "@base/global/interfaces/vaults/factories/IPbrTreasuryFactory.sol";
-import { IPbrFeeHubFactory } from "@base/global/interfaces/markets/factories/IPbrFeeHubFactory.sol";
-import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
-import { IPbrFeeHub } from "@base/global/interfaces/markets/IPbrFeeHub.sol";
+import { IPbrTreasuryFactory } from "@interfaces/vaults/factories/IPbrTreasuryFactory.sol";
+import { IPbrFeeHubFactory } from "@interfaces/markets/factories/IPbrFeeHubFactory.sol";
+import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
+import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
 
 /**
  * @title DeployTournament

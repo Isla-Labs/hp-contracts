@@ -6,16 +6,16 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 
-import { IDopplerLocker } from "@base/global/interfaces/governance/IDopplerLocker.sol";
-import { ITransferLocker } from "@base/global/interfaces/governance/ITransferLocker.sol";
-import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
-import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
-import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
-import { LifecycleReason } from "@base/global/types/governance/LifecycleTypes.sol";
+import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
+import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
+import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
+import { LifecycleReason } from "@types/governance/LifecycleTypes.sol";
 import { PlayerStatus, Position } from "@base/global/types/PlayerSetTypes.sol";
 
-import { EligibilityErrors as Errors } from "@base/global/libraries/errors/data/EligibilityErrors.sol";
-import { EligibilityEvents as Events } from "@base/global/libraries/events/data/EligibilityEvents.sol";
+import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
+import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol";
 import { EligibilityCriteria } from "@data/eligibility/config/EligibilityCriteria.sol";
 import {
     Appearance,
@@ -29,7 +29,7 @@ import {
     SquadFillReport,
     SquadList,
     SQUAD_FILL_PAGE_DONE
-} from "@base/global/types/data/EligibilityTypes.sol";
+} from "@types/data/EligibilityTypes.sol";
 
 /**
  * @title EligibilityVerifier

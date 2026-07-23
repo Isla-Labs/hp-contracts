@@ -7,10 +7,10 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
-import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { MarketsErrors as Errors } from "@base/global/libraries/errors/markets/MarketsErrors.sol";
-import { MarketsEvents as Events } from "@base/global/libraries/events/markets/MarketsEvents.sol";
-import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
+import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
+import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 
 /**
  * @title FeeRouter

@@ -6,9 +6,9 @@ import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.
 import { ICreateX } from "@createx/ICreateX.sol";
 
 import { CreateXAddresses } from "@base/global/libraries/addresses/CreateX.sol";
-import { VaultsErrors as Errors } from "@base/global/libraries/errors/vaults/VaultsErrors.sol";
-import { VaultsEvents as Events } from "@base/global/libraries/events/vaults/VaultsEvents.sol";
-import { IPbrTreasuryFactory } from "@base/global/interfaces/vaults/factories/IPbrTreasuryFactory.sol";
+import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
+import { IPbrTreasuryFactory } from "@interfaces/vaults/factories/IPbrTreasuryFactory.sol";
 import { PbrTreasury } from "@vaults/PbrTreasury.sol";
 
 /**

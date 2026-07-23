@@ -4,9 +4,9 @@ pragma solidity ^0.8.34;
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
-import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { RegistryErrors as Errors } from "@base/global/libraries/errors/RegistryErrors.sol";
-import { RegistryEvents as Events } from "@base/global/libraries/events/RegistryEvents.sol";
+import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
+import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
 import {
     AdvancedTradeData,
     DopplerData,
@@ -15,9 +15,9 @@ import {
     TokenData,
     TournamentData,
     VaultData
-} from "@base/global/types/PlayerSetTypes.sol";
-import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
-import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
+} from "@types/PlayerSetTypes.sol";
+import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 
 /**
  * @title PlayerSetRegistry

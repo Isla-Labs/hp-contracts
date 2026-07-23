@@ -3,14 +3,14 @@ pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 
-import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/governance/DeploymentsErrors.sol";
-import { DeploymentsEvents as Events } from "@base/global/libraries/events/governance/DeploymentsEvents.sol";
+import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
+import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 
 import { FeeDistributionInfo, FeeRoutingMode } from "@doppler/src/types/RehypeTypes.sol";
 import { WAD } from "@doppler/src/types/Wad.sol";
 
-import { DopplerTypes } from "@base/global/types/governance/DopplerTypes.sol";
+import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
 
 /**
  * @title DopplerConfig

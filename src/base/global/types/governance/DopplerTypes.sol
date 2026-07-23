@@ -10,7 +10,7 @@ import {
 } from "@doppler/src/types/RehypeTypes.sol";
 import { WAD } from "@doppler/src/types/Wad.sol";
 
-import { EligibilityBucket } from "@base/global/types/data/EligibilityTypes.sol";
+import { EligibilityBucket } from "@types/data/EligibilityTypes.sol";
 
 /**
  * @title DopplerTypes

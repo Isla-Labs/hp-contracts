@@ -2,7 +2,7 @@
 pragma solidity ^0.8.34;
 
 import { TimelockController } from "@openzeppelin/governance/TimelockController.sol";
-import { GovernanceErrors as Errors } from "@base/global/libraries/errors/governance/GovernanceErrors.sol";
+import { GovernanceErrors as Errors } from "@errors/governance/GovernanceErrors.sol";
 
 /**
  * @title MaintenanceTimelock

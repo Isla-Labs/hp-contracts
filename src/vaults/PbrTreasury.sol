@@ -6,15 +6,15 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 
-import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { VaultsErrors as Errors } from "@base/global/libraries/errors/vaults/VaultsErrors.sol";
-import { VaultsEvents as Events } from "@base/global/libraries/events/vaults/VaultsEvents.sol";
-import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
-import { RoundState, RoundStatus } from "@base/global/types/vaults/VaultTypes.sol";
-import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
-import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
-import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
-import { IPlayerVault } from "@base/global/interfaces/vaults/IPlayerVault.sol";
+import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
+import { RoundSchedule } from "@types/TournamentTypes.sol";
+import { RoundState, RoundStatus } from "@types/vaults/VaultTypes.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
+import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
 
 /**
  * @title PbrTreasury

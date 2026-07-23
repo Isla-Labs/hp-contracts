@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
-import { DigestSource, FixtureDigest } from "@src/data/matchweeks/types/MatchweekTypes.sol";
+import { RoundSchedule } from "@types/TournamentTypes.sol";
+import { DigestSource, FixtureDigest } from "@data/matchweeks/types/MatchweekTypes.sol";
 
 /**
  * @title IFixtureCommitment

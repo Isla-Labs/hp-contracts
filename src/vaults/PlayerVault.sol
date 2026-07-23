@@ -8,14 +8,14 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
-import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { VaultsErrors as Errors } from "@base/global/libraries/errors/vaults/VaultsErrors.sol";
-import { VaultsEvents as Events } from "@base/global/libraries/events/vaults/VaultsEvents.sol";
-import { RoundStatus } from "@base/global/types/vaults/VaultTypes.sol";
-import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
-import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
-import { IStakedToken } from "@base/global/interfaces/vaults/IStakedToken.sol";
-import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
+import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
+import { RoundStatus } from "@types/vaults/VaultTypes.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { IStakedToken } from "@interfaces/vaults/IStakedToken.sol";
+import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 
 /**
  * @title PlayerVault

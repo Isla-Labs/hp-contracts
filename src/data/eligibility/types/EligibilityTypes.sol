@@ -36,6 +36,12 @@ struct SeasonMinutes {
     uint32[POSITION_COUNT] minsByPosition;
 }
 
+/// @notice Latest active squad membership for one club (`clubId` = HPID of contestantUuid).
+struct SquadList {
+    bytes32 clubId;
+    bytes32[] playerIds;
+}
+
 // --------------------------------------------
 //  Reports
 // --------------------------------------------
@@ -51,6 +57,8 @@ struct Appearance {
 /**
  * @notice CRE squad-fill report payload (`abi.decode` target in `_processReport`).
  * @dev Wire layout matches the flat tuple CRE encodes; field order is the ABI.
+ *      Historical: `clubId = 0`, `squadPlayerIds` empty (create-only).
+ *      Daily-active: `clubId` + full active `squadPlayerIds` for membership overwrite.
  */
 struct SquadFillReport {
     bytes32 seasonId;
@@ -59,10 +67,14 @@ struct SquadFillReport {
     uint16 nextPage;
     bytes32[] playerIds;
     uint256[] birthDates;
+    /// @dev HPID(contestantUuid). Zero skips membership sync (historical path).
+    bytes32 clubId;
+    /// @dev Full active squad for `clubId` (not just newly created players).
+    bytes32[] squadPlayerIds;
 }
 
 // --------------------------------------------
-//  Eligibility Criteria
+//  Score math (fixed; not governance-tunable)
 // --------------------------------------------
 
 /// @dev Fixed-point scale for `weightedScoreWad` / `LAMBDA_WAD`.
@@ -71,13 +83,7 @@ uint256 constant SCORE_WAD = 1e18;
 /// @dev λ = 0.97 — half-life ≈ ln(0.5)/ln(0.97) ≈ 23 rounds.
 uint256 constant LAMBDA_WAD = 97e16;
 
-/// @dev Effective-minute thresholds (compare to `liveScoreWad / SCORE_WAD`).
-uint32 constant THRESHOLD_GK = 361;
-uint32 constant THRESHOLD_UNDER_21 = 181;
-uint32 constant THRESHOLD_OUTFIELD = 901;
-/// @dev newTransfer / backFromLoan share this threshold (no onchain distinction).
-uint32 constant THRESHOLD_NEW_TRANSFER = 1;
-uint256 constant UNDER_21_AGE = 21;
+// Cohort thresholds live in `EligibilityCriteria` (CATEGORY_ONE updatable).
 
 /// @notice Eligibility cohort a candidate falls into.
 /// @dev Priority: newTransfer/backFromLoan → GK → under-21 → outfield.

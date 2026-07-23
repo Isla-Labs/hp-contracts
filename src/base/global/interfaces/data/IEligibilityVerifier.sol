@@ -7,7 +7,8 @@ import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.s
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import {
     Appearance,
-    EligibilityGroups
+    EligibilityGroups,
+    SquadList
 } from "@src/data/eligibility/types/EligibilityTypes.sol";
 
 /**
@@ -17,6 +18,8 @@ import {
  */
 interface IEligibilityVerifier {
     function initialize(
+        address constitutionalTimelock_,
+        address dao_,
         address forwarder_,
         bytes32 expectedWorkflowId_,
         address playerSetRegistry_,
@@ -38,6 +41,25 @@ interface IEligibilityVerifier {
      *      `groups.toDiscontinue` = deployed markets marked `INACTIVE` this page (via Automator).
      */
     function verifyEligibility(uint256 offset, uint256 limit) external returns (EligibilityGroups memory groups);
+
+    function setEligibilityThresholds(
+        uint32 thresholdGk_,
+        uint32 thresholdUnder21_,
+        uint32 thresholdOutfield_,
+        uint32 thresholdNewTransfer_,
+        uint256 under21Age_
+    ) external;
+
+    function eligibilityCriteria()
+        external
+        view
+        returns (
+            uint32 thresholdGk_,
+            uint32 thresholdUnder21_,
+            uint32 thresholdOutfield_,
+            uint32 thresholdNewTransfer_,
+            uint256 under21Age_
+        );
 
     function playerSetRegistry() external view returns (IPlayerSetRegistry);
 
@@ -62,6 +84,12 @@ interface IEligibilityVerifier {
 
     /// @notice Timestamp when `seasonId` last hit `SQUAD_FILL_PAGE_DONE` (0 if never).
     function getLastSquadFillSweepAt(bytes32 seasonId) external view returns (uint256);
+
+    /// @notice Latest stored active squad for `clubId` (empty if never synced).
+    function getSquadList(bytes32 clubId) external view returns (SquadList memory);
+
+    /// @notice Current club membership for `playerId` (`0` if not on any synced squad).
+    function playerClub(bytes32 playerId) external view returns (bytes32);
 
     /// @notice Next unix time `verifyEligibility` may run (0 = never run / immediately allowed).
     function nextAllowed() external view returns (uint256 timestamp);

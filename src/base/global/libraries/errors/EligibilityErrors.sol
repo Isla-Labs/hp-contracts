@@ -12,4 +12,5 @@ library EligibilityErrors {
     error SquadFillSeasonDone(bytes32 seasonId);
     error SquadFillPageMismatch(bytes32 seasonId, uint16 expected, uint16 received);
     error InvalidSquadFillNextPage(uint16 pageFetched, uint16 nextPage);
+    error InvalidThreshold();
 }

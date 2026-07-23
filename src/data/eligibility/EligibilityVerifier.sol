@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
@@ -13,6 +14,7 @@ import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.s
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
 import { PlayerStatus, Position } from "@base/global/types/PlayerSetTypes.sol";
+import { EligibilityCriteria } from "@src/data/eligibility/types/EligibilityCriteria.sol";
 import {
     Appearance,
     EligibilityBucket,
@@ -23,30 +25,24 @@ import {
     SCORE_WAD,
     SeasonMinutes,
     SquadFillReport,
-    SQUAD_FILL_PAGE_DONE,
-    THRESHOLD_GK,
-    THRESHOLD_NEW_TRANSFER,
-    THRESHOLD_OUTFIELD,
-    THRESHOLD_UNDER_21,
-    UNDER_21_AGE
+    SquadList,
+    SQUAD_FILL_PAGE_DONE
 } from "@src/data/eligibility/types/EligibilityTypes.sol";
-
-struct SquadList {
-    bytes32 clubId; // HPID for contestantUuid
-    bytes32[] playerIds;
-}
 
 /**
  * @title EligibilityVerifier
  * @notice Squad-first eligibility store with a recency-weighted rolling minutes score.
  * @dev Deploy behind `TransparentUpgradeableProxy`. Logic constructor only sets `RateLimit`
  *      cooldown + disables initializers; all domain config is in `initialize`.
+ *      Extends `EligibilityCriteria` — cohort thresholds are CATEGORY_ONE updatable.
  *
  *      CRE report path: KeystoneForwarder → `onReport` → `_processReport`.
  *      `initialize` pins `expectedWorkflowId` so only the squad-fill workflow may write.
  *
  *      Report ABI (encoded by CRE): `SquadFillReport` — same tuple layout as the struct fields.
  *      New players get `earliestSeasonStartYear = seasonStartYear` (set once at create).
+ *      Daily-active reports also set `clubId` + `squadPlayerIds` to overwrite `SquadList` and
+ *      track league membership; at season DONE, players with no club are soft-discontinued.
  *
  *      Rolling score (domestic league calendars only) — ringfenced to `verifyEligibility`:
  *        score = Σ mins_i * λ^(G_now - G_i), λ = 0.97
@@ -60,10 +56,8 @@ struct SquadList {
  *          `PlayerSetRegistry.setStatus(INACTIVE)`
  *      `verifyEligibility` is globally `rateLimited` — size `cooldown` for page cadence.
  *
- *      Deploy thresholds (effective minutes ≈ stored score / 1e18):
- *        newTransfer / backFromLoan: earliestSeasonStartYear == currentSeasonYear (≥ 1)
- *        GK ≥ 361, under-21 ≥ 181, else ≥ 901.
- *      Continuity (already deployed): same GK / u21 / outfield thresholds (no newTransfer shortcut).
+ *      Deploy / continuity thresholds: see `EligibilityCriteria` (defaults GK 361 / u21 181 /
+ *      outfield 901 / newTransfer 1; continuity omits the newTransfer shortcut).
  *
  *      Privileged registry writes go through `Automator` (proxy holds `CATEGORY_THREE`
  *      on Automator; Automator holds `CATEGORY_THREE` on `PlayerSetRegistry`).
@@ -71,7 +65,7 @@ struct SquadList {
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
+contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver, RateLimit {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -112,6 +106,15 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
     /// @dev Timestamp when `seasonId` last transitioned to `SQUAD_FILL_PAGE_DONE`.
     mapping(bytes32 seasonId => uint256) private _lastSquadFillSweepAt;
 
+    /// @dev Latest active squad per club (daily-active membership sync).
+    mapping(bytes32 clubId => SquadList) private _squadLists;
+
+    /// @dev Current club for a player within this league's latest membership view (`0` = none).
+    mapping(bytes32 playerId => bytes32 clubId) private _playerClub;
+
+    /// @dev Players cleared from a club during the in-progress daily-active sweep (pending DONE).
+    bytes32[] private _leftDuringSweep;
+
     // --------------------------------------------
     //  Construction / initialization
     // --------------------------------------------
@@ -124,6 +127,8 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
 
     /**
      * @notice Initialize proxy storage (call via `TransparentUpgradeableProxy` constructor data).
+     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE` threshold updates.
+     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE` on criteria.
      * @param forwarder_ Chainlink `KeystoneForwarder` for this chain.
      * @param expectedWorkflowId_ Squad-fill CRE workflow id (required; non-zero).
      * @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
@@ -135,6 +140,8 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
      * @param baseYear_ G-index origin season start year.
      */
     function initialize(
+        address constitutionalTimelock_,
+        address dao_,
         address forwarder_,
         bytes32 expectedWorkflowId_,
         address playerSetRegistry_,
@@ -155,6 +162,7 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
         }
         if (leagueId_ == bytes32(0) || baseYear_ == 0) revert Errors.ZeroId();
 
+        __EligibilityCriteria_init(constitutionalTimelock_, dao_);
         __CreReceiver_init(forwarder_);
         _setExpectedWorkflowId(expectedWorkflowId_);
 
@@ -170,6 +178,16 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
     // --------------------------------------------
     //  Views
     // --------------------------------------------
+
+    /// @inheritdoc CreReceiver
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        override(AccessControl, CreReceiver)
+        returns (bool)
+    {
+        return AccessControl.supportsInterface(interfaceId) || CreReceiver.supportsInterface(interfaceId);
+    }
 
     function playerCount() external view returns (uint256) {
         return _playerIds.length;
@@ -204,6 +222,16 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
             return (0, true);
         }
         return (stored == 0 ? 1 : stored, false);
+    }
+
+    /// @notice Latest stored active squad for `clubId` (empty if never synced).
+    function getSquadList(bytes32 clubId) external view returns (SquadList memory) {
+        return _squadLists[clubId];
+    }
+
+    /// @notice Current club membership for `playerId` (`0` if not on any synced squad).
+    function playerClub(bytes32 playerId) external view returns (bytes32) {
+        return _playerClub[playerId];
     }
 
     // --------------------------------------------
@@ -430,6 +458,8 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
         if (stored == SQUAD_FILL_PAGE_DONE) {
             // Active-season daily resweep: only restart from page 1.
             if (r.pageFetched != 1) revert Errors.SquadFillSeasonDone(r.seasonId);
+            // Drop any stale pending leavers from a prior incomplete sweep.
+            delete _leftDuringSweep;
         } else {
             uint16 expectedFetch = stored == 0 ? 1 : stored;
             if (r.pageFetched != expectedFetch) {
@@ -472,13 +502,73 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
             emit Events.SquadPlayerCreated(playerId, birthDate);
         }
 
+        // Daily-active membership: overwrite club squad + track leavers for DONE finalize.
+        if (r.clubId != bytes32(0)) {
+            _syncClubSquad(r.clubId, r.squadPlayerIds);
+        }
+
         _squadFillPage[r.seasonId] = r.nextPage;
         if (r.nextPage == SQUAD_FILL_PAGE_DONE) {
             _lastSquadFillSweepAt[r.seasonId] = block.timestamp;
+            _finalizeLeagueRemovals();
         }
 
         emit Events.SquadFillPageUpdated(r.seasonId, stored, r.nextPage);
         emit Events.SquadPlayersCreated(r.seasonId, r.pageFetched, created, skipped);
+    }
+
+    /**
+     * @dev Overwrite `SquadList` for `clubId` (CRE sends status=active only).
+     *      Players previously on this list and absent from `squadPlayerIds` are pending leavers
+     *      until DONE (they may still appear on another club later in the sweep).
+     */
+    function _syncClubSquad(bytes32 clubId, bytes32[] memory squadPlayerIds) private {
+        SquadList storage prev = _squadLists[clubId];
+        uint256 prevLen = prev.playerIds.length;
+
+        for (uint256 i; i < prevLen; ++i) {
+            bytes32 playerId = prev.playerIds[i];
+            if (_contains(squadPlayerIds, playerId)) continue;
+            if (_playerClub[playerId] != clubId) continue;
+            delete _playerClub[playerId];
+            _leftDuringSweep.push(playerId);
+        }
+
+        for (uint256 i; i < squadPlayerIds.length; ++i) {
+            bytes32 playerId = squadPlayerIds[i];
+            if (playerId == bytes32(0)) revert Errors.ZeroId();
+            _playerClub[playerId] = clubId;
+        }
+
+        _squadLists[clubId] = SquadList({ clubId: clubId, playerIds: squadPlayerIds });
+        emit Events.SquadListUpdated(clubId, squadPlayerIds.length);
+    }
+
+    /**
+     * @dev After a full membership sweep: any player who was on some `SquadList` and is now on
+     *      none (`_playerClub == 0`) has left the league. If still active in PlayerSetRegistry → INACTIVE.
+     *      Intra-league transfers re-acquire `_playerClub` before DONE and are skipped.
+     */
+    function _finalizeLeagueRemovals() private {
+        uint256 n = _leftDuringSweep.length;
+        for (uint256 i; i < n; ++i) {
+            bytes32 playerId = _leftDuringSweep[i];
+            if (_playerClub[playerId] != bytes32(0)) continue;
+            if (!playerSetRegistry.playerExists(playerId)) continue;
+            if (playerSetRegistry.getPlayerSet(playerId).status == PlayerStatus.INACTIVE) continue;
+
+            _discontinue(playerId);
+            emit Events.PlayerLeftLeague(playerId);
+        }
+        delete _leftDuringSweep;
+    }
+
+    function _contains(bytes32[] memory arr, bytes32 value) private pure returns (bool) {
+        uint256 n = arr.length;
+        for (uint256 i; i < n; ++i) {
+            if (arr[i] == value) return true;
+        }
+        return false;
     }
 
     // --------------------------------------------
@@ -497,8 +587,8 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
     /**
      * @dev Deploy path. Uses stored `weightedScoreWad` (fresh after pass 0).
      *      missing DOB → false;
-     *      newTransfer/backFromLoan (earliestSeasonStartYear == current) → ≥ 1;
-     *      GK → 361; age < 21 → 181; else → 901.
+     *      newTransfer/backFromLoan (earliestSeasonStartYear == current) → `thresholdNewTransfer`;
+     *      else continuity gates (`thresholdGk` / `thresholdUnder21` / `thresholdOutfield`).
      */
     function _evaluateForDeploy(bytes32 playerId)
         private
@@ -516,7 +606,7 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
         // DeployDoppler flag: newTransfer / backFromLoan for the current season.
         if (store.earliestSeasonStartYear == _currentSeasonYear()) {
             bucket = EligibilityBucket.NewTransfer;
-            eligible = effectiveMins >= THRESHOLD_NEW_TRANSFER;
+            eligible = effectiveMins >= thresholdNewTransfer;
             return (eligible, bucket, effectiveMins);
         }
 
@@ -524,8 +614,8 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
     }
 
     /**
-     * @dev Continuity path for already-deployed markets (no newTransfer ≥ 1 shortcut).
-     *      missing DOB → false; GK → 361; age < 21 → 181; else → 901.
+     * @dev Continuity path for already-deployed markets (no newTransfer shortcut).
+     *      missing DOB → false; else GK / u21 / outfield thresholds from `EligibilityCriteria`.
      */
     function _evaluateContinuity(bytes32 playerId)
         private
@@ -542,7 +632,7 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
         (stillActive,) = _continuityGate(store, effectiveMins);
     }
 
-    /// @dev Shared GK / u21 / outfield threshold gate.
+    /// @dev Shared GK / u21 / outfield threshold gate (live `EligibilityCriteria` storage).
     function _continuityGate(MinutesStore storage store, uint32 effectiveMins)
         private
         view
@@ -550,18 +640,18 @@ contract EligibilityVerifier is Initializable, CreReceiver, RateLimit {
     {
         if (store.expectedPosition == Position.GK) {
             bucket = EligibilityBucket.Goalkeeper;
-            ok = effectiveMins >= THRESHOLD_GK;
+            ok = effectiveMins >= thresholdGk;
             return (ok, bucket);
         }
 
-        if (_ageYears(store.birthDate) < UNDER_21_AGE) {
+        if (_ageYears(store.birthDate) < under21Age) {
             bucket = EligibilityBucket.Under21;
-            ok = effectiveMins >= THRESHOLD_UNDER_21;
+            ok = effectiveMins >= thresholdUnder21;
             return (ok, bucket);
         }
 
         bucket = EligibilityBucket.Outfield;
-        ok = effectiveMins >= THRESHOLD_OUTFIELD;
+        ok = effectiveMins >= thresholdOutfield;
     }
 
     /// @dev Whole years since unix DOB; leap years are ignored (same spirit as a simple day-count age).

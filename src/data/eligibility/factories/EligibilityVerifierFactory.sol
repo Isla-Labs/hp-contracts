@@ -24,14 +24,31 @@ contract EligibilityVerifierFactory {
     /// @notice Initial owner of each proxy's `ProxyAdmin` (upgrade authority).
     address public immutable proxyAdminOwner;
 
+    /// @notice Granted `CATEGORY_ONE` on each verifier (`EligibilityCriteria` updates).
+    address public immutable constitutionalTimelock;
+
+    /// @notice Granted `DEFAULT_ADMIN_ROLE` on each verifier.
+    address public immutable dao;
+
     /**
      * @param cooldown_ Global `verifyEligibility` cooldown for the shared implementation.
      * @param proxyAdminOwner_ Owns each TUP `ProxyAdmin` (e.g. `ConstitutionalTimelock`).
+     * @param constitutionalTimelock_ `CATEGORY_ONE` on criteria.
+     * @param dao_ `DEFAULT_ADMIN_ROLE` on criteria.
      */
-    constructor(uint256 cooldown_, address proxyAdminOwner_) {
-        if (proxyAdminOwner_ == address(0)) revert Errors.ZeroAddress();
+    constructor(
+        uint256 cooldown_,
+        address proxyAdminOwner_,
+        address constitutionalTimelock_,
+        address dao_
+    ) {
+        if (proxyAdminOwner_ == address(0) || constitutionalTimelock_ == address(0) || dao_ == address(0)) {
+            revert Errors.ZeroAddress();
+        }
         implementation = address(new EligibilityVerifier(cooldown_));
         proxyAdminOwner = proxyAdminOwner_;
+        constitutionalTimelock = constitutionalTimelock_;
+        dao = dao_;
     }
 
     /**
@@ -52,6 +69,8 @@ contract EligibilityVerifierFactory {
         bytes memory initData = abi.encodeCall(
             EligibilityVerifier.initialize,
             (
+                constitutionalTimelock,
+                dao,
                 forwarder,
                 expectedWorkflowId,
                 playerSetRegistry,

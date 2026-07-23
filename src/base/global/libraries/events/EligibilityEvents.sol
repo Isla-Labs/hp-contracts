@@ -31,8 +31,23 @@ library EligibilityEvents {
     /// @notice Deployed market marked `INACTIVE` after falling under continuity threshold.
     event PlayerDiscontinued(bytes32 indexed playerId, uint32 effectiveMins);
 
+    /// @notice Daily-active club squad overwritten (`playerCount` = active roster size).
+    event SquadListUpdated(bytes32 indexed clubId, uint256 playerCount);
+
+    /// @notice Deployed player left the league (no club after full daily-active sweep) → `INACTIVE`.
+    event PlayerLeftLeague(bytes32 indexed playerId);
+
     /// @notice New `TransparentUpgradeableProxy` for a league EligibilityVerifier.
     event EligibilityVerifierProxyCreated(
         address indexed proxy, bytes32 indexed leagueId, address implementation
+    );
+
+    /// @notice Governance updated deploy / continuity thresholds (`EligibilityCriteria`).
+    event EligibilityThresholdsUpdated(
+        uint32 thresholdGk,
+        uint32 thresholdUnder21,
+        uint32 thresholdOutfield,
+        uint32 thresholdNewTransfer,
+        uint256 under21Age
     );
 }

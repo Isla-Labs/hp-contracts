@@ -4,7 +4,8 @@ pragma solidity ^0.8.34;
 import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@base/global/libraries/events/DeploymentsEvents.sol";
 import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
-import { EligibilityBucket, EligibilityGroups } from "@base/global/types/EligibilityTypes.sol";
+import { IEligibilityVerifier } from "@base/global/interfaces/data/IEligibilityVerifier.sol";
+import { EligibilityBucket, EligibilityGroups, MinutesStore } from "@base/global/types/EligibilityTypes.sol";
 
 import { DopplerConfig } from "@data/deployments/config/DopplerConfig.sol";
 import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
@@ -16,7 +17,8 @@ import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
  *    - `enqueueEligible` stores cohort-tagged playerIds for later deploy formatting.
  *    - Only the configured `eligibilityVerifier` may write.
  *    - Consumes deploy cohorts only; `groups.toDiscontinue` is handled in EligibilityVerifier.
- *    - Name/symbol filled later (Chainlink Functions); see `DopplerTypes.PendingEligible`.
+ *    - Name/symbol copied from `EligibilityVerifier` when CRE has filled them; else empty
+ *      until waiting-room manual override (`DopplerTypes.PendingEligible`).
  *
  * 1) Initial market deployment (gated)
  *    - Requires zk proof of eligibility (trustlessEligibility).
@@ -117,14 +119,17 @@ contract DeployDoppler is DopplerConfig, IDeployDoppler {
             bytes32 playerId = playerIds[i];
             if (playerId == bytes32(0) || _queued[playerId]) continue;
 
+            MinutesStore memory store = IEligibilityVerifier(msg.sender).getMinutesStore(playerId);
+            bool metadataSet = bytes(store.name).length != 0;
+
             _queued[playerId] = true;
             _pending.push(
                 DopplerTypes.PendingEligible({
                     playerId: playerId,
                     bucket: bucket,
-                    name: "",
-                    symbol: "",
-                    metadataSet: false
+                    name: store.name,
+                    symbol: store.symbol,
+                    metadataSet: metadataSet
                 })
             );
             unchecked {

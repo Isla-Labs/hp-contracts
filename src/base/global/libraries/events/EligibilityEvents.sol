@@ -26,6 +26,9 @@ library EligibilityEvents {
 
     event SquadPlayerCreated(bytes32 indexed playerId, uint256 birthDate);
 
+    /// @notice CRE set `MinutesStore.name` / `symbol` (first fill only; empty name skipped).
+    event SquadPlayerMetadataSet(bytes32 indexed playerId, string name, string symbol);
+
     event SquadFillPageUpdated(bytes32 indexed seasonId, uint16 previousPage, uint16 nextPage);
 
     /// @notice Deployed market marked `INACTIVE` after falling under continuity threshold.

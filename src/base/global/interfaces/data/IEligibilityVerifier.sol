@@ -8,8 +8,9 @@ import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry
 import {
     Appearance,
     EligibilityGroups,
+    MinutesStore,
     SquadList
-} from "@src/data/eligibility/types/EligibilityTypes.sol";
+} from "@base/global/types/EligibilityTypes.sol";
 
 /**
  * @title IEligibilityVerifier
@@ -90,6 +91,18 @@ interface IEligibilityVerifier {
 
     /// @notice Current club membership for `playerId` (`0` if not on any synced squad).
     function playerClub(bytes32 playerId) external view returns (bytes32);
+
+    /// @notice Full per-player store (includes `name` / `symbol` when CRE has filled them).
+    function getMinutesStore(bytes32 playerId) external view returns (MinutesStore memory);
+
+    /// @notice `true` when `name` is non-empty.
+    function hasPlayerMetadata(bytes32 playerId) external view returns (bool);
+
+    /// @notice Compact ids in `playerIds` that are tracked but still missing `name`.
+    function playersMissingMetadata(bytes32[] calldata playerIds)
+        external
+        view
+        returns (bytes32[] memory missing);
 
     /// @notice Next unix time `verifyEligibility` may run (0 = never run / immediately allowed).
     function nextAllowed() external view returns (uint256 timestamp);

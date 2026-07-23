@@ -42,6 +42,7 @@ import {
  *
  *      Report ABI (encoded by CRE): `SquadFillReport` — same tuple layout as the struct fields.
  *      New players get `earliestSeasonStartYear = seasonStartYear` (set once at create).
+ *      Optional `metaPlayerIds` / `names` / `symbols` fill `MinutesStore` metadata (first write only).
  *      Daily-active reports also set `clubId` + `squadPlayerIds` to overwrite `SquadList` and
  *      track league membership; at season DONE, players with no club are soft-discontinued.
  *
@@ -233,6 +234,40 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     /// @notice Current club membership for `playerId` (`0` if not on any synced squad).
     function playerClub(bytes32 playerId) external view returns (bytes32) {
         return _playerClub[playerId];
+    }
+
+    /// @notice Full per-player store (includes CRE `name` / `symbol` when set).
+    function getMinutesStore(bytes32 playerId) external view returns (MinutesStore memory) {
+        return _minutesStore[playerId];
+    }
+
+    /// @notice `true` when `name` is non-empty.
+    function hasPlayerMetadata(bytes32 playerId) external view returns (bool) {
+        return bytes(_minutesStore[playerId].name).length != 0;
+    }
+
+    /// @notice Compact ids in `playerIds` that are tracked but still missing `name`.
+    function playersMissingMetadata(bytes32[] calldata mdPlayerIds)
+        external
+        view
+        returns (bytes32[] memory missing)
+    {
+        uint256 length = mdPlayerIds.length;
+        bytes32[] memory tmp = new bytes32[](length);
+        uint256 n;
+        for (uint256 i; i < length; ++i) {
+            bytes32 playerId = mdPlayerIds[i];
+            if (!_tracked[playerId]) continue;
+            if (bytes(_minutesStore[playerId].name).length != 0) continue;
+            tmp[n] = playerId;
+            unchecked {
+                ++n;
+            }
+        }
+        missing = new bytes32[](n);
+        for (uint256 i; i < n; ++i) {
+            missing[i] = tmp[i];
+        }
     }
 
     // --------------------------------------------
@@ -503,6 +538,8 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
             emit Events.SquadPlayerCreated(playerId, birthDate);
         }
 
+        _applyPlayerMetadata(r.metaPlayerIds, r.names, r.symbols);
+
         // Daily-active membership: overwrite club squad + track leavers for DONE finalize.
         if (r.clubId != bytes32(0)) {
             _syncClubSquad(r.clubId, r.squadPlayerIds);
@@ -516,6 +553,40 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
 
         emit Events.SquadFillPageUpdated(r.seasonId, stored, r.nextPage);
         emit Events.SquadPlayersCreated(r.seasonId, r.pageFetched, created, skipped);
+    }
+
+    /**
+     * @dev First-fill `name` / `symbol` for tracked players. Skips empty names and rows that
+     *      already have metadata (waiting-room / governance overrides stay intact).
+     */
+    function _applyPlayerMetadata(
+        bytes32[] memory metaPlayerIds,
+        string[] memory names,
+        string[] memory symbols
+    ) private {
+        uint256 length = metaPlayerIds.length;
+        if (length == 0) {
+            if (names.length != 0 || symbols.length != 0) {
+                revert Errors.LengthMismatch(names.length, symbols.length);
+            }
+            return;
+        }
+        if (length != names.length) revert Errors.LengthMismatch(length, names.length);
+        if (length != symbols.length) revert Errors.LengthMismatch(length, symbols.length);
+
+        for (uint256 i; i < length; ++i) {
+            bytes32 playerId = metaPlayerIds[i];
+            if (playerId == bytes32(0)) revert Errors.ZeroId();
+            if (!_tracked[playerId]) continue;
+
+            MinutesStore storage store = _minutesStore[playerId];
+            if (bytes(store.name).length != 0) continue;
+            if (bytes(names[i]).length == 0) continue;
+
+            store.name = names[i];
+            store.symbol = symbols[i];
+            emit Events.SquadPlayerMetadataSet(playerId, names[i], symbols[i]);
+        }
     }
 
     /**

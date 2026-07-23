@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { EligibilityGroups } from "@src/data/eligibility/types/EligibilityTypes.sol";
+import { EligibilityGroups } from "@base/global/types/EligibilityTypes.sol";
 
 /**
  * @title IDeployDoppler

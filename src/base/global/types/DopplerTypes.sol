@@ -148,7 +148,7 @@ library DopplerTypes {
 
     /**
      * @notice One waiting-room candidate (cohort + optional StatsPerform name/symbol).
-     * @dev `metadataSet` flips true after Chainlink Functions fills `name` / `symbol`.
+     * @dev `metadataSet` true when copied from EligibilityVerifier (CRE) or set manually.
      */
     struct PendingEligible {
         bytes32 playerId;

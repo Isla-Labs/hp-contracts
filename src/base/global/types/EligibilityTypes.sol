@@ -18,8 +18,10 @@ uint16 constant SQUAD_FILL_PAGE_DONE = 1000;
 //  Core
 // --------------------------------------------
 
-/// @notice Per-player eligibility store; name/symbol deferred to DeployDoppler.
+/// @notice Per-player eligibility store (CRE may fill `name` / `symbol` after create).
 struct MinutesStore {
+    string name;
+    string symbol;
     uint16 earliestSeasonStartYear;
     Position expectedPosition;
     uint256 birthDate;
@@ -59,6 +61,8 @@ struct Appearance {
  * @dev Wire layout matches the flat tuple CRE encodes; field order is the ABI.
  *      Historical: `clubId = 0`, `squadPlayerIds` empty (create-only).
  *      Daily-active: `clubId` + full active `squadPlayerIds` for membership overwrite.
+ *      Optional metadata: `metaPlayerIds` / `names` / `symbols` (parallel; length 0 = skip).
+ *      Used on create (historical / quiet) and on quiet resweeps to backfill existing rows.
  */
 struct SquadFillReport {
     bytes32 seasonId;
@@ -71,6 +75,10 @@ struct SquadFillReport {
     bytes32 clubId;
     /// @dev Full active squad for `clubId` (not just newly created players).
     bytes32[] squadPlayerIds;
+    /// @dev Players receiving `name` / `symbol` this report (may overlap `playerIds`).
+    bytes32[] metaPlayerIds;
+    string[] names;
+    string[] symbols;
 }
 
 // --------------------------------------------

@@ -4,9 +4,10 @@ pragma solidity ^0.8.34;
 import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@base/global/libraries/events/DeploymentsEvents.sol";
 import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
-import { EligibilityBucket, EligibilityGroups } from "@src/data/eligibility/types/EligibilityTypes.sol";
-import { DopplerConfig } from "@src/data/deployments/types/DopplerConfig.sol";
-import { DopplerTypes } from "@src/data/deployments/types/DopplerTypes.sol";
+import { EligibilityBucket, EligibilityGroups } from "@base/global/types/EligibilityTypes.sol";
+
+import { DopplerConfig } from "@data/deployments/config/DopplerConfig.sol";
+import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
 
 /**
  * Two completely different flows live in this contract:

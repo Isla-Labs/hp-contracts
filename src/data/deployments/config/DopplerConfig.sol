@@ -13,7 +13,7 @@ import {
 } from "@doppler/types/RehypeTypes.sol";
 import { WAD } from "@doppler/types/Wad.sol";
 
-import { DopplerTypes } from "@src/data/deployments/types/DopplerTypes.sol";
+import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
 
 /**
  * @title DopplerConfig

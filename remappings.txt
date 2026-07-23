@@ -6,6 +6,7 @@ forge-std/=lib/forge-std/src/
 @vaults/=src/vaults/
 @routers/=src/routers/
 @governance/=src/governance/
+@data/=src/data/
 
 @doppler/=lib/doppler/src/
 @chainlink/=lib/chainlink-evm/contracts/src/v0.8/

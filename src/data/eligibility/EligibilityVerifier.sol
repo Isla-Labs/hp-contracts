@@ -3,18 +3,19 @@ pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
-
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
-import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
-import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
+
 import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
 import { IAutomator } from "@base/global/interfaces/governance/IAutomator.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
 import { PlayerStatus, Position } from "@base/global/types/PlayerSetTypes.sol";
-import { EligibilityCriteria } from "@src/data/eligibility/types/EligibilityCriteria.sol";
+
+import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
+import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
+import { EligibilityCriteria } from "@data/eligibility/config/EligibilityCriteria.sol";
 import {
     Appearance,
     EligibilityBucket,
@@ -27,7 +28,7 @@ import {
     SquadFillReport,
     SquadList,
     SQUAD_FILL_PAGE_DONE
-} from "@src/data/eligibility/types/EligibilityTypes.sol";
+} from "@base/global/types/EligibilityTypes.sol";
 
 /**
  * @title EligibilityVerifier

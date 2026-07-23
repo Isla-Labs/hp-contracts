@@ -6,8 +6,8 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { MarketsErrors as Errors } from "@base/global/libraries/errors/MarketsErrors.sol";
-import { MarketsEvents as Events } from "@base/global/libraries/events/MarketsEvents.sol";
+import { MarketsErrors as Errors } from "@base/global/libraries/errors/markets/MarketsErrors.sol";
+import { MarketsEvents as Events } from "@base/global/libraries/events/markets/MarketsEvents.sol";
 import { TournamentType } from "@base/global/types/TournamentTypes.sol";
 
 /**

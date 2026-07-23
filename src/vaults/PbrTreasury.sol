@@ -7,10 +7,10 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErrors.sol";
-import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
+import { VaultsErrors as Errors } from "@base/global/libraries/errors/vaults/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@base/global/libraries/events/vaults/VaultsEvents.sol";
 import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
-import { RoundState, RoundStatus } from "@base/global/types/VaultTypes.sol";
+import { RoundState, RoundStatus } from "@base/global/types/vaults/VaultTypes.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";

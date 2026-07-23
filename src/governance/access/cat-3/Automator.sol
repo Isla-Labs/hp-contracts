@@ -3,8 +3,8 @@ pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { GovernanceEvents as Events } from "@base/global/libraries/events/GovernanceEvents.sol";
-import { GovernanceErrors as Errors } from "@base/global/libraries/errors/GovernanceErrors.sol";
+import { GovernanceEvents as Events } from "@base/global/libraries/events/governance/GovernanceEvents.sol";
+import { GovernanceErrors as Errors } from "@base/global/libraries/errors/governance/GovernanceErrors.sol";
 import { IAutomator } from "@base/global/interfaces/governance/IAutomator.sol";
 
 /**

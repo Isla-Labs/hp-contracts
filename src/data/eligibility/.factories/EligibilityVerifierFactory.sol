@@ -3,8 +3,8 @@ pragma solidity ^0.8.34;
 
 import { TransparentUpgradeableProxy } from "@openzeppelin/proxy/transparent/TransparentUpgradeableProxy.sol";
 
-import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
-import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
+import { EligibilityErrors as Errors } from "@base/global/libraries/errors/data/EligibilityErrors.sol";
+import { EligibilityEvents as Events } from "@base/global/libraries/events/data/EligibilityEvents.sol";
 import { EligibilityVerifier } from "@src/data/eligibility/EligibilityVerifier.sol";
 
 /**

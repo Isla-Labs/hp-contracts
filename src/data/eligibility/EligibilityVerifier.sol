@@ -11,11 +11,11 @@ import { ITransferLocker } from "@base/global/interfaces/governance/ITransferLoc
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
-import { LifecycleReason } from "@base/global/types/LifecycleTypes.sol";
+import { LifecycleReason } from "@base/global/types/governance/LifecycleTypes.sol";
 import { PlayerStatus, Position } from "@base/global/types/PlayerSetTypes.sol";
 
-import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
-import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
+import { EligibilityErrors as Errors } from "@base/global/libraries/errors/data/EligibilityErrors.sol";
+import { EligibilityEvents as Events } from "@base/global/libraries/events/data/EligibilityEvents.sol";
 import { EligibilityCriteria } from "@data/eligibility/config/EligibilityCriteria.sol";
 import {
     Appearance,
@@ -29,7 +29,7 @@ import {
     SquadFillReport,
     SquadList,
     SQUAD_FILL_PAGE_DONE
-} from "@base/global/types/EligibilityTypes.sol";
+} from "@base/global/types/data/EligibilityTypes.sol";
 
 /**
  * @title EligibilityVerifier

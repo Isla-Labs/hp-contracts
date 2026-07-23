@@ -4,8 +4,8 @@ pragma solidity ^0.8.34;
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/DeploymentsErrors.sol";
-import { DeploymentsEvents as Events } from "@base/global/libraries/events/DeploymentsEvents.sol";
+import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/governance/DeploymentsErrors.sol";
+import { DeploymentsEvents as Events } from "@base/global/libraries/events/governance/DeploymentsEvents.sol";
 
 import { Hub, RoundSchedule, TournamentType } from "@base/global/types/TournamentTypes.sol";
 import { VaultData } from "@base/global/types/PlayerSetTypes.sol";

@@ -5,8 +5,8 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { EligibilityErrors as Errors } from "@base/global/libraries/errors/EligibilityErrors.sol";
-import { EligibilityEvents as Events } from "@base/global/libraries/events/EligibilityEvents.sol";
+import { EligibilityErrors as Errors } from "@base/global/libraries/errors/data/EligibilityErrors.sol";
+import { EligibilityEvents as Events } from "@base/global/libraries/events/data/EligibilityEvents.sol";
 
 /**
  * @title EligibilityCriteria

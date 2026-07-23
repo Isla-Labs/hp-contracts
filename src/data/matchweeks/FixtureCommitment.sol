@@ -5,8 +5,8 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { MatchweekErrors as Errors } from "@base/global/libraries/errors/MatchweekErrors.sol";
-import { MatchweekEvents as Events } from "@base/global/libraries/events/MatchweekEvents.sol";
+import { MatchweekErrors as Errors } from "@base/global/libraries/errors/data/MatchweekErrors.sol";
+import { MatchweekEvents as Events } from "@base/global/libraries/events/data/MatchweekEvents.sol";
 import { RoundSchedule } from "@base/global/types/TournamentTypes.sol";
 import { IFixtureCommitment } from "@base/global/interfaces/data/IFixtureCommitment.sol";
 import { DigestSource, FixtureDigest } from "@src/data/matchweeks/types/MatchweekTypes.sol";

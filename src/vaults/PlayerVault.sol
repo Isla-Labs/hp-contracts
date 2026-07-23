@@ -9,9 +9,9 @@ import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
-import { VaultsErrors as Errors } from "@base/global/libraries/errors/VaultsErrors.sol";
-import { VaultsEvents as Events } from "@base/global/libraries/events/VaultsEvents.sol";
-import { RoundStatus } from "@base/global/types/VaultTypes.sol";
+import { VaultsErrors as Errors } from "@base/global/libraries/errors/vaults/VaultsErrors.sol";
+import { VaultsEvents as Events } from "@base/global/libraries/events/vaults/VaultsEvents.sol";
+import { RoundStatus } from "@base/global/types/vaults/VaultTypes.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { IStakedToken } from "@base/global/interfaces/vaults/IStakedToken.sol";

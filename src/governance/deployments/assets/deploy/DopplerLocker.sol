@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/DeploymentsErrors.sol";
-import { DeploymentsEvents as Events } from "@base/global/libraries/events/DeploymentsEvents.sol";
+import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/governance/DeploymentsErrors.sol";
+import { DeploymentsEvents as Events } from "@base/global/libraries/events/governance/DeploymentsEvents.sol";
 import { IDopplerLocker } from "@base/global/interfaces/governance/IDopplerLocker.sol";
 import { IEligibilityVerifier } from "@base/global/interfaces/data/IEligibilityVerifier.sol";
-import { EligibilityBucket, EligibilityGroups, MinutesStore } from "@base/global/types/EligibilityTypes.sol";
+import { EligibilityBucket, EligibilityGroups, MinutesStore } from "@base/global/types/data/EligibilityTypes.sol";
 
 import { DopplerConfig } from "@governance/deployments/assets/deploy/config/DopplerConfig.sol";
-import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
+import { DopplerTypes } from "@base/global/types/governance/DopplerTypes.sol";
 
 /**
  * Two completely different flows live in this contract:

@@ -9,15 +9,22 @@ generate-history:
 # Base mainnet
 # ---------------------------------------------------------------------------
 
-deploy-base:
-	@forge script script/DeployBase/DeployBase.s.sol:DeployAll \
+deploy-base-core:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployCoreStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
 	$(MAKE) generate-history
 
-deploy-base-core:
-	@forge script script/DeployBase/DeployBase.s.sol:DeployCoreStack \
+deploy-base-factories:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployFactoriesStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-data:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployDataStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
@@ -27,15 +34,22 @@ deploy-base-core:
 # Base Sepolia
 # ---------------------------------------------------------------------------
 
-deploy-base-sepolia:
-	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployAll \
+deploy-base-sepolia-core:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployCoreStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
 	$(MAKE) generate-history
 
-deploy-base-sepolia-core:
-	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployCoreStack \
+deploy-base-sepolia-factories:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployFactoriesStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-sepolia-data:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployDataStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
@@ -63,5 +77,7 @@ fmt:
 fmt-check:
 	forge fmt --check
 
-.PHONY: generate-history deploy-base deploy-base-core deploy-base-sepolia deploy-base-sepolia-core \
+.PHONY: generate-history \
+	deploy-base-core deploy-base-factories deploy-base-data \
+	deploy-base-sepolia-core deploy-base-sepolia-factories deploy-base-sepolia-data \
 	install build test coverage fmt fmt-check

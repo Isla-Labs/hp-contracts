@@ -72,6 +72,19 @@ Trading fees flow through `FeeRouter` / `PbrFeeHub` into `PbrTreasury`, which di
 
 Latest deployments can be found [here](./Deployments.md) and historical deployment logs can be found in the [deployments](./deployments/) folder.
 
+## Deployment Instructions
+
+Three Foundry scripts (Base / Base Sepolia). Copy `.env.example` → `.env`, then:
+
+```bash
+make deploy-base-sepolia-core        # access, lockers, DeployTournament, registries
+# paste logged addresses into .env (CONSTITUTIONAL_TIMELOCK, AUTOMATOR, …)
+make deploy-base-sepolia-factories   # FeeRouter / PlayerVault / PbrTreasury / PbrFeeHub factories
+make deploy-base-sepolia-data        # EligibilityVerifier, FixtureCommitment, RoundManager
+```
+
+Upgradeable singletons use `InitGuard` → `TransparentUpgradeableProxy` → `ProxyAdmin` owned by `ConstitutionalTimelock`. Per-market FeeRouter / PlayerVault and per-tournament hub / treasury deploys happen later via DopplerLocker / DeployTournament flows (not these scripts).
+
 ## Blueprint
 
 ```txt
@@ -90,11 +103,11 @@ src
 ├─ governance/
 │  ├─ access/       — cat-1 / cat-2 / cat-3 (+ README)
 │  └─ deployments/  — DopplerLocker, TransferLocker, DeployTournament, …
-├─ markets/         — FeeRouter, PbrFeeHub
-└─ vaults/          — PbrTreasury, PlayerVault, StakedToken
+├─ markets/         — FeeRouter, PbrFeeHub (+ factories)
+└─ vaults/          — PbrTreasury, PlayerVault, StakedToken (+ factories)
 script/
-├─ DeployBase/      — Base + Base Sepolia
-└─ utils/           — DeployCore, ProxyUtils (InitGuard bootstrap)
+├─ DeployBase/      — DeployCoreStack / DeployFactoriesStack / DeployDataStack
+└─ utils/           — DeployCore, DeployFactories, DeployData, ProxyUtils
 test/
 deployments/        — history logs + cli.ts
 ```

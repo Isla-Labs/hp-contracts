@@ -2,7 +2,7 @@
 
 Per-league squad store, recency-weighted minutes score, and handoff into deploy / lifecycle waiting rooms.
 
-Primary contract: `EligibilityVerifier.sol` (TransparentUpgradeableProxy via `.factories/EligibilityVerifierFactory.sol`).  
+Primary contract: `EligibilityVerifier.sol` (TransparentUpgradeableProxy via `script/utils/DeployData.sol`).  
 Thresholds: `config/EligibilityCriteria.sol` (`CATEGORY_ONE` updatable).  
 Types: `@base/global/types/data/EligibilityTypes.sol`, `@base/global/types/governance/LifecycleTypes.sol`.
 
@@ -14,7 +14,6 @@ Types: `@base/global/types/data/EligibilityTypes.sol`, `@base/global/types/gover
 |------|------|
 | `EligibilityVerifier.sol` | CRE squad-fill receiver, minutes store, score + cohort routing |
 | `config/EligibilityCriteria.sol` | GK / u21 / outfield / newTransfer thresholds + under-21 age |
-| `.factories/EligibilityVerifierFactory.sol` | Shared impl + per-league TUP deploy |
 
 Downstream (not in this folder):
 

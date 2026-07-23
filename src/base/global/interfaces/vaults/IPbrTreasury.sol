@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { RoundState } from "@base/global/types/VaultTypes.sol";
+import { RoundState } from "@base/global/types/vaults/VaultTypes.sol";
 
 /**
  * @title IPbrTreasury
@@ -20,9 +20,13 @@ interface IPbrTreasury {
     //  Claims (called by PlayerVault)
     // --------------------------------------------
 
-    function payClaim(uint16 season, uint32 roundNumber, address user, uint256 s, uint256 S)
-        external
-        returns (uint256 payout);
+    function payClaim(
+        uint16 season,
+        uint32 roundNumber,
+        address user,
+        uint256 s,
+        uint256 S
+    ) external returns (uint256 payout);
 
     // --------------------------------------------
     //  Views
@@ -40,8 +44,11 @@ interface IPbrTreasury {
 
     function getCursors() external view returns (uint16 season, uint32 active, uint32 trading);
 
-    function previewClaim(uint16 season, uint32 roundNumber, address vault, uint256 s, uint256 S)
-        external
-        view
-        returns (uint256 payout);
+    function previewClaim(
+        uint16 season,
+        uint32 roundNumber,
+        address vault,
+        uint256 s,
+        uint256 S
+    ) external view returns (uint256 payout);
 }

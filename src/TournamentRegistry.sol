@@ -7,13 +7,7 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.sol";
 import { RegistryErrors as Errors } from "@base/global/libraries/errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@base/global/libraries/events/RegistryEvents.sol";
-import {
-    Hub,
-    Season,
-    Tournament,
-    TournamentType,
-    RoundSchedule
-} from "@base/global/types/TournamentTypes.sol";
+import { Hub, Season, Tournament, TournamentType, RoundSchedule } from "@base/global/types/TournamentTypes.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 
 /**
@@ -156,10 +150,12 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
      * @param seasonStartYear Local season key (e.g. 2025 for 2025/26).
      * @param finalRound Highest round number for the season.
      */
-    function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound)
-        external
-        onlyRole(Roles.CATEGORY_THREE)
-    {
+    function openSeason(
+        bytes32 tournamentId,
+        bytes32 seasonId,
+        uint16 seasonStartYear,
+        uint32 finalRound
+    ) external onlyRole(Roles.CATEGORY_THREE) {
         if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
         if (finalRound == 0) revert Errors.InvalidFinalRound();
 
@@ -168,30 +164,33 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
             revert Errors.SeasonExists(tournamentId, seasonStartYear);
         }
 
-        t.seasons.push(
-            Season({
-                seasonId: seasonId,
-                seasonStartYear: seasonStartYear,
-                finalRound: finalRound,
-                roundCount: 0,
-                rounds: new RoundSchedule[](0)
-            })
-        );
+        t.seasons
+            .push(
+                Season({
+                    seasonId: seasonId,
+                    seasonStartYear: seasonStartYear,
+                    finalRound: finalRound,
+                    roundCount: 0,
+                    rounds: new RoundSchedule[](0)
+                })
+            );
         emit Events.SeasonOpened(tournamentId, seasonId, seasonStartYear, finalRound);
     }
 
-    function upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round)
-        external
-        onlyRole(Roles.CATEGORY_THREE)
-    {
+    function upsertRound(
+        bytes32 tournamentId,
+        uint16 seasonStartYear,
+        RoundSchedule calldata round
+    ) external onlyRole(Roles.CATEGORY_THREE) {
         _upsertRound(tournamentId, seasonStartYear, round);
     }
 
     /// @notice Bulk `upsertRound` for calendar bootstrap / matchweek ingest.
-    function upsertRounds(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule[] calldata rounds)
-        external
-        onlyRole(Roles.CATEGORY_THREE)
-    {
+    function upsertRounds(
+        bytes32 tournamentId,
+        uint16 seasonStartYear,
+        RoundSchedule[] calldata rounds
+    ) external onlyRole(Roles.CATEGORY_THREE) {
         uint256 length = rounds.length;
         for (uint256 i; i < length; ++i) {
             _upsertRound(tournamentId, seasonStartYear, rounds[i]);
@@ -333,11 +332,11 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
         }
     }
 
-    function getRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)
-        external
-        view
-        returns (RoundSchedule memory)
-    {
+    function getRound(
+        bytes32 tournamentId,
+        uint16 seasonStartYear,
+        uint32 roundNumber
+    ) external view returns (RoundSchedule memory) {
         Season storage season = _requireSeason(tournamentId, seasonStartYear);
         uint256 rIndex = _roundIndex(season, roundNumber);
         if (rIndex == type(uint256).max) revert Errors.RoundNotFound(tournamentId, seasonStartYear, roundNumber);
@@ -345,11 +344,11 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
     }
 
     /// @notice True when the round exists with a valid time range and at least one fixture.
-    function isRoundPublished(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)
-        external
-        view
-        returns (bool)
-    {
+    function isRoundPublished(
+        bytes32 tournamentId,
+        uint16 seasonStartYear,
+        uint32 roundNumber
+    ) external view returns (bool) {
         Tournament storage t = _tournaments[tournamentId];
         if (t.tournamentId == bytes32(0)) return false;
 

@@ -7,11 +7,8 @@ import { AccessRoles as Roles } from "@base/global/libraries/roles/AccessRoles.s
 import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/governance/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@base/global/libraries/events/governance/DeploymentsEvents.sol";
 
-import {
-    FeeDistributionInfo,
-    FeeRoutingMode
-} from "@doppler/types/RehypeTypes.sol";
-import { WAD } from "@doppler/types/Wad.sol";
+import { FeeDistributionInfo, FeeRoutingMode } from "@doppler/src/types/RehypeTypes.sol";
+import { WAD } from "@doppler/src/types/Wad.sol";
 
 import { DopplerTypes } from "@base/global/types/governance/DopplerTypes.sol";
 
@@ -128,10 +125,9 @@ abstract contract DopplerConfig is AccessControl {
      * @notice Replace the full shared launch recipe (scalars + curves + graduation policy).
      * @dev Does not affect markets already deployed; only subsequent `Airlock.create` calls.
      */
-    function setMarketLaunchConfig(DopplerTypes.MarketLaunchConfig memory config_)
-        external
-        onlyRole(Roles.CATEGORY_ONE)
-    {
+    function setMarketLaunchConfig(
+        DopplerTypes.MarketLaunchConfig memory config_
+    ) external onlyRole(Roles.CATEGORY_ONE) {
         _applyLaunchConfig(config_);
         emit Events.MarketLaunchConfigUpdated(
             config_.initialSupply, config_.numTokensToSell, config_.farTick, config_.curves.length
@@ -145,20 +141,17 @@ abstract contract DopplerConfig is AccessControl {
     }
 
     /// @notice Update HP soft-graduation policy (50 ETH / 30d defaults).
-    function setGraduationPolicy(uint256 minGraduateProceeds_, uint32 minBondingDuration_)
-        external
-        onlyRole(Roles.CATEGORY_ONE)
-    {
+    function setGraduationPolicy(
+        uint256 minGraduateProceeds_,
+        uint32 minBondingDuration_
+    ) external onlyRole(Roles.CATEGORY_ONE) {
         minGraduateProceeds = minGraduateProceeds_;
         minBondingDuration = minBondingDuration_;
         emit Events.GraduationPolicyUpdated(minGraduateProceeds_, minBondingDuration_);
     }
 
     /// @notice Update Rehype fee routing matrix (each source row must sum to WAD).
-    function setFeeDistribution(FeeDistributionInfo calldata feeDistribution_)
-        external
-        onlyRole(Roles.CATEGORY_ONE)
-    {
+    function setFeeDistribution(FeeDistributionInfo calldata feeDistribution_) external onlyRole(Roles.CATEGORY_ONE) {
         _validateFeeDistribution(feeDistribution_);
         feeDistribution = feeDistribution_;
         emit Events.FeeDistributionUpdated();

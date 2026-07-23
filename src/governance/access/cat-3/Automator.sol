@@ -65,12 +65,11 @@ contract Automator is AccessControl, IAutomator {
      * @return result Return data from the call.
      */
     /// @inheritdoc IAutomator
-    function executeAutomation(address target, uint256 value, bytes calldata data)
-        external
-        payable
-        onlyRole(Roles.CATEGORY_THREE)
-        returns (bytes memory result)
-    {
+    function executeAutomation(
+        address target,
+        uint256 value,
+        bytes calldata data
+    ) external payable onlyRole(Roles.CATEGORY_THREE) returns (bytes memory result) {
         if (target == address(0)) revert Errors.ZeroAddress();
         (bool ok, bytes memory ret) = target.call{ value: value }(data);
         if (!ok) revert Errors.ExecutionFailed();

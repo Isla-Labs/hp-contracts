@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
-enum PlayerStatus { 
+enum PlayerStatus {
     BONDING,
     GRADUATED,
     INACTIVE

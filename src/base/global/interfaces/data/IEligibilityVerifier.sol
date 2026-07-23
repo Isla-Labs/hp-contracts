@@ -5,12 +5,7 @@ import { IDopplerLocker } from "@base/global/interfaces/governance/IDopplerLocke
 import { ITransferLocker } from "@base/global/interfaces/governance/ITransferLocker.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
-import {
-    Appearance,
-    EligibilityGroups,
-    MinutesStore,
-    SquadList
-} from "@base/global/types/EligibilityTypes.sol";
+import { Appearance, EligibilityGroups, MinutesStore, SquadList } from "@base/global/types/data/EligibilityTypes.sol";
 
 /**
  * @title IEligibilityVerifier
@@ -32,8 +27,7 @@ interface IEligibilityVerifier {
         uint16 baseYear_
     ) external;
 
-    function recordAppearances(bytes32 seasonId, uint16 seasonStartYear, Appearance[] calldata appearances)
-        external;
+    function recordAppearances(bytes32 seasonId, uint16 seasonStartYear, Appearance[] calldata appearances) external;
 
     /**
      * @notice Recompute scores for a page; enqueue undeployed eligibles; queue lifecycle candidates.
@@ -100,10 +94,7 @@ interface IEligibilityVerifier {
     function hasPlayerMetadata(bytes32 playerId) external view returns (bool);
 
     /// @notice Compact ids in `playerIds` that are tracked but still missing `name`.
-    function playersMissingMetadata(bytes32[] calldata playerIds)
-        external
-        view
-        returns (bytes32[] memory missing);
+    function playersMissingMetadata(bytes32[] calldata playerIds) external view returns (bytes32[] memory missing);
 
     /// @notice Next unix time `verifyEligibility` may run (0 = never run / immediately allowed).
     function nextAllowed() external view returns (uint256 timestamp);

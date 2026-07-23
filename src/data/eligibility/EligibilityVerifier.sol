@@ -129,9 +129,8 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     ) external initializer {
         if (expectedWorkflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
         if (
-            ppmVerifier_ == address(0) || playerSetRegistry_ == address(0)
-                || tournamentRegistry_ == address(0) || dopplerLocker_ == address(0)
-                || transferLocker_ == address(0)
+            ppmVerifier_ == address(0) || playerSetRegistry_ == address(0) || tournamentRegistry_ == address(0)
+                || dopplerLocker_ == address(0) || transferLocker_ == address(0)
         ) {
             revert Errors.ZeroAddress();
         }
@@ -155,12 +154,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     // --------------------------------------------
 
     /// @inheritdoc CreReceiver
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(AccessControl, CreReceiver)
-        returns (bool)
-    {
+    function supportsInterface(bytes4 interfaceId) public view override(AccessControl, CreReceiver) returns (bool) {
         return AccessControl.supportsInterface(interfaceId) || CreReceiver.supportsInterface(interfaceId);
     }
 
@@ -220,11 +214,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     }
 
     /// @notice Compact ids in `playerIds` that are tracked but still missing `name`.
-    function playersMissingMetadata(bytes32[] calldata mdPlayerIds)
-        external
-        view
-        returns (bytes32[] memory missing)
-    {
+    function playersMissingMetadata(bytes32[] calldata mdPlayerIds) external view returns (bytes32[] memory missing) {
         uint256 length = mdPlayerIds.length;
         bytes32[] memory tmp = new bytes32[](length);
         uint256 n;
@@ -258,11 +248,10 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
      *         `transferLocker.enqueueLifecycle` for deactivate / reactivate
      *      Continuity uses GK/u21/outfield thresholds only (not the newTransfer ≥ 1 shortcut).
      */
-    function verifyEligibility(uint256 offset, uint256 limit)
-        external
-        rateLimited
-        returns (EligibilityGroups memory groups)
-    {
+    function verifyEligibility(
+        uint256 offset,
+        uint256 limit
+    ) external rateLimited returns (EligibilityGroups memory groups) {
         uint256 total = _playerIds.length;
         if (offset >= total || limit == 0) {
             return groups;
@@ -418,9 +407,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
             dopplerLocker.enqueueEligible(groups);
         }
         if (discCount != 0) {
-            transferLocker.enqueueLifecycle(
-                groups.toDiscontinue, LifecycleReason.ContinuityUnderThreshold, discMins
-            );
+            transferLocker.enqueueLifecycle(groups.toDiscontinue, LifecycleReason.ContinuityUnderThreshold, discMins);
         }
         if (reactCount != 0) {
             transferLocker.enqueueLifecycle(groups.toReactivate, LifecycleReason.Reactivate, reactMins);
@@ -435,11 +422,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     /// @dev Squad-fill must have created the `MinutesStore` already. No DOB enqueue.
     ///      One batch = one calendar (`seasonId` / `seasonStartYear`); each row carries its `roundNumber`.
     ///      Does not update `weightedScoreWad` — that happens in `verifyEligibility`.
-    function recordAppearances(
-        bytes32 seasonId,
-        uint16 seasonStartYear,
-        Appearance[] calldata appearances
-    ) external {
+    function recordAppearances(bytes32 seasonId, uint16 seasonStartYear, Appearance[] calldata appearances) external {
         if (msg.sender != ppmVerifier) revert Errors.Unauthorized();
         if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
 
@@ -704,11 +687,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
      * @dev Continuity path for already-deployed markets (no newTransfer shortcut).
      *      missing DOB → false; else GK / u21 / outfield thresholds from `EligibilityCriteria`.
      */
-    function _evaluateContinuity(bytes32 playerId)
-        private
-        view
-        returns (bool stillActive, uint32 effectiveMins)
-    {
+    function _evaluateContinuity(bytes32 playerId) private view returns (bool stillActive, uint32 effectiveMins) {
         MinutesStore storage store = _minutesStore[playerId];
         if (store.birthDate == 0) {
             return (false, 0);
@@ -720,11 +699,10 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     }
 
     /// @dev Shared GK / u21 / outfield threshold gate (live `EligibilityCriteria` storage).
-    function _continuityGate(MinutesStore storage store, uint32 effectiveMins)
-        private
-        view
-        returns (bool ok, EligibilityBucket bucket)
-    {
+    function _continuityGate(
+        MinutesStore storage store,
+        uint32 effectiveMins
+    ) private view returns (bool ok, EligibilityBucket bucket) {
         if (store.expectedPosition == Position.GK) {
             bucket = EligibilityBucket.Goalkeeper;
             ok = effectiveMins >= thresholdGk;
@@ -780,11 +758,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
      * @dev G(year, round) = Σ finalRound(y) for y ∈ [baseYear, year) + round.
      *      Uses planned `finalRound` (not live `roundCount`).
      */
-    function _toGlobalRound(uint16 year, uint32 round, FinalRoundCache memory frCache)
-        private
-        view
-        returns (uint32)
-    {
+    function _toGlobalRound(uint16 year, uint32 round, FinalRoundCache memory frCache) private view returns (uint32) {
         if (year <= baseYear) return round;
 
         uint256 acc;
@@ -825,11 +799,11 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     }
 
     /// @dev Full replay of domestic-league appearances → score at `gNow` (view-safe).
-    function _computeWeightedScoreWad(MinutesStore storage store, uint32 gNow, FinalRoundCache memory frCache)
-        private
-        view
-        returns (uint256 scoreWad)
-    {
+    function _computeWeightedScoreWad(
+        MinutesStore storage store,
+        uint32 gNow,
+        FinalRoundCache memory frCache
+    ) private view returns (uint256 scoreWad) {
         uint256 n = store.seasonMinutes.length;
 
         for (uint256 s; s < n; ++s) {
@@ -849,9 +823,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
     }
 
     /// @dev Write path used by `verifyEligibility`.
-    function _recomputeWeightedScore(MinutesStore storage store, uint32 gNow, FinalRoundCache memory frCache)
-        private
-    {
+    function _recomputeWeightedScore(MinutesStore storage store, uint32 gNow, FinalRoundCache memory frCache) private {
         store.weightedScoreWad = _computeWeightedScoreWad(store, gNow, frCache);
     }
 

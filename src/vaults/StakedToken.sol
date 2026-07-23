@@ -19,10 +19,7 @@ contract StakedToken is ERC20, ERC20Snapshot, ERC20Permit {
     /// @notice PlayerVault that solely controls mint/burn/snapshot and is the only transfer counterparty
     address public immutable vault;
 
-    constructor(string memory name_, string memory symbol_, address vault_)
-        ERC20(name_, symbol_)
-        ERC20Permit(name_)
-    {
+    constructor(string memory name_, string memory symbol_, address vault_) ERC20(name_, symbol_) ERC20Permit(name_) {
         if (vault_ == address(0)) revert Errors.ZeroAddress();
         vault = vault_;
     }

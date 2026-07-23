@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { CreateParams } from "@doppler/Airlock.sol";
+import { CreateParams } from "@doppler/src/Airlock.sol";
 import {
     FeeDistributionInfo,
     FeeRoutingMode,
     InitData as RehypeBondingHookData,
     MigratorInitData as RehypeMigratorHookData
-} from "@doppler/types/RehypeTypes.sol";
-import { WAD } from "@doppler/types/Wad.sol";
+} from "@doppler/src/types/RehypeTypes.sol";
+import { WAD } from "@doppler/src/types/Wad.sol";
 
-import { EligibilityBucket } from "@base/global/types/EligibilityTypes.sol";
+import { EligibilityBucket } from "@base/global/types/data/EligibilityTypes.sol";
 
 /**
  * @title DopplerTypes
@@ -199,13 +199,8 @@ library DopplerTypes {
         curves = new Curve[](4);
         curves[0] = Curve({ tickLower: -112_040, tickUpper: -101_040, numPositions: 12, shares: 0.35e18 });
         curves[1] = Curve({ tickLower: -103_560, tickUpper: -93_056, numPositions: 12, shares: 0.35e18 });
-        curves[2] = Curve({ tickLower: -94_120, tickUpper: -86_128, numPositions: 10, shares: 0.20e18 });
-        curves[3] = Curve({
-            tickLower: -86_128,
-            tickUpper: DEFAULT_TAIL_TICK_UPPER,
-            numPositions: 1,
-            shares: 0.10e18
-        });
+        curves[2] = Curve({ tickLower: -94_120, tickUpper: -86_128, numPositions: 10, shares: 0.2e18 });
+        curves[3] = Curve({ tickLower: -86_128, tickUpper: DEFAULT_TAIL_TICK_UPPER, numPositions: 1, shares: 0.1e18 });
     }
 
     /**
@@ -371,11 +366,10 @@ library DopplerTypes {
     //  Internal
     // -------------------------------------------------------------------------
 
-    function _migratorBeneficiaries(address integrator, address airlockOwner)
-        private
-        pure
-        returns (Beneficiary[] memory beneficiaries)
-    {
+    function _migratorBeneficiaries(
+        address integrator,
+        address airlockOwner
+    ) private pure returns (Beneficiary[] memory beneficiaries) {
         uint96 ownerShares = PROTOCOL_OWNER_SHARES;
         uint96 integratorShares = uint96(WAD - uint256(ownerShares));
 

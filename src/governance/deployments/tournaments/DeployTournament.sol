@@ -152,10 +152,10 @@ contract DeployTournament is AccessControl {
     /**
      * @notice One-shot factory wiring after factories are deployed with `deployTournament = this`.
      */
-    function configureFactories(address pbrTreasuryFactory_, address pbrFeeHubFactory_)
-        external
-        onlyRole(Roles.CATEGORY_ONE)
-    {
+    function configureFactories(
+        address pbrTreasuryFactory_,
+        address pbrFeeHubFactory_
+    ) external onlyRole(Roles.CATEGORY_ONE) {
         if (factoriesConfigured) revert Errors.Unauthorized();
         if (pbrTreasuryFactory_ == address(0) || pbrFeeHubFactory_ == address(0)) revert Errors.ZeroAddress();
         if (
@@ -307,10 +307,7 @@ contract DeployTournament is AccessControl {
     //  Internals
     // --------------------------------------------
 
-    function _deployDomesticLeague(DomesticLeagueParams calldata params)
-        internal
-        returns (DeployResult memory result)
-    {
+    function _deployDomesticLeague(DomesticLeagueParams calldata params) internal returns (DeployResult memory result) {
         BootstrapParams calldata b = params.bootstrap;
         _validateBootstrap(b);
 
@@ -362,9 +359,7 @@ contract DeployTournament is AccessControl {
     }
 
     function _deployTreasury(BootstrapParams calldata b) internal returns (address pbrTreasury) {
-        pbrTreasury = pbrTreasuryFactory.create(
-            b.tournamentId, b.initialSeason, b.treasury.salt, b.treasury.expected
-        );
+        pbrTreasury = pbrTreasuryFactory.create(b.tournamentId, b.initialSeason, b.treasury.salt, b.treasury.expected);
     }
 
     function _finalize(
@@ -391,12 +386,7 @@ contract DeployTournament is AccessControl {
         }
 
         emit Events.TournamentDeployed(
-            b.tournamentId,
-            tournamentType,
-            pbrTreasury,
-            b.initialSeason,
-            feeHubs.length,
-            b.registeredPlayers.length
+            b.tournamentId, tournamentType, pbrTreasury, b.initialSeason, feeHubs.length, b.registeredPlayers.length
         );
     }
 
@@ -412,9 +402,7 @@ contract DeployTournament is AccessControl {
         }
     }
 
-    function _appendTreasuryToHubs(Hub[] memory feeHubs, TournamentType tournamentType, address treasury)
-        internal
-    {
+    function _appendTreasuryToHubs(Hub[] memory feeHubs, TournamentType tournamentType, address treasury) internal {
         uint256 length = feeHubs.length;
         for (uint256 i; i < length; ++i) {
             _appendTreasuryToHub(IPbrFeeHub(feeHubs[i].pbrFeeHub), tournamentType, treasury);

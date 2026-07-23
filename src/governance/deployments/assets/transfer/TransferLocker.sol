@@ -67,9 +67,7 @@ contract TransferLocker is ITransferLocker {
             }
 
             uint32 mins = effectiveMins.length == 0 ? 0 : effectiveMins[i];
-            _pending.push(
-                PendingLifecycle({ playerId: playerId, reason: reason, effectiveMins: mins })
-            );
+            _pending.push(PendingLifecycle({ playerId: playerId, reason: reason, effectiveMins: mins }));
             unchecked {
                 ++added;
             }
@@ -95,11 +93,7 @@ contract TransferLocker is ITransferLocker {
     }
 
     /// @inheritdoc ITransferLocker
-    function pendingLifecycle(uint256 offset, uint256 limit)
-        external
-        view
-        returns (PendingLifecycle[] memory out)
-    {
+    function pendingLifecycle(uint256 offset, uint256 limit) external view returns (PendingLifecycle[] memory out) {
         uint256 total = _pending.length;
         if (offset >= total || limit == 0) {
             return new PendingLifecycle[](0);
@@ -127,7 +121,7 @@ contract TransferLocker is ITransferLocker {
      *
      * Access: gated (timelock / proposer) — mirror DopplerLocker deploy path.
      */
-    function confirmInactive(/* playerId */) external {
+    function confirmInactive( /* playerId */ ) external {
         // gated: manual review + Automator setStatus(INACTIVE)
     }
 
@@ -139,7 +133,7 @@ contract TransferLocker is ITransferLocker {
      *
      * Access: gated (timelock / proposer).
      */
-    function confirmReactivate(/* playerId */) external {
+    function confirmReactivate( /* playerId */ ) external {
         // gated: manual review + Automator setStatus(GRADUATED) / prior status
     }
 }

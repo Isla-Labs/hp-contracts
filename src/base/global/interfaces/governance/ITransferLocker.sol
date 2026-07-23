@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { LifecycleReason, PendingLifecycle } from "@base/global/types/LifecycleTypes.sol";
+import { LifecycleReason, PendingLifecycle } from "@base/global/types/governance/LifecycleTypes.sol";
 
 /**
  * @title ITransferLocker
@@ -30,8 +30,5 @@ interface ITransferLocker {
     /// @notice True if queued for the given reason's direction.
     function isQueuedFor(bytes32 playerId, LifecycleReason reason) external view returns (bool);
 
-    function pendingLifecycle(uint256 offset, uint256 limit)
-        external
-        view
-        returns (PendingLifecycle[] memory out);
+    function pendingLifecycle(uint256 offset, uint256 limit) external view returns (PendingLifecycle[] memory out);
 }

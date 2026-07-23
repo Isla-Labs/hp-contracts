@@ -162,10 +162,11 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     //  Maintenance (CATEGORY_TWO)
     // --------------------------------------------
 
-    function setTopLevelSplit(uint16 domesticBps_, uint16 continentalBps_, uint16 internationalBps_)
-        external
-        onlyRole(Roles.CATEGORY_TWO)
-    {
+    function setTopLevelSplit(
+        uint16 domesticBps_,
+        uint16 continentalBps_,
+        uint16 internationalBps_
+    ) external onlyRole(Roles.CATEGORY_TWO) {
         uint256 total = uint256(domesticBps_) + continentalBps_ + internationalBps_;
         if (total != BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(total);
 

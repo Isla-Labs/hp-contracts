@@ -21,9 +21,7 @@ library DeploymentsEvents {
     event EligiblePlayersEnqueued(uint256 added, uint256 pendingTotal);
 
     //  DopplerConfig
-    event MarketLaunchConfigUpdated(
-        uint256 initialSupply, uint256 numTokensToSell, int24 farTick, uint256 curveCount
-    );
+    event MarketLaunchConfigUpdated(uint256 initialSupply, uint256 numTokensToSell, int24 farTick, uint256 curveCount);
     event BondingCurvesUpdated(uint256 curveCount);
     event GraduationPolicyUpdated(uint256 minGraduateProceeds, uint32 minBondingDuration);
     event FeeDistributionUpdated();

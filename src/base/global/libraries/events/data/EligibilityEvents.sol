@@ -44,9 +44,7 @@ library EligibilityEvents {
     event PlayerLeftLeague(bytes32 indexed playerId);
 
     /// @notice New `TransparentUpgradeableProxy` for a league EligibilityVerifier.
-    event EligibilityVerifierProxyCreated(
-        address indexed proxy, bytes32 indexed leagueId, address implementation
-    );
+    event EligibilityVerifierProxyCreated(address indexed proxy, bytes32 indexed leagueId, address implementation);
 
     /// @notice Governance updated deploy / continuity thresholds (`EligibilityCriteria`).
     event EligibilityThresholdsUpdated(

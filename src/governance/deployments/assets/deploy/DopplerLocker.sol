@@ -90,11 +90,10 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
     }
 
     /// @notice Page pending waiting-room entries (independent of EligibilityVerifier storage).
-    function pendingEligible(uint256 offset, uint256 limit)
-        external
-        view
-        returns (DopplerTypes.PendingEligible[] memory out)
-    {
+    function pendingEligible(
+        uint256 offset,
+        uint256 limit
+    ) external view returns (DopplerTypes.PendingEligible[] memory out) {
         uint256 total = _pending.length;
         if (offset >= total || limit == 0) {
             return new DopplerTypes.PendingEligible[](0);
@@ -110,10 +109,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
         }
     }
 
-    function _enqueueCohort(bytes32[] calldata playerIds, EligibilityBucket bucket)
-        private
-        returns (uint256 added)
-    {
+    function _enqueueCohort(bytes32[] calldata playerIds, EligibilityBucket bucket) private returns (uint256 added) {
         uint256 length = playerIds.length;
         for (uint256 i; i < length; ++i) {
             bytes32 playerId = playerIds[i];
@@ -125,11 +121,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
             _queued[playerId] = true;
             _pending.push(
                 DopplerTypes.PendingEligible({
-                    playerId: playerId,
-                    bucket: bucket,
-                    name: store.name,
-                    symbol: store.symbol,
-                    metadataSet: metadataSet
+                    playerId: playerId, bucket: bucket, name: store.name, symbol: store.symbol, metadataSet: metadataSet
                 })
             );
             unchecked {
@@ -154,7 +146,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
      * Access: PROPOSER schedules after proof verify; execute after minDelay.
      *         (Or executeWithProof once the eligibility verifier is wired.)
      */
-    function deployBondingMarket(/* playerId, eligibilityProof, publicInputs, deployParams */) external {
+    function deployBondingMarket( /* playerId, eligibilityProof, publicInputs, deployParams */ ) external {
         // gated: zk + timelock
         // use marketLaunchConfig() + DopplerTypes.buildCreateParams(...)
     }
@@ -177,7 +169,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
      * Access: public — no role. Reverts if Doppler status is not Graduated,
      *         or if HP registry is not still BONDING / vaults already set.
      */
-    function finalizeGraduatedMarket(/* playerId */) internal {
+    function finalizeGraduatedMarket( /* playerId */ ) internal {
         // public
     }
 
@@ -202,7 +194,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
      * Note: Airlock.migrate is itself permissionless; this wrapper additionally
      *       performs the HP-side VaultSet / registry updates atomically after migrate.
      */
-    function migrateAndFinalizeMarket(/* playerId */) internal {
+    function migrateAndFinalizeMarket( /* playerId */ ) internal {
         // public
     }
 
@@ -219,7 +211,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
      *
      * Access: public — no role.
      */
-    function tryFinalizeMarket(/* playerId */) external {
+    function tryFinalizeMarket( /* playerId */ ) external {
         // check bonding status against registry status
         // if mismatch, deploy VaultSet and AdvancedTradeSet, and update registry
         // if bonding curve is ready but not migrated yet, migrate then deploy and update

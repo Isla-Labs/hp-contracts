@@ -43,7 +43,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     uint256 public constant SNAPSHOT_BATCH_SIZE = 50;
 
     /// @notice Share of `rewardsR` frozen into each non-final round (remainder rolls forward).
-    uint256 public constant LOCK_BPS = 8_000;
+    uint256 public constant LOCK_BPS = 8000;
 
     // --------------------------------------------
     //  Storage
@@ -84,9 +84,8 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     modifier onlyAdmin() {
         address sender = _msgSender();
         if (
-            !hasRole(Roles.CATEGORY_ONE, sender) && 
-            !hasRole(Roles.CATEGORY_TWO, sender) &&
-            !hasRole(Roles.CATEGORY_THREE, sender)
+            !hasRole(Roles.CATEGORY_ONE, sender) && !hasRole(Roles.CATEGORY_TWO, sender)
+                && !hasRole(Roles.CATEGORY_THREE, sender)
         ) {
             revert Errors.Unauthorized();
         }
@@ -287,10 +286,11 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     //  mwEndTime
     // --------------------------------------------
 
-    function settle(address[] calldata vaults, uint256[] calldata mwPoints, uint256 adjTotalPoints)
-        external
-        onlyRole(Roles.CATEGORY_THREE)
-    {
+    function settle(
+        address[] calldata vaults,
+        uint256[] calldata mwPoints,
+        uint256 adjTotalPoints
+    ) external onlyRole(Roles.CATEGORY_THREE) {
         if (vaults.length != mwPoints.length) revert Errors.LengthMismatch();
         if (adjTotalPoints == 0) revert Errors.ZeroMAdj();
 
@@ -331,11 +331,13 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     //  Distribution
     // --------------------------------------------
 
-    function payClaim(uint16 season, uint32 roundNumber, address user, uint256 s, uint256 S)
-        external
-        nonReentrant
-        returns (uint256 payout)
-    {
+    function payClaim(
+        uint16 season,
+        uint32 roundNumber,
+        address user,
+        uint256 s,
+        uint256 S
+    ) external nonReentrant returns (uint256 payout) {
         if (!isVault[msg.sender]) revert Errors.UnknownVault(msg.sender);
         if (user == address(0)) revert Errors.ZeroAddress();
 
@@ -383,11 +385,13 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
         return (seasonId, activeRound, tradingRound);
     }
 
-    function previewClaim(uint16 season, uint32 roundNumber, address vault, uint256 s, uint256 S)
-        external
-        view
-        returns (uint256 payout)
-    {
+    function previewClaim(
+        uint16 season,
+        uint32 roundNumber,
+        address vault,
+        uint256 s,
+        uint256 S
+    ) external view returns (uint256 payout) {
         RoundState storage round = _rounds[season][roundNumber];
         if (round.status != RoundStatus.Claimable || s == 0 || S == 0 || round.R == 0) return 0;
         uint256 m = vaultPoints[season][roundNumber][vault];

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { RoundStatus } from "@base/global/types/VaultTypes.sol";
+import { RoundStatus } from "@base/global/types/vaults/VaultTypes.sol";
 
 library VaultsErrors {
     // --------------------------------------------

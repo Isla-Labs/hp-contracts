@@ -2,9 +2,8 @@
 pragma solidity ^0.8.34;
 
 import { ERC165 } from "@openzeppelin/utils/introspection/ERC165.sol";
-import { IERC165 } from "@openzeppelin/utils/introspection/IERC165.sol";
 
-import { ICreReceiver } from "@base/global/interfaces/data/ICreReceiver.sol";
+import { IReceiver } from "@cre/v1/interfaces/IReceiver.sol";
 
 /**
  * @title CreReceiver
@@ -12,12 +11,17 @@ import { ICreReceiver } from "@base/global/interfaces/data/ICreReceiver.sol";
  * @dev Functions `Oracle` *pulled* data via `_sendRequest` → `_fulfillRequest`.
  *      CRE *pushes* signed reports: KeystoneForwarder → `onReport` → `_processReport`.
  *
+ *      Uses Chainlink's canonical `IReceiver` (cre/v1/interfaces/IReceiver.sol) for the
+ *      ERC165 id and `onReport` ABI. We do not Solidity-inherit that interface: its IERC165
+ *      import path conflicts with the OpenZeppelin remapping used by AccessControl children.
+ *      The forwarder only requires matching `onReport` + `type(IReceiver).interfaceId`.
+ *
  *      Children implement `_processReport` with domain logic (e.g. decode schedule digests
  *      and call `FixtureCommitment.commit(DigestSource.CRE, …)`).
  *
- *      Config mirrors Chainlink's `ReceiverTemplate`: required forwarder, optional workflow
- *      id / owner / name checks. Admin setters are `internal` so children can gate them with
- *      AccessControl / Ownable as they prefer (same pattern as `Oracle`'s `_setSubscriptionId`).
+ *      Config mirrors Chainlink's `KeystoneFeedsConsumer`: required forwarder, optional
+ *      workflow id / owner / name checks. Admin setters are `internal` so children can gate
+ *      them with AccessControl / Ownable as they prefer.
  *
  *      Proxy-safe: children behind ERC-1967 proxies must call `__CreReceiver_init` from
  *      `initialize` so `_forwarder` lands in proxy storage (not implementation storage).
@@ -25,8 +29,9 @@ import { ICreReceiver } from "@base/global/interfaces/data/ICreReceiver.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  * @custom:see https://docs.chain.link/cre/guides/workflow/using-evm-client/onchain-write/building-consumer-contracts
+ * @custom:see https://github.com/smartcontractkit/chainlink-evm/tree/develop/contracts/cre
  */
-abstract contract CreReceiver is ICreReceiver, ERC165 {
+abstract contract CreReceiver is ERC165 {
     // --------------------------------------------
     //  Configuration
     // --------------------------------------------
@@ -52,7 +57,7 @@ abstract contract CreReceiver is ICreReceiver, ERC165 {
     /// @notice Last accepted reportId (trailing 2 bytes of production metadata; zero if absent).
     bytes2 public lastReportId;
 
-    // Hex lookup for workflow-name hashing (Chainlink ReceiverTemplate convention).
+    // Hex lookup for workflow-name hashing (Chainlink consumer convention).
     bytes private constant HEX_CHARS = "0123456789abcdef";
 
     // --------------------------------------------
@@ -110,11 +115,11 @@ abstract contract CreReceiver is ICreReceiver, ERC165 {
     }
 
     // --------------------------------------------
-    //  ICreReceiver
+    //  IReceiver (canonical Chainlink CRE)
     // --------------------------------------------
 
-    /// @inheritdoc ICreReceiver
-    function onReport(bytes calldata metadata, bytes calldata report) external override {
+    /// @notice Handles an incoming CRE / Keystone report (`IReceiver.onReport`).
+    function onReport(bytes calldata metadata, bytes calldata report) external {
         if (_forwarder != address(0) && msg.sender != _forwarder) {
             revert InvalidSender(msg.sender, _forwarder);
         }
@@ -204,6 +209,7 @@ abstract contract CreReceiver is ICreReceiver, ERC165 {
     /**
      * @notice Decodes CRE forwarder metadata.
      * @dev Accepts 62-byte packed identity or production 64-byte slice (+ `reportId`).
+     *      Matches `KeystoneForwarder.report` → `rawReport[45:109]` layout.
      */
     function _decodeMetadata(bytes calldata metadata)
         internal
@@ -226,8 +232,8 @@ abstract contract CreReceiver is ICreReceiver, ERC165 {
     // --------------------------------------------
 
     /// @inheritdoc ERC165
-    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
-        return interfaceId == type(ICreReceiver).interfaceId || super.supportsInterface(interfaceId);
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(IReceiver).interfaceId || super.supportsInterface(interfaceId);
     }
 
     // --------------------------------------------

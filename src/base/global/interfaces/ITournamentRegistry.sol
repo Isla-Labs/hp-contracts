@@ -66,13 +66,15 @@ interface ITournamentRegistry {
         view
         returns (bytes32[] memory seasonIds, uint16[] memory seasonStartYears);
 
-    function getRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)
-        external
-        view
-        returns (RoundSchedule memory);
+    function getRound(
+        bytes32 tournamentId,
+        uint16 seasonStartYear,
+        uint32 roundNumber
+    ) external view returns (RoundSchedule memory);
 
-    function isRoundPublished(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber)
-        external
-        view
-        returns (bool);
+    function isRoundPublished(
+        bytes32 tournamentId,
+        uint16 seasonStartYear,
+        uint32 roundNumber
+    ) external view returns (bool);
 }

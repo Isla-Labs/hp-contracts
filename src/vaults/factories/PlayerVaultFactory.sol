@@ -92,8 +92,7 @@ contract PlayerVaultFactory {
         }
         if (vaultSalt == bytes32(0) || stTokenSalt == bytes32(0)) revert Errors.ZeroSalt();
 
-        bytes memory vaultInitCode =
-            abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), ""));
+        bytes memory vaultInitCode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), ""));
         playerVault = CREATE_X.deployCreate3(vaultSalt, vaultInitCode);
         if (playerVault != expectedVault) revert Errors.AddressMismatch(playerVault, expectedVault);
 
@@ -104,16 +103,17 @@ contract PlayerVaultFactory {
         stToken = CREATE_X.deployCreate3(stTokenSalt, stInitCode);
         if (stToken != expectedStToken) revert Errors.AddressMismatch(stToken, expectedStToken);
 
-        PlayerVault(playerVault).initialize(
-            automator,
-            maintenanceTimelock,
-            dao,
-            tournamentRegistry,
-            playerSetRegistry,
-            playerId,
-            playerToken,
-            stToken
-        );
+        PlayerVault(playerVault)
+            .initialize(
+                automator,
+                maintenanceTimelock,
+                dao,
+                tournamentRegistry,
+                playerSetRegistry,
+                playerId,
+                playerToken,
+                stToken
+            );
 
         emit Events.PlayerVaultCreated(playerId, playerVault, stToken);
     }

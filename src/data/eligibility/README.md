@@ -4,7 +4,7 @@ Per-league squad store, recency-weighted minutes score, and handoff into deploy 
 
 Primary contract: `EligibilityVerifier.sol` (TransparentUpgradeableProxy via `.factories/EligibilityVerifierFactory.sol`).  
 Thresholds: `config/EligibilityCriteria.sol` (`CATEGORY_ONE` updatable).  
-Types: `@base/global/types/EligibilityTypes.sol`, `@base/global/types/LifecycleTypes.sol`.
+Types: `@base/global/types/data/EligibilityTypes.sol`, `@base/global/types/governance/LifecycleTypes.sol`.
 
 ---
 

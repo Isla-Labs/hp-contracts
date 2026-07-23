@@ -11,7 +11,9 @@ library VaultsEvents {
     event FeesReceived(uint256 amount);
     event VaultRegistered(address indexed vault);
     event VaultUnregistered(address indexed vault);
-    event RoundLocked(uint16 indexed season, uint32 roundNumber, uint256 R, uint64 startTime, uint64 endTime, uint32 newTradingRound);
+    event RoundLocked(
+        uint16 indexed season, uint32 roundNumber, uint256 R, uint64 startTime, uint64 endTime, uint32 newTradingRound
+    );
     event SeasonWrapped(uint16 indexed settledSeason, uint16 newSeason);
     event VaultSnapshotted(uint16 indexed season, uint32 roundNumber, address indexed vault, uint256 snapId);
     event SnapshotBatchProgress(uint16 indexed season, uint32 roundNumber, uint256 cursor, bool done);

@@ -155,12 +155,14 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
     /**
      * @notice Attaches Advanced Trade vault + mark source after those deployments.
      */
-    function addAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data)
-        external
-        onlyRole(Roles.CATEGORY_THREE)
-    {
+    function addAdvancedTradeData(
+        bytes32 playerId,
+        AdvancedTradeData calldata data
+    ) external onlyRole(Roles.CATEGORY_THREE) {
         PlayerSet storage set = _requirePlayer(playerId);
-        if (set.advancedTradeData.advancedTradeVault != address(0)) revert Errors.AdvancedTradeDataAlreadySet(playerId);
+        if (set.advancedTradeData.advancedTradeVault != address(0)) {
+            revert Errors.AdvancedTradeDataAlreadySet(playerId);
+        }
         if (data.advancedTradeVault == address(0) || data.markSource == address(0)) revert Errors.ZeroAddress();
 
         set.advancedTradeData = data;
@@ -216,10 +218,10 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
      * @notice Sync path for `PbrTreasury.registerVault(s)` — marks `tournamentId` active for the vault's player.
      * @dev `msg.sender` must be `TournamentRegistry.getPbrTreasury(tournamentId)`.
      */
-    function addActiveTournamentForVault(address vault, bytes32 tournamentId)
-        external
-        onlyTournamentTreasury(tournamentId)
-    {
+    function addActiveTournamentForVault(
+        address vault,
+        bytes32 tournamentId
+    ) external onlyTournamentTreasury(tournamentId) {
         bytes32 playerId = playerIdOfVault[vault];
         if (playerId == bytes32(0)) revert Errors.NotFound();
         _addActiveTournament(playerId, tournamentId);
@@ -229,10 +231,10 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
      * @notice Sync path for `PbrTreasury.unregisterVault(s)` — clears `tournamentId` for the vault's player.
      * @dev `msg.sender` must be `TournamentRegistry.getPbrTreasury(tournamentId)`.
      */
-    function removeActiveTournamentForVault(address vault, bytes32 tournamentId)
-        external
-        onlyTournamentTreasury(tournamentId)
-    {
+    function removeActiveTournamentForVault(
+        address vault,
+        bytes32 tournamentId
+    ) external onlyTournamentTreasury(tournamentId) {
         bytes32 playerId = playerIdOfVault[vault];
         if (playerId == bytes32(0)) revert Errors.NotFound();
         _removeActiveTournament(playerId, tournamentId);

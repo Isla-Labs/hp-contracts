@@ -18,9 +18,10 @@ contract ConstitutionalTimelock is TimelockController {
      * @param dao Aragon DAO address (`PROPOSER_ROLE`, `CANCELLER_ROLE`, optional `DEFAULT_ADMIN_ROLE`).
      * @param minDelay Delay in seconds between schedule and execute; `0` → `DEFAULT_MIN_DELAY`.
      */
-    constructor(address dao, uint256 minDelay)
-        TimelockController(minDelay == 0 ? DEFAULT_MIN_DELAY : minDelay, _singleton(dao), _openExecutors(), dao)
-    {
+    constructor(
+        address dao,
+        uint256 minDelay
+    ) TimelockController(minDelay == 0 ? DEFAULT_MIN_DELAY : minDelay, _singleton(dao), _openExecutors(), dao) {
         if (dao == address(0)) revert Errors.ZeroAddress();
     }
 

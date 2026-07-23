@@ -208,12 +208,11 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
     //  Claim
     // --------------------------------------------
 
-    function claim(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber)
-        external
-        nonReentrant
-        whenNotPaused
-        returns (uint256)
-    {
+    function claim(
+        bytes32 tournamentId_,
+        uint16 seasonId_,
+        uint32 roundNumber
+    ) external nonReentrant whenNotPaused returns (uint256) {
         return _claim(msg.sender, tournamentId_, seasonId_, roundNumber, true);
     }
 
@@ -269,10 +268,13 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
         }
     }
 
-    function _claim(address user, bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber, bool revertOnEmpty)
-        internal
-        returns (uint256 payout)
-    {
+    function _claim(
+        address user,
+        bytes32 tournamentId_,
+        uint16 seasonId_,
+        uint32 roundNumber,
+        bool revertOnEmpty
+    ) internal returns (uint256 payout) {
         uint256 snapId = snapIdOf[tournamentId_][seasonId_][roundNumber];
         if (snapId == 0) revert Errors.NoSnapshot(tournamentId_, seasonId_, roundNumber);
         if (_isClaimed(user, snapId)) revert Errors.AlreadyClaimed();
@@ -303,8 +305,7 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
             address treasuryAddr = tournamentRegistry.getPbrTreasury(key.tournamentId);
             if (treasuryAddr == address(0)) continue;
 
-            if (IPbrTreasury(treasuryAddr).getRound(key.seasonId, key.roundNumber).status != RoundStatus.Locked)
-            {
+            if (IPbrTreasury(treasuryAddr).getRound(key.seasonId, key.roundNumber).status != RoundStatus.Locked) {
                 continue;
             }
 

@@ -37,12 +37,7 @@ contract EligibilityVerifierFactory {
      * @param constitutionalTimelock_ `CATEGORY_ONE` on criteria.
      * @param dao_ `DEFAULT_ADMIN_ROLE` on criteria.
      */
-    constructor(
-        uint256 cooldown_,
-        address proxyAdminOwner_,
-        address constitutionalTimelock_,
-        address dao_
-    ) {
+    constructor(uint256 cooldown_, address proxyAdminOwner_, address constitutionalTimelock_, address dao_) {
         if (proxyAdminOwner_ == address(0) || constitutionalTimelock_ == address(0) || dao_ == address(0)) {
             revert Errors.ZeroAddress();
         }

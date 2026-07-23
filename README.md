@@ -93,6 +93,23 @@ forge test
 forge fmt
 ```
 
+## Deployment Instructions
+
+Core singletons are upgradeable (`TransparentUpgradeableProxy`). Bootstrap uses `InitGuard` as a temporary implementation so proxy addresses can be reserved before real implementations (and immutables) are wired. Each proxy's `ProxyAdmin` is owned by the deployer during bootstrap, then transferred to `ConstitutionalTimelock`.
+
+```bash
+# Copy .env.example to .env and set PRIVATE_KEY, RPC URLs, API keys, DAO_ADDRESS
+cp .env.example .env
+
+# Base Sepolia (DAO_ADDRESS optional — defaults to deployer)
+make deploy-base-sepolia
+
+# Base mainnet (DAO_ADDRESS required)
+make deploy-base
+```
+
+`DeployAll` currently deploys the core stack: InitGuard, timelocks, Automator, DopplerLocker, TransferLocker, and upgradeable TournamentRegistry / PlayerSetRegistry / FixtureCommitment / RoundManager. Factories, EligibilityVerifier, DeployTournament, and market beacons are follow-on scripts.
+
 ## Blueprint
 
 ```txt
@@ -113,8 +130,11 @@ src
 │  └─ deployments/  — DopplerLocker, TransferLocker, DeployTournament, …
 ├─ markets/         — FeeRouter, PbrFeeHub
 └─ vaults/          — PbrTreasury, PlayerVault, StakedToken
-test/
 script/
+├─ DeployBase/      — Base + Base Sepolia
+└─ utils/           — DeployCore, ProxyUtils (InitGuard bootstrap)
+test/
+deployments/        — history logs + cli.ts
 ```
 
 ## Attribution

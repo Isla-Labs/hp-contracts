@@ -47,10 +47,7 @@ abstract contract EligibilityCriteria is Initializable, AccessControl {
      * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE` config updates.
      * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
      */
-    function __EligibilityCriteria_init(address constitutionalTimelock_, address dao_)
-        internal
-        onlyInitializing
-    {
+    function __EligibilityCriteria_init(address constitutionalTimelock_, address dao_) internal onlyInitializing {
         if (constitutionalTimelock_ == address(0) || dao_ == address(0)) revert Errors.ZeroAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
@@ -93,9 +90,7 @@ abstract contract EligibilityCriteria is Initializable, AccessControl {
         uint32 thresholdNewTransfer_,
         uint256 under21Age_
     ) external onlyRole(Roles.CATEGORY_ONE) {
-        _applyThresholds(
-            thresholdGk_, thresholdUnder21_, thresholdOutfield_, thresholdNewTransfer_, under21Age_
-        );
+        _applyThresholds(thresholdGk_, thresholdUnder21_, thresholdOutfield_, thresholdNewTransfer_, under21Age_);
         emit Events.EligibilityThresholdsUpdated(
             thresholdGk_, thresholdUnder21_, thresholdOutfield_, thresholdNewTransfer_, under21Age_
         );
@@ -113,8 +108,8 @@ abstract contract EligibilityCriteria is Initializable, AccessControl {
         uint256 under21Age_
     ) internal {
         if (
-            thresholdGk_ == 0 || thresholdUnder21_ == 0 || thresholdOutfield_ == 0
-                || thresholdNewTransfer_ == 0 || under21Age_ == 0
+            thresholdGk_ == 0 || thresholdUnder21_ == 0 || thresholdOutfield_ == 0 || thresholdNewTransfer_ == 0
+                || under21Age_ == 0
         ) {
             revert Errors.InvalidThreshold();
         }

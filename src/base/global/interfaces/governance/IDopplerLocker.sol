@@ -4,10 +4,10 @@ pragma solidity ^0.8.34;
 import { EligibilityGroups } from "@base/global/types/EligibilityTypes.sol";
 
 /**
- * @title IDeployDoppler
+ * @title IDopplerLocker
  * @notice Waiting-room intake for players cleared by `EligibilityVerifier.verifyEligibility`.
  */
-interface IDeployDoppler {
+interface IDopplerLocker {
     /**
      * @notice Persist a page of eligible deploy cohorts for later formatting / final checks.
      * @dev Called by `EligibilityVerifier` after score sync + cohort selection.

@@ -3,11 +3,11 @@ pragma solidity ^0.8.34;
 
 import { LifecycleErrors as Errors } from "@base/global/libraries/errors/LifecycleErrors.sol";
 import { LifecycleEvents as Events } from "@base/global/libraries/events/LifecycleEvents.sol";
-import { IManageLifecycle } from "@base/global/interfaces/data/IManageLifecycle.sol";
+import { ITransferLocker } from "@base/global/interfaces/governance/ITransferLocker.sol";
 import { LifecycleReason, PendingLifecycle } from "@base/global/types/LifecycleTypes.sol";
 
 /**
- * @title ManageLifecycle
+ * @title TransferLocker
  * @notice Waiting room for soft-inactivity candidates (mirrors DeployDoppler intake).
  * @dev Flow:
  *      0) EligibilityVerifier enqueues continuity failures / league-leavers.
@@ -19,7 +19,7 @@ import { LifecycleReason, PendingLifecycle } from "@base/global/types/LifecycleT
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract ManageLifecycle is IManageLifecycle {
+contract TransferLocker is ITransferLocker {
     /// @notice Sole writer for `enqueueLifecycle` (set once after EligibilityVerifier deploy).
     address public eligibilityVerifier;
 
@@ -34,7 +34,7 @@ contract ManageLifecycle is IManageLifecycle {
         emit Events.EligibilityVerifierSet(eligibilityVerifier_);
     }
 
-    /// @inheritdoc IManageLifecycle
+    /// @inheritdoc ITransferLocker
     function enqueueLifecycle(
         bytes32[] calldata playerIds,
         LifecycleReason reason,
@@ -66,17 +66,17 @@ contract ManageLifecycle is IManageLifecycle {
         emit Events.LifecyclePlayersEnqueued(reason, added, _pending.length);
     }
 
-    /// @inheritdoc IManageLifecycle
+    /// @inheritdoc ITransferLocker
     function pendingCount() external view returns (uint256) {
         return _pending.length;
     }
 
-    /// @inheritdoc IManageLifecycle
+    /// @inheritdoc ITransferLocker
     function isQueued(bytes32 playerId) external view returns (bool) {
         return _queued[playerId];
     }
 
-    /// @inheritdoc IManageLifecycle
+    /// @inheritdoc ITransferLocker
     function pendingLifecycle(uint256 offset, uint256 limit)
         external
         view

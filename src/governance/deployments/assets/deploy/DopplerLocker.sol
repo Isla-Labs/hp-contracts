@@ -3,11 +3,11 @@ pragma solidity ^0.8.34;
 
 import { DeploymentsErrors as Errors } from "@base/global/libraries/errors/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@base/global/libraries/events/DeploymentsEvents.sol";
-import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
+import { IDopplerLocker } from "@base/global/interfaces/governance/IDopplerLocker.sol";
 import { IEligibilityVerifier } from "@base/global/interfaces/data/IEligibilityVerifier.sol";
 import { EligibilityBucket, EligibilityGroups, MinutesStore } from "@base/global/types/EligibilityTypes.sol";
 
-import { DopplerConfig } from "@data/create/markets/deploy/config/DopplerConfig.sol";
+import { DopplerConfig } from "@governance/deployments/assets/deploy/config/DopplerConfig.sol";
 import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
 
 /**
@@ -43,7 +43,7 @@ import { DopplerTypes } from "@base/global/types/DopplerTypes.sol";
  * - Else if age ≥ minBondingDuration and proceeds ≥ minGraduateProceeds → migrateAndFinalizeMarket.
  * - Else skip until next scan.
  */
-contract DeployDoppler is DopplerConfig, IDeployDoppler {
+contract DopplerLocker is DopplerConfig, IDopplerLocker {
     // -------------------------------------------------------------------------
     //  Eligibility waiting room
     // -------------------------------------------------------------------------
@@ -68,7 +68,7 @@ contract DeployDoppler is DopplerConfig, IDeployDoppler {
         emit Events.EligibilityVerifierSet(eligibilityVerifier_);
     }
 
-    /// @inheritdoc IDeployDoppler
+    /// @inheritdoc IDopplerLocker
     function enqueueEligible(EligibilityGroups calldata groups) external {
         if (msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
 

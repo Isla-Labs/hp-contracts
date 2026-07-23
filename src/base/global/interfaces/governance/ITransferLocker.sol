@@ -4,12 +4,12 @@ pragma solidity ^0.8.34;
 import { LifecycleReason, PendingLifecycle } from "@base/global/types/LifecycleTypes.sol";
 
 /**
- * @title IManageLifecycle
+ * @title ITransferLocker
  * @notice Waiting-room intake for deployed players flagged for soft-inactivity.
  * @dev Mirrors `IDeployDoppler` / DeployDoppler waiting room. Actual `INACTIVE` writes
  *      happen later after manual review (Automator path), not at enqueue time.
  */
-interface IManageLifecycle {
+interface ITransferLocker {
     /**
      * @notice Queue players for lifecycle review (same `reason` / parallel `effectiveMins`).
      * @dev Called by `EligibilityVerifier` only. Skips zero ids and already-queued players.

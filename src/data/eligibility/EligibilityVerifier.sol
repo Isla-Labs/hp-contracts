@@ -6,8 +6,8 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 
-import { IDeployDoppler } from "@base/global/interfaces/data/IDeployDoppler.sol";
-import { IManageLifecycle } from "@base/global/interfaces/data/IManageLifecycle.sol";
+import { IDopplerLocker } from "@base/global/interfaces/governance/IDopplerLocker.sol";
+import { ITransferLocker } from "@base/global/interfaces/governance/ITransferLocker.sol";
 import { IPlayerSetRegistry } from "@base/global/interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@base/global/interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@base/global/interfaces/vaults/IPbrTreasury.sol";
@@ -73,9 +73,9 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
 
     IPlayerSetRegistry public playerSetRegistry;
     ITournamentRegistry public tournamentRegistry;
-    IDeployDoppler public deployDoppler;
+    IDopplerLocker public dopplerLocker;
     /// @notice Waiting-room receiver for soft-inactivity candidates.
-    IManageLifecycle public manageLifecycle;
+    ITransferLocker public transferLocker;
 
     /// @dev Domestic-league `tournamentId` whose calendars count toward the rolling score.
     bytes32 public leagueId;
@@ -135,8 +135,8 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
      * @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
      * @param tournamentRegistry_ Season calendars + treasury lookup for the league clock.
      * @param ppmVerifier_ Authorized minutes ingest caller (PPMVerifier; required; non-zero).
-     * @param deployDoppler_ Waiting-room receiver for eligible cohorts (required; non-zero).
-     * @param manageLifecycle_ Waiting-room receiver for soft-inactivity candidates (required).
+     * @param dopplerLocker_ Waiting-room receiver for eligible cohorts (required; non-zero).
+     * @param transferLocker_ Waiting-room receiver for soft-inactivity candidates (required).
      * @param leagueId_ Domestic-league tournament id (score filter + clock source).
      * @param baseYear_ G-index origin season start year.
      */
@@ -148,16 +148,16 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         address playerSetRegistry_,
         address tournamentRegistry_,
         address ppmVerifier_,
-        address deployDoppler_,
-        address manageLifecycle_,
+        address dopplerLocker_,
+        address transferLocker_,
         bytes32 leagueId_,
         uint16 baseYear_
     ) external initializer {
         if (expectedWorkflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
         if (
             ppmVerifier_ == address(0) || playerSetRegistry_ == address(0)
-                || tournamentRegistry_ == address(0) || deployDoppler_ == address(0)
-                || manageLifecycle_ == address(0)
+                || tournamentRegistry_ == address(0) || dopplerLocker_ == address(0)
+                || transferLocker_ == address(0)
         ) {
             revert Errors.ZeroAddress();
         }
@@ -170,8 +170,8 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         ppmVerifier = ppmVerifier_;
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
-        deployDoppler = IDeployDoppler(deployDoppler_);
-        manageLifecycle = IManageLifecycle(manageLifecycle_);
+        dopplerLocker = IDopplerLocker(dopplerLocker_);
+        transferLocker = ITransferLocker(transferLocker_);
         leagueId = leagueId_;
         baseYear = baseYear_;
     }
@@ -414,10 +414,10 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
 
         // Pass 3: hand off to waiting rooms (skip empty pages).
         if (gkCount + u21Count + outCount + ntCount != 0) {
-            deployDoppler.enqueueEligible(groups);
+            dopplerLocker.enqueueEligible(groups);
         }
         if (discCount != 0) {
-            manageLifecycle.enqueueLifecycle(
+            transferLocker.enqueueLifecycle(
                 groups.toDiscontinue, LifecycleReason.ContinuityUnderThreshold, discMins
             );
         }
@@ -652,7 +652,7 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         for (uint256 i; i < leaverCount; ++i) {
             compact[i] = leavers[i];
         }
-        manageLifecycle.enqueueLifecycle(compact, LifecycleReason.LeftLeague, new uint32[](0));
+        transferLocker.enqueueLifecycle(compact, LifecycleReason.LeftLeague, new uint32[](0));
     }
 
     function _contains(bytes32[] memory arr, bytes32 value) private pure returns (bool) {

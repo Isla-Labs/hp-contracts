@@ -5,7 +5,7 @@ import { Hub, RoundSchedule, Season, TournamentType } from "@types/TournamentTyp
 
 /**
  * @title ITournamentRegistry
- * @notice Cross-contract surface for tournament topology + season calendars.
+ * @notice Cross-contract surface for tournament topology, calendars, and vault membership SoT.
  */
 interface ITournamentRegistry {
     // --------------------------------------------
@@ -28,6 +28,16 @@ interface ITournamentRegistry {
     ) external;
 
     function linkHub(bytes32 tournamentId, Hub calldata hub) external;
+
+    // --------------------------------------------
+    //  Vault membership SoT — CATEGORY_ONE / TWO / THREE
+    // --------------------------------------------
+
+    /// @notice Register vaults for `tournamentId` and sync the treasury cache.
+    function registerVaults(bytes32 tournamentId, address[] calldata vaults) external;
+
+    /// @notice Unregister vaults for `tournamentId` and sync the treasury cache.
+    function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external;
 
     // --------------------------------------------
     //  Season calendar — CATEGORY_THREE
@@ -53,6 +63,10 @@ interface ITournamentRegistry {
     function getTournamentsForLeague(bytes32 leagueId) external view returns (bytes32[] memory ids);
 
     function getPbrTreasury(bytes32 tournamentId) external view returns (address);
+
+    function isVaultRegistered(bytes32 tournamentId, address vault) external view returns (bool);
+
+    function getRegisteredVaults(bytes32 tournamentId) external view returns (address[] memory);
 
     function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32);
 

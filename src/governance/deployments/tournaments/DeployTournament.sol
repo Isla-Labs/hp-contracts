@@ -15,7 +15,6 @@ import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 
 import { IPbrTreasuryFactory } from "@interfaces/vaults/factories/IPbrTreasuryFactory.sol";
 import { IPbrFeeHubFactory } from "@interfaces/markets/factories/IPbrFeeHubFactory.sol";
-import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
 
 /**
@@ -382,7 +381,7 @@ contract DeployTournament is AccessControl {
         }
 
         if (b.registeredPlayers.length != 0) {
-            _registerPlayers(pbrTreasury, b.registeredPlayers);
+            _registerPlayers(b.tournamentId, b.registeredPlayers);
         }
 
         emit Events.TournamentDeployed(
@@ -430,7 +429,7 @@ contract DeployTournament is AccessControl {
         next[length] = added;
     }
 
-    function _registerPlayers(address pbrTreasury, bytes32[] calldata playerIds) internal {
+    function _registerPlayers(bytes32 tournamentId, bytes32[] calldata playerIds) internal {
         uint256 length = playerIds.length;
         address[] memory vaults = new address[](length);
 
@@ -444,7 +443,7 @@ contract DeployTournament is AccessControl {
             vaults[i] = vault;
         }
 
-        // `registerVaults` syncs `PlayerSetRegistry` active-tournament flags via the treasury.
-        IPbrTreasury(pbrTreasury).registerVaults(vaults);
+        // SoT write on TournamentRegistry; treasury cache is synced inside that call.
+        tournamentRegistry.registerVaults(tournamentId, vaults);
     }
 }

@@ -23,11 +23,10 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  *
  *      Access:
  *      - `CATEGORY_THREE` (`Automator`): `settle`.
- *      - `CATEGORY_THREE` or `CATEGORY_TWO` (`MaintenanceTimelock`): `registerVault` /
- *        `unregisterVault` (automator path + manual repair).
+ *      - `TournamentRegistry` only: `syncRegisterVault` / `syncUnregisterVault` (cache mirror).
  *
- *      Vault registration is the source of truth for this tournament's participants: each
- *      register/unregister also syncs `PlayerSetRegistry` active-tournament flags.
+ *      Vault membership SoT is `TournamentRegistry`. This contract keeps a local `_vaults` /
+ *      `isVault` cache so crank paths never external-call the registry for the set.
  *
  *      Crank: `lock()` → `snapshotBatch()` → `settle(...)`.
  *      Wrap: lock of `finalRound` sets `tradingRound = 1`; settle advances `seasonId`.
@@ -78,17 +77,8 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     //  Access
     // --------------------------------------------
 
-    /// @dev ConstitutionalTimelock (cat-1) for initialization.
-    /// @dev MaintenanceTimelock (cat-2) for manual overrides.
-    /// @dev Automator (cat-3) for per-tournament data upserts.
-    modifier onlyAdmin() {
-        address sender = _msgSender();
-        if (
-            !hasRole(Roles.CATEGORY_ONE, sender) && !hasRole(Roles.CATEGORY_TWO, sender)
-                && !hasRole(Roles.CATEGORY_THREE, sender)
-        ) {
-            revert Errors.Unauthorized();
-        }
+    modifier onlyTournamentRegistry() {
+        if (msg.sender != address(tournamentRegistry)) revert Errors.Unauthorized();
         _;
     }
 
@@ -148,40 +138,22 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     }
 
     // --------------------------------------------
-    //  Player Vault Registration
+    //  Vault cache — TournamentRegistry SoT mirror
     // --------------------------------------------
 
-    /// @notice Bulk `registerVault` for tournament bootstrap.
-    function registerVaults(address[] calldata vaults) external onlyAdmin {
-        uint256 length = vaults.length;
-        for (uint256 i; i < length; ++i) {
-            _registerVault(vaults[i]);
-        }
-    }
-
-    /// @notice Bulk `unregisterVault` (e.g. knockout eliminations after round ingest).
-    function unregisterVaults(address[] calldata vaults) external onlyAdmin {
-        uint256 length = vaults.length;
-        for (uint256 i; i < length; ++i) {
-            _unregisterVault(vaults[i]);
-        }
-    }
-
-    function _registerVault(address vault) internal {
+    /// @inheritdoc IPbrTreasury
+    function syncRegisterVault(address vault) external onlyTournamentRegistry {
         if (vault == address(0)) revert Errors.ZeroAddress();
-        if (vault.code.length == 0) revert Errors.UnknownVault(vault);
         if (isVault[vault]) revert Errors.VaultAlreadyRegistered(vault);
-        if (playerSetRegistry.playerIdOfVault(vault) == bytes32(0)) revert Errors.UnknownVault(vault);
 
         isVault[vault] = true;
         _vaults.push(vault);
         _vaultIndex[vault] = _vaults.length;
         emit Events.VaultRegistered(vault);
-
-        playerSetRegistry.addActiveTournamentForVault(vault, tournamentId);
     }
 
-    function _unregisterVault(address vault) internal {
+    /// @inheritdoc IPbrTreasury
+    function syncUnregisterVault(address vault) external onlyTournamentRegistry {
         if (!isVault[vault]) revert Errors.UnknownVault(vault);
 
         uint256 index0 = _vaultIndex[vault] - 1;
@@ -195,8 +167,6 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
         delete _vaultIndex[vault];
         isVault[vault] = false;
         emit Events.VaultUnregistered(vault);
-
-        playerSetRegistry.removeActiveTournamentForVault(vault, tournamentId);
     }
 
     // --------------------------------------------

@@ -55,8 +55,8 @@ ConstitutionalTimelock (CATEGORY_ONE on Automator)
         │ addAutomator / removeAutomator
         ▼
 Automator.executeAutomation(target, value, data)
-        │ msg.sender ∈ verifiedCallers allowlist
-        │ any destination address
+        │ msg.sender ∈ verifiedCallers
+        │ target ∈ destinationsOf[caller]
         ▼
 msg.sender = Automator → target's own access control
         (typically CATEGORY_THREE / sole-writer granted only to Automator)
@@ -64,7 +64,7 @@ msg.sender = Automator → target's own access control
 
 **Timelocks:** OZ `TimelockController`. Aragon DAO is sole `PROPOSER_ROLE` / `CANCELLER_ROLE`. Execution is open (`EXECUTOR_ROLE` on `address(0)`). Targets always see the timelock as `msg.sender`.
 
-**Automator:** OZ `AccessControl` only for DAO (`DEFAULT_ADMIN_ROLE`) and cat-1 (`CATEGORY_ONE`) admin of the allowlist. **Verified callers** are a separate enumerable set (`isVerifiedCaller` / `verifiedCallers`) — not AccessControl roles. Cat-1 `addAutomator` / `removeAutomator` edits that set. Verified callers may relay to any `target`; each destination limits which functions Automator may invoke. Finer caller→destination scoping is deferred (`AutomatorTypes` drafts).
+**Automator:** OZ `AccessControl` only for DAO (`DEFAULT_ADMIN_ROLE`) and cat-1 (`CATEGORY_ONE`) admin of the allowlists. **Verified callers** and **per-caller destinations** are `EnumerableSet`s (not AccessControl roles). Cat-1 `addAutomator(caller, destinations)` / `addDestination` / `removeDestination` manage them. Day-one: EV → DopplerLocker + TransferLocker. Vault membership writes go to `TournamentRegistry` (SoT), which syncs each treasury's local vault cache.
 
 ---
 

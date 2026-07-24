@@ -24,9 +24,8 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
  * @notice Canonical per-player market discovery set (`playerId` → `PlayerSet`).
  * @dev Access:
  *      - `CATEGORY_THREE` (`Automator` / `DeployTournament`): registration, status, league /
- *        active tournaments, and Doppler updates.
- *      - Tournament `PbrTreasury`: `addActiveTournamentForVault` / `removeActiveTournamentForVault`
- *        (keeps discovery in sync with treasury vault registration).
+ *        optional `activeTournaments` index, and Doppler updates.
+ *      - Vault membership SoT is `TournamentRegistry` (not mirrored here).
  *      - Registered vaults: `updateUtilization` via `onlyVault`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
@@ -60,13 +59,6 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
         if (!hasRole(Roles.CATEGORY_TWO, sender) && !hasRole(Roles.CATEGORY_THREE, sender)) {
             revert Errors.NotAuthorized();
         }
-        _;
-    }
-
-    /// @dev Canonical `PbrTreasury` for `tournamentId` (from `TournamentRegistry`).
-    modifier onlyTournamentTreasury(bytes32 tournamentId) {
-        address treasury = tournamentRegistry.getPbrTreasury(tournamentId);
-        if (treasury == address(0) || msg.sender != treasury) revert Errors.NotAuthorized();
         _;
     }
 
@@ -211,32 +203,6 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
 
     function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyCategoryTwoOrThree {
         _requirePlayer(playerId);
-        _removeActiveTournament(playerId, tournamentId);
-    }
-
-    /**
-     * @notice Sync path for `PbrTreasury.registerVault(s)` — marks `tournamentId` active for the vault's player.
-     * @dev `msg.sender` must be `TournamentRegistry.getPbrTreasury(tournamentId)`.
-     */
-    function addActiveTournamentForVault(
-        address vault,
-        bytes32 tournamentId
-    ) external onlyTournamentTreasury(tournamentId) {
-        bytes32 playerId = playerIdOfVault[vault];
-        if (playerId == bytes32(0)) revert Errors.NotFound();
-        _addActiveTournament(playerId, tournamentId);
-    }
-
-    /**
-     * @notice Sync path for `PbrTreasury.unregisterVault(s)` — clears `tournamentId` for the vault's player.
-     * @dev `msg.sender` must be `TournamentRegistry.getPbrTreasury(tournamentId)`.
-     */
-    function removeActiveTournamentForVault(
-        address vault,
-        bytes32 tournamentId
-    ) external onlyTournamentTreasury(tournamentId) {
-        bytes32 playerId = playerIdOfVault[vault];
-        if (playerId == bytes32(0)) revert Errors.NotFound();
         _removeActiveTournament(playerId, tournamentId);
     }
 

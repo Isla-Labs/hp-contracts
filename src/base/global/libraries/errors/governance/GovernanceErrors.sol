@@ -6,6 +6,10 @@ library GovernanceErrors {
     error ZeroAddress();
     error ArrayLengthsMismatch();
     error EmptyVerifiedCallers();
+    error EmptyDestinations();
     error AlreadyVerifiedCaller(address caller);
     error NotVerifiedCaller(address caller);
+    error DestinationNotAllowed(address caller, address target);
+    error AlreadyVerifiedDestination(address caller, address target);
+    error NotVerifiedDestination(address caller, address target);
 }

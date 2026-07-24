@@ -6,6 +6,8 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 
 import { InitGuard } from "@base/abstract/InitGuard.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+import { VerifiedCallerConfig } from "@types/governance/AutomatorTypes.sol";
+
 import { ConstitutionalTimelock } from "@governance/access/cat-1/ConstitutionalTimelock.sol";
 import { MaintenanceTimelock } from "@governance/access/cat-2/MaintenanceTimelock.sol";
 import { Automator } from "@governance/access/cat-3/Automator.sol";
@@ -64,9 +66,13 @@ abstract contract DeployCore is ProxyUtils {
         // TransferLocker needs registry addresses for reactivate fee-topology checks.
         d.transferLocker = address(new TransferLocker(d.playerSetRegistry, d.tournamentRegistry));
 
-        address[] memory verifiedCallers = new address[](1);
-        verifiedCallers[0] = d.eligibilityVerifier;
-        d.automator = address(new Automator(dao, d.constitutionalTimelock, verifiedCallers));
+        address[] memory evDestinations = new address[](2);
+        evDestinations[0] = d.dopplerLocker;
+        evDestinations[1] = d.transferLocker;
+        VerifiedCallerConfig[] memory callerConfigs = new VerifiedCallerConfig[](1);
+        callerConfigs[0] =
+            VerifiedCallerConfig({ caller: d.eligibilityVerifier, destinations: evDestinations });
+        d.automator = address(new Automator(dao, d.constitutionalTimelock, callerConfigs));
 
         // Waiting rooms accept enqueue only from Automator (EV calls through Automator).
         TransferLocker(d.transferLocker).setAutomator(d.automator);
@@ -76,7 +82,9 @@ abstract contract DeployCore is ProxyUtils {
         _upgradeAndCall(
             d.tournamentRegistry,
             d.tournamentRegistryImpl,
-            abi.encodeCall(TournamentRegistry.initialize, (d.constitutionalTimelock, d.automator, dao))
+            abi.encodeCall(
+                TournamentRegistry.initialize, (d.constitutionalTimelock, d.automator, dao, d.playerSetRegistry)
+            )
         );
 
         d.playerSetRegistryImpl = address(new PlayerSetRegistry(d.tournamentRegistry));

@@ -6,15 +6,17 @@ import { RoundState } from "@types/vaults/VaultTypes.sol";
 /**
  * @title IPbrTreasury
  * @notice Cross-contract surface for single-tournament PBR pots.
+ * @dev Vault membership SoT is `TournamentRegistry`; this contract holds a local cache
+ *      updated only via `syncRegisterVault` / `syncUnregisterVault` from the registry.
  */
 interface IPbrTreasury {
     // --------------------------------------------
-    //  Vault registration — CATEGORY_TWO / THREE
+    //  Vault cache sync — TournamentRegistry only
     // --------------------------------------------
 
-    function registerVaults(address[] calldata vaults) external;
+    function syncRegisterVault(address vault) external;
 
-    function unregisterVaults(address[] calldata vaults) external;
+    function syncUnregisterVault(address vault) external;
 
     // --------------------------------------------
     //  Claims (called by PlayerVault)

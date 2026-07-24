@@ -9,10 +9,12 @@ import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
 import { Hub, Season, Tournament, TournamentType, RoundSchedule } from "@types/TournamentTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 
 /**
  * @title TournamentRegistry
- * @notice Canonical tournament topology + season calendars, keyed by `tournamentId`.
+ * @notice Canonical tournament topology, season calendars, and vault membership SoT.
  * @dev Examples:
  *        - `EPL`: DOMESTIC_LEAGUE, feeHubs = [{EPL, hub}], treasury = EPL pot
  *        - `FACUP`: DOMESTIC_CUP, feeHubs = [{EPL, hub}], treasury = FA Cup pot
@@ -20,12 +22,11 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
  *
  *      Access:
  *      - `CATEGORY_ONE` (`ConstitutionalTimelock` / `DeployTournament`): `registerHub`,
- *        tournament create, `linkHub`.
- *      - `CATEGORY_THREE` (`Automator` / `DeployTournament`): `openSeason`, `upsertRound(s)`.
+ *        tournament create, `linkHub`, vault membership.
+ *      - `CATEGORY_TWO` / `CATEGORY_THREE`: vault membership + season calendar (cat-3).
  *
- *      Domestic league hubs are registered globally (`registerHub`) so `FeeRouter` can
- *      even-split when a market has no league (`getAllDomesticPbrFeeHubs`). Per-tournament
- *      `feeHubs` are set at `createTournament` and can grow later via `linkHub`.
+ *      Vault membership is the SoT here; each write syncs a local cache on the tournament's
+ *      `PbrTreasury` so crank paths never re-read this registry for the vault set.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -35,12 +36,34 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
     //  Storage
     // --------------------------------------------
 
+    IPlayerSetRegistry public playerSetRegistry;
+
     /// @notice Globally registered domestic hubs (`leagueId` → hub). Used by FeeRouter OOF split.
     mapping(bytes32 leagueId => address) public pbrFeeHubOf;
     bytes32[] private _leagueIds;
 
     mapping(bytes32 tournamentId => Tournament) private _tournaments;
     bytes32[] private _tournamentIds;
+
+    /// @dev SoT vault set per tournament (mirrored to `PbrTreasury` cache on write).
+    mapping(bytes32 tournamentId => address[]) private _registeredVaults;
+    mapping(bytes32 tournamentId => mapping(address vault => uint256)) private _registeredVaultIndex; // 1-based
+    mapping(bytes32 tournamentId => mapping(address vault => bool)) private _isVaultRegistered;
+
+    // --------------------------------------------
+    //  Access
+    // --------------------------------------------
+
+    modifier onlyMembershipAdmin() {
+        address sender = _msgSender();
+        if (
+            !hasRole(Roles.CATEGORY_ONE, sender) && !hasRole(Roles.CATEGORY_TWO, sender)
+                && !hasRole(Roles.CATEGORY_THREE, sender)
+        ) {
+            revert Errors.NotAuthorized();
+        }
+        _;
+    }
 
     // --------------------------------------------
     //  Initialization
@@ -55,12 +78,22 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
      * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE`.
      * @param automator_ `Automator` — `CATEGORY_THREE`.
      * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
+     * @param playerSetRegistry_ Canonical player set (vault → playerId checks).
      */
-    function initialize(address constitutionalTimelock_, address automator_, address dao_) external initializer {
-        if (constitutionalTimelock_ == address(0) || automator_ == address(0) || dao_ == address(0)) {
+    function initialize(
+        address constitutionalTimelock_,
+        address automator_,
+        address dao_,
+        address playerSetRegistry_
+    ) external initializer {
+        if (
+            constitutionalTimelock_ == address(0) || automator_ == address(0) || dao_ == address(0)
+                || playerSetRegistry_ == address(0)
+        ) {
             revert Errors.ZeroAddress();
         }
 
+        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
         _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
         _grantRole(Roles.CATEGORY_THREE, automator_);
@@ -137,6 +170,30 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
             revert Errors.InvalidLinkTarget(tournamentType);
         }
         _linkHub(t, tournamentId, hub);
+    }
+
+    // --------------------------------------------
+    //  Vault membership SoT — CATEGORY_ONE / TWO / THREE
+    // --------------------------------------------
+
+    /// @inheritdoc ITournamentRegistry
+    function registerVaults(bytes32 tournamentId, address[] calldata vaults) external onlyMembershipAdmin {
+        Tournament storage t = _requireTournament(tournamentId);
+        address treasury = t.pbrTreasury;
+        uint256 length = vaults.length;
+        for (uint256 i; i < length; ++i) {
+            _registerVault(tournamentId, treasury, vaults[i]);
+        }
+    }
+
+    /// @inheritdoc ITournamentRegistry
+    function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external onlyMembershipAdmin {
+        Tournament storage t = _requireTournament(tournamentId);
+        address treasury = t.pbrTreasury;
+        uint256 length = vaults.length;
+        for (uint256 i; i < length; ++i) {
+            _unregisterVault(tournamentId, treasury, vaults[i]);
+        }
     }
 
     // --------------------------------------------
@@ -253,6 +310,17 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
 
     function getPbrTreasury(bytes32 tournamentId) external view returns (address) {
         return _requireTournament(tournamentId).pbrTreasury;
+    }
+
+    /// @inheritdoc ITournamentRegistry
+    function isVaultRegistered(bytes32 tournamentId, address vault) external view returns (bool) {
+        return _isVaultRegistered[tournamentId][vault];
+    }
+
+    /// @inheritdoc ITournamentRegistry
+    function getRegisteredVaults(bytes32 tournamentId) external view returns (address[] memory) {
+        _requireTournament(tournamentId);
+        return _registeredVaults[tournamentId];
     }
 
     function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32) {
@@ -413,6 +481,39 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
 
         t.feeHubs.push(hub);
         emit Events.HubAddedToTournament(tournamentId, hub.leagueId, hub.pbrFeeHub);
+    }
+
+    function _registerVault(bytes32 tournamentId, address treasury, address vault) private {
+        if (vault == address(0)) revert Errors.ZeroAddress();
+        if (vault.code.length == 0) revert Errors.UnknownVault(vault);
+        if (playerSetRegistry.playerIdOfVault(vault) == bytes32(0)) revert Errors.UnknownVault(vault);
+        if (_isVaultRegistered[tournamentId][vault]) revert Errors.VaultAlreadyRegistered(tournamentId, vault);
+
+        _registeredVaults[tournamentId].push(vault);
+        _registeredVaultIndex[tournamentId][vault] = _registeredVaults[tournamentId].length;
+        _isVaultRegistered[tournamentId][vault] = true;
+        emit Events.VaultRegistered(tournamentId, vault);
+
+        IPbrTreasury(treasury).syncRegisterVault(vault);
+    }
+
+    function _unregisterVault(bytes32 tournamentId, address treasury, address vault) private {
+        if (!_isVaultRegistered[tournamentId][vault]) revert Errors.VaultNotRegistered(tournamentId, vault);
+
+        uint256 index0 = _registeredVaultIndex[tournamentId][vault] - 1;
+        address[] storage vaults = _registeredVaults[tournamentId];
+        uint256 last = vaults.length - 1;
+        if (index0 != last) {
+            address moved = vaults[last];
+            vaults[index0] = moved;
+            _registeredVaultIndex[tournamentId][moved] = index0 + 1;
+        }
+        vaults.pop();
+        delete _registeredVaultIndex[tournamentId][vault];
+        delete _isVaultRegistered[tournamentId][vault];
+        emit Events.VaultUnregistered(tournamentId, vault);
+
+        IPbrTreasury(treasury).syncUnregisterVault(vault);
     }
 
     function _requireTournament(bytes32 tournamentId) internal view returns (Tournament storage t) {

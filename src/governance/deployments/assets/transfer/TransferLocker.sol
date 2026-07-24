@@ -6,7 +6,6 @@ import { LifecycleEvents as Events } from "@events/governance/LifecycleEvents.so
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
-import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTypes.sol";
 import { PlayerSet } from "@types/PlayerSetTypes.sol";
 
@@ -183,15 +182,14 @@ contract TransferLocker is ITransferLocker {
 
     /**
      * @dev Ensures the player's recorded domestic league still lines up with fee routing
-     *      and treasury registration before status is restored.
+     *      and vault membership before status is restored.
      *
      *      Checks:
      *      1) `tournamentData.leagueId` set and hub registered.
      *      2) `FeeRouter.pbrFeeHub == TournamentRegistry.pbrFeeHubOf(leagueId)`.
      *      3) Domestic-league treasury exists (`tournamentId == leagueId`).
-     *      4) Every `activeTournament` is linked to that league and has a treasury.
-     *      5) If a player vault exists: registered on the domestic treasury and on each
-     *         active tournament treasury.
+     *      4) If a player vault exists: registered on the domestic tournament in TR SoT
+     *         (and therefore mirrored on the treasury cache).
      */
     function _requireFeeTopologyConsistent(bytes32 playerId) internal view {
         PlayerSet memory set = playerSetRegistry.getPlayerSet(playerId);
@@ -212,35 +210,10 @@ contract TransferLocker is ITransferLocker {
 
         // Domestic league tournament id equals `leagueId` (see TournamentRegistry.createTournament).
         address domesticTreasury = tournamentRegistry.getPbrTreasury(leagueId);
-
-        bytes32[] memory linked = tournamentRegistry.getTournamentsForLeague(leagueId);
-        bytes32[] memory active = set.tournamentData.activeTournaments;
-        uint256 activeLen = active.length;
         address vault = set.vaultData.playerVault;
 
-        for (uint256 i; i < activeLen; ++i) {
-            bytes32 tournamentId = active[i];
-            if (!_containsId(linked, tournamentId)) {
-                revert Errors.ActiveTournamentNotLinked(playerId, leagueId, tournamentId);
-            }
-
-            // Reverts `NotFound` if the tournament / treasury was never created.
-            address treasury = tournamentRegistry.getPbrTreasury(tournamentId);
-            if (vault != address(0) && !IPbrTreasury(treasury).isVault(vault)) {
-                revert Errors.VaultNotOnTournamentTreasury(playerId, tournamentId, treasury, vault);
-            }
-        }
-
-        if (vault != address(0) && !IPbrTreasury(domesticTreasury).isVault(vault)) {
+        if (vault != address(0) && !tournamentRegistry.isVaultRegistered(leagueId, vault)) {
             revert Errors.VaultNotOnLeagueTreasury(playerId, leagueId, domesticTreasury, vault);
         }
-    }
-
-    function _containsId(bytes32[] memory ids, bytes32 id) private pure returns (bool) {
-        uint256 length = ids.length;
-        for (uint256 i; i < length; ++i) {
-            if (ids[i] == id) return true;
-        }
-        return false;
     }
 }

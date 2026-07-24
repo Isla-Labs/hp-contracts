@@ -43,15 +43,10 @@ interface IPlayerSetRegistry {
 
     function setLeagueId(bytes32 playerId, bytes32 leagueId) external;
 
+    /// @dev Optional discovery index; vault membership SoT is `TournamentRegistry`.
     function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external;
 
     function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external;
-
-    /// @notice Called by the tournament's `PbrTreasury` after registering a vault.
-    function addActiveTournamentForVault(address vault, bytes32 tournamentId) external;
-
-    /// @notice Called by the tournament's `PbrTreasury` after unregistering a vault.
-    function removeActiveTournamentForVault(address vault, bytes32 tournamentId) external;
 
     // --------------------------------------------
     //  Views

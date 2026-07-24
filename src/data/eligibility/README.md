@@ -34,8 +34,8 @@ Each tracked player has a `MinutesStore`:
 
 - `earliestSeasonStartYear` — set once at squad-fill create (newTransfer / backFromLoan flag)
 - `birthDate`, `expectedPosition`
-- `seasonMinutes[]` — per-calendar rows (`seasonId`, appearances, mins by position)
-- `weightedScoreWad` — written only by `verifyEligibility`
+- `seasonMinutes[]` — per-calendar aggregates (`seasonId`, mins by position; no per-match log)
+- `weightedScoreWad` + `lastScoreGlobalRound` — incremental score (PPM ingest + idle decay on verify)
 - `name` / `symbol` — optional CRE metadata (first fill only)
 
 Squad membership (daily-active CRE path):
@@ -74,29 +74,36 @@ See `cre/hp-v1/workflows/squad-fill/README.md` for CRE layout and naming rules.
 `recordAppearances(seasonId, seasonStartYear, appearances)` — **PpmVerifier only**.
 
 - Requires player already created by squad-fill
-- Stores raw `Appearance[]` + position minutes
-- Does **not** update `weightedScoreWad`
+- Updates `minsByPosition` / `totalMinutes` / `expectedPosition` (all comps in the batch)
+- **Domestic league only:** incrementally updates `weightedScoreWad` as of each appearance’s global round
+- Per-match rows are **not** persisted
 
 ---
 
-## Score (`verifyEligibility`)
+## Score
 
-Globally `rateLimited`. Anyone may page `verifyEligibility(offset, limit)`.
-
-**Formula** (domestic league calendars for this verifier’s `leagueId` only):
+**Formula** (same as full replay; maintained incrementally):
 
 ```text
-weightedScoreWad = Σ mins_i * 1e18 * λ^(G_now − G_i)
+S(G) = Σ mins_i * 1e18 * λ^(G − G_i)
 λ = 0.97
 
 G(year, round) = Σ finalRound(y) for y ∈ [baseYear, year) + round
 ```
 
-- `finalRound` from `TournamentRegistry` (cached in-tx)
-- `G_now` from this league’s `PbrTreasury` cursors
-- Seasons that are not `getSeasonId(leagueId, seasonStartYear)` are skipped (cups / other leagues / etc.)
+| Path | Behaviour |
+|------|-----------|
+| `recordAppearances` (league season) | Decay aggregate to appearance `G`, add mins; set `lastScoreGlobalRound` |
+| `verifyEligibility` | Decay aggregate `lastScoreGlobalRound` → `G_now` (idle players lose weight) |
 
-Effective minutes for thresholds: `weightedScoreWad / 1e18`.
+- `G_now` from this league’s `PbrTreasury` cursors
+- Non-league calendars update position aggregates only (no score)
+
+Effective minutes for thresholds: `weightedScoreWad / 1e18` (after verify decay).
+
+### `verifyEligibility`
+
+Globally `rateLimited`. Anyone may page `verifyEligibility(offset, limit)`.
 
 ### Thresholds (defaults)
 

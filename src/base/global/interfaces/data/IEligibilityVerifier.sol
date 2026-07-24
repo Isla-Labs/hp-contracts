@@ -21,17 +21,19 @@ interface IEligibilityVerifier {
         address playerSetRegistry_,
         address tournamentRegistry_,
         address ppmVerifier_,
+        address automator_,
         address dopplerLocker_,
         address transferLocker_,
         bytes32 leagueId_,
         uint16 baseYear_
     ) external;
 
+    /// @notice Ingest minutes; domestic-league rows update `weightedScoreWad` incrementally.
     function recordAppearances(bytes32 seasonId, uint16 seasonStartYear, Appearance[] calldata appearances) external;
 
     /**
-     * @notice Recompute scores for a page; enqueue undeployed eligibles; queue lifecycle candidates.
-     * @dev Sole write path for `weightedScoreWad`. Globally rate-limited (`RateLimit`).
+     * @notice Decay page scores to `G_now`; enqueue undeployed eligibles; queue lifecycle candidates.
+     * @dev Globally rate-limited (`RateLimit`). Score mass comes from `recordAppearances`.
      *      `groups.newTransfers` = DopplerLocker newTransfer / backFromLoan flag.
      *      `groups.toDeactivate` → TransferLocker (continuity under-threshold).
      *      `groups.toReactivate` → TransferLocker (`INACTIVE` back above continuity).

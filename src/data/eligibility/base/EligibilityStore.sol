@@ -5,14 +5,17 @@ import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { PlayerStatus, Position } from "@base/global/types/PlayerSetTypes.sol";
 
 import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol";
 import {
     Appearance,
+    LAMBDA_WAD,
     MinutesStore,
     POSITION_COUNT,
+    SCORE_WAD,
     SeasonMinutes,
     SquadFillReport,
     SquadList,
@@ -23,8 +26,8 @@ import {
  * @title EligibilityStore
  * @notice Abstract squad / minutes store: CRE squad-fill intake and PPM appearance ingest.
  * @dev Extended by `EligibilityVerifier` (criteria + rate-limited scan / waiting-room handoff).
- *      League-leavers are staged in `_pendingLeftLeague` for the verifier to enqueue — the store
- *      does not call Automator. Deploy the concrete verifier behind `TransparentUpgradeableProxy`.
+ *      Domestic-league appearances update `weightedScoreWad` incrementally; verify decays to
+ *      `G_now`. League-leavers stage in `_pendingLeftLeague` for the verifier (no Automator here).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -45,6 +48,16 @@ abstract contract EligibilityStore is CreReceiver {
 
     /// @notice Sole address allowed to call `recordAppearances` (PpmVerifier).
     address public ppmVerifier;
+
+    /// @dev Max distinct season years cached in one score update (memory).
+    uint256 internal constant _FINAL_ROUND_CACHE_CAP = 16;
+
+    /// @dev Tx-local cache: `TournamentRegistry.getFinalRound(leagueId, year)`.
+    struct FinalRoundCache {
+        uint16[_FINAL_ROUND_CACHE_CAP] seasonYears;
+        uint32[_FINAL_ROUND_CACHE_CAP] finals;
+        uint8 len;
+    }
 
     mapping(bytes32 playerId => MinutesStore) internal _minutesStore;
 
@@ -157,13 +170,18 @@ abstract contract EligibilityStore is CreReceiver {
     //  Minutes ingest (PPM / DMS)
     // --------------------------------------------
 
-    /// @notice Accumulate appearance minutes into an existing player's `SeasonMinutes` row.
-    /// @dev Squad-fill must have created the `MinutesStore` already. No DOB enqueue.
-    ///      One batch = one calendar (`seasonId` / `seasonStartYear`); each row carries its `roundNumber`.
-    ///      Does not update `weightedScoreWad` — that happens in `verifyEligibility`.
+    /**
+     * @notice Ingest match minutes; update position aggregates and (for domestic league) the score.
+     * @dev Squad-fill must have created the `MinutesStore` already. Per-match rows are not stored.
+     *      Domestic-league batches incrementally update `weightedScoreWad` as of each appearance's
+     *      global round; `verifyEligibility` only decays that aggregate to `G_now`.
+     */
     function recordAppearances(bytes32 seasonId, uint16 seasonStartYear, Appearance[] calldata appearances) external {
         if (msg.sender != ppmVerifier) revert Errors.Unauthorized();
         if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
+
+        bool scoresLeague = _isLeagueSeason(seasonId, seasonStartYear);
+        FinalRoundCache memory frCache;
 
         uint256 length = appearances.length;
         for (uint256 i; i < length; ++i) {
@@ -182,8 +200,11 @@ abstract contract EligibilityStore is CreReceiver {
             uint32 cumulative = season.minsByPosition[posIndex] + appearance.minsPlayed;
             season.minsByPosition[posIndex] = cumulative;
             season.totalMinutes += appearance.minsPlayed;
-            season.appearances.push(appearance);
             store.expectedPosition = _deriveExpectedPosition(store);
+
+            if (scoresLeague) {
+                _applyAppearanceScore(store, seasonStartYear, appearance.roundNumber, appearance.minsPlayed, frCache);
+            }
 
             emit Events.MinutesUpdated(
                 appearance.playerId,
@@ -386,6 +407,124 @@ abstract contract EligibilityStore is CreReceiver {
             if (arr[i] == value) return true;
         }
         return false;
+    }
+
+    // --------------------------------------------
+    //  Internal — rolling score / league clock
+    // --------------------------------------------
+
+    /**
+     * @dev Fold one domestic appearance into `weightedScoreWad` (normalized to `lastScoreGlobalRound`).
+     *      `G_app >= last`: decay aggregate forward, then add mins at `G_app`.
+     *      `G_app < last`: late/out-of-order — add mins decayed forward to `last`.
+     */
+    function _applyAppearanceScore(
+        MinutesStore storage store,
+        uint16 seasonStartYear,
+        uint32 roundNumber,
+        uint32 minsPlayed,
+        FinalRoundCache memory frCache
+    ) internal {
+        uint32 gApp = _toGlobalRound(seasonStartYear, roundNumber, frCache);
+        uint256 addWad = uint256(minsPlayed) * SCORE_WAD;
+        uint32 last = store.lastScoreGlobalRound;
+
+        if (last == 0) {
+            store.weightedScoreWad = addWad;
+            store.lastScoreGlobalRound = gApp;
+            return;
+        }
+
+        if (gApp >= last) {
+            store.weightedScoreWad = _decay(store.weightedScoreWad, gApp - last) + addWad;
+            store.lastScoreGlobalRound = gApp;
+        } else {
+            store.weightedScoreWad += _decay(addWad, last - gApp);
+        }
+    }
+
+    /// @dev Bring stored score from `lastScoreGlobalRound` to `gNow` (idle decay). No-op if never scored.
+    function _syncScoreToNow(MinutesStore storage store, uint32 gNow) internal {
+        uint32 last = store.lastScoreGlobalRound;
+        if (last == 0 || store.weightedScoreWad == 0 || gNow <= last) return;
+        store.weightedScoreWad = _decay(store.weightedScoreWad, gNow - last);
+        store.lastScoreGlobalRound = gNow;
+    }
+
+    function _globalRoundNow(FinalRoundCache memory frCache) internal view returns (uint32) {
+        address treasury = tournamentRegistry.getPbrTreasury(leagueId);
+        if (treasury == address(0)) revert Errors.ZeroAddress();
+        (uint16 season, uint32 active,) = IPbrTreasury(treasury).getCursors();
+        if (season == 0 || active == 0) revert Errors.ZeroId();
+        return _toGlobalRound(season, active, frCache);
+    }
+
+    function _currentSeasonYear() internal view returns (uint16 season) {
+        address treasury = tournamentRegistry.getPbrTreasury(leagueId);
+        if (treasury == address(0)) revert Errors.ZeroAddress();
+        (season,,) = IPbrTreasury(treasury).getCursors();
+        if (season == 0) revert Errors.ZeroId();
+    }
+
+    /// @dev `TournamentRegistry.getFinalRound`; cached in `frCache` for the call.
+    function _finalRound(uint16 year, FinalRoundCache memory frCache) internal view returns (uint32 fr) {
+        uint256 n = frCache.len;
+        for (uint256 i; i < n; ++i) {
+            if (frCache.seasonYears[i] == year) return frCache.finals[i];
+        }
+
+        fr = tournamentRegistry.getFinalRound(leagueId, year);
+        if (fr == 0) revert Errors.ZeroId();
+
+        if (n < _FINAL_ROUND_CACHE_CAP) {
+            frCache.seasonYears[n] = year;
+            frCache.finals[n] = fr;
+            // forge-lint: disable-next-line(unsafe-typecast)
+            frCache.len = uint8(n + 1);
+        }
+    }
+
+    /**
+     * @dev G(year, round) = Σ finalRound(y) for y ∈ [baseYear, year) + round.
+     *      Uses planned `finalRound` (not live `roundCount`).
+     */
+    function _toGlobalRound(uint16 year, uint32 round, FinalRoundCache memory frCache) internal view returns (uint32) {
+        if (year <= baseYear) return round;
+
+        uint256 acc;
+        for (uint16 y = baseYear; y < year;) {
+            acc += _finalRound(y, frCache);
+            unchecked {
+                ++y;
+            }
+        }
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint32(acc + uint256(round));
+    }
+
+    function _decay(uint256 scoreWad, uint32 deltaRounds) internal pure returns (uint256) {
+        if (deltaRounds == 0 || scoreWad == 0) return scoreWad;
+
+        uint256 result = scoreWad;
+        uint256 base = LAMBDA_WAD;
+        uint256 exp = deltaRounds;
+
+        while (exp > 0) {
+            if (exp & 1 == 1) {
+                result = (result * base) / SCORE_WAD;
+            }
+            base = (base * base) / SCORE_WAD;
+            exp >>= 1;
+        }
+        return result;
+    }
+
+    function _isLeagueSeason(bytes32 seasonId, uint16 seasonStartYear) internal view returns (bool) {
+        try tournamentRegistry.getSeasonId(leagueId, seasonStartYear) returns (bytes32 expected) {
+            return expected != bytes32(0) && expected == seasonId;
+        } catch {
+            return false;
+        }
     }
 
     // --------------------------------------------

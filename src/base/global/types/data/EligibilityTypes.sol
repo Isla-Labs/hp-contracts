@@ -19,6 +19,8 @@ uint16 constant SQUAD_FILL_PAGE_DONE = 1000;
 // --------------------------------------------
 
 /// @notice Per-player eligibility store (CRE may fill `name` / `symbol` after create).
+/// @dev `weightedScoreWad` is maintained incrementally in `recordAppearances` and decayed
+///      to `G_now` in `verifyEligibility` (`lastScoreGlobalRound` is the score's G-basis).
 struct MinutesStore {
     string name;
     string symbol;
@@ -27,14 +29,16 @@ struct MinutesStore {
     uint256 birthDate;
     SeasonMinutes[] seasonMinutes;
     uint256 weightedScoreWad;
+    /// @dev Global round that `weightedScoreWad` is normalized to (`0` = never scored).
+    uint32 lastScoreGlobalRound;
 }
 
-/// @notice Minutes for one competition calendar (`seasonId` = HPID of tournamentCalendarUuid).
+/// @notice Aggregate minutes for one competition calendar (`seasonId` = tournamentCalendar HPID).
+/// @dev Per-match rows are not retained; score uses incremental decay, position uses minsByPosition.
 struct SeasonMinutes {
     bytes32 seasonId; // tournamentCalendar
     uint16 seasonStartYear;
     uint32 totalMinutes;
-    Appearance[] appearances;
     uint32[POSITION_COUNT] minsByPosition;
 }
 
@@ -48,7 +52,8 @@ struct SquadList {
 //  Reports
 // --------------------------------------------
 
-/// @notice Single-match appearance delta; season is passed once per `recordAppearances` batch.
+/// @notice Single-match appearance delta for `recordAppearances` (not persisted onchain).
+/// @dev Season is passed once per batch; only domestic-league rows update `weightedScoreWad`.
 struct Appearance {
     bytes32 playerId;
     uint32 roundNumber;

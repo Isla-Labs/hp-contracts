@@ -170,9 +170,10 @@ contract TransferLocker is ITransferLocker {
      *
      * Access: gated (timelock / proposer).
      */
-    function confirmReactivate(bytes32 playerId) external {
+    function confirmReactivate(bytes32 playerId) external view {
         // gated: manual review + Automator setStatus(GRADUATED) / prior status
         // Topology gate is live now so cross-league reactivates cannot skip hub migration.
+        // `view` until status restore / queue clear are wired (those will drop `view`).
         _requireFeeTopologyConsistent(playerId);
     }
 
@@ -215,6 +216,7 @@ contract TransferLocker is ITransferLocker {
         bytes32[] memory linked = tournamentRegistry.getTournamentsForLeague(leagueId);
         bytes32[] memory active = set.tournamentData.activeTournaments;
         uint256 activeLen = active.length;
+        address vault = set.vaultData.playerVault;
 
         for (uint256 i; i < activeLen; ++i) {
             bytes32 tournamentId = active[i];
@@ -224,14 +226,11 @@ contract TransferLocker is ITransferLocker {
 
             // Reverts `NotFound` if the tournament / treasury was never created.
             address treasury = tournamentRegistry.getPbrTreasury(tournamentId);
-
-            address vault = set.vaultData.playerVault;
             if (vault != address(0) && !IPbrTreasury(treasury).isVault(vault)) {
                 revert Errors.VaultNotOnTournamentTreasury(playerId, tournamentId, treasury, vault);
             }
         }
 
-        address vault = set.vaultData.playerVault;
         if (vault != address(0) && !IPbrTreasury(domesticTreasury).isVault(vault)) {
             revert Errors.VaultNotOnLeagueTreasury(playerId, leagueId, domesticTreasury, vault);
         }

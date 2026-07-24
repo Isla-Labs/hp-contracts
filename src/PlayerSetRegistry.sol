@@ -38,7 +38,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayer
     //  Storage
     // --------------------------------------------
 
-    ITournamentRegistry public immutable tournamentRegistry;
+    ITournamentRegistry public tournamentRegistry;
 
     mapping(bytes32 playerId => PlayerSet) private _playerSets;
     mapping(address token => bytes32 playerId) public playerIdOfToken;
@@ -71,12 +71,12 @@ contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayer
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_) AddressBook(addressProvider_) {
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY)));
         _disableInitializers();
     }
 
-    /// @notice Resolves DAO / Automator from `AddressProvider` once into roles.
+    /// @notice Resolves TournamentRegistry / DAO / Automator from `AddressProvider` once.
     function initialize() external initializer {
+        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY)));
         address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
         address dao_ = _getAddress(_addressKey(Keys.DAO));
 

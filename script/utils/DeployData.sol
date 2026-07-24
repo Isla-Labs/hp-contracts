@@ -20,15 +20,14 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 /**
  * @title DeployData
  * @notice CRE data plane: EligibilityVerifier, FixtureCommitment, RoundManager.
- * @dev PBR (`PpmVerifier` / `StatsCommitment`) are stubs — a reserved InitGuard address is
- *      registered as `PPM_VERIFIER` so EV can initialize; upgrade that slot when PBR ships.
+ * @dev AddressBook upgradeables (EV) follow the same order as DeployCore:
+ *        1) AddressProvider already live from Core
+ *        2) Deploy proxies + AddressBook implementation
+ *        3) Register names (`CRE_FORWARDER`, `PPM_VERIFIER`)
+ *        4) Initialize (resolve once into storage)
  *
- *      Wiring:
- *        - Lockers already have `setAutomator` from DeployCore
- *        - EV proxy seeded as Automator verified caller in DeployCore
- *        - DopplerLocker `setEligibilityVerifier` (metadata oracle only)
- *        - RoundManager cat-3 on TournamentRegistry (direct); Automator caller add is cat-1 later if needed
- *        - FixtureCommitment.setRoundManager
+ *      FixtureCommitment / RoundManager are not AddressBook yet — still take explicit init args.
+ *      `PPM_VERIFIER` is a sticky InitGuard placeholder until PBR ships.
  */
 abstract contract DeployData is ProxyUtils {
     struct DataDeployment {
@@ -91,35 +90,44 @@ abstract contract DeployData is ProxyUtils {
         InitGuard guard = InitGuard(payable(c.initGuard));
         AddressProvider ap = AddressProvider(c.addressProvider);
 
+        // --------------------------------------------
+        //  2) Deploy proxies + AddressBook implementation
+        // --------------------------------------------
+
         d.eligibilityVerifier = c.eligibilityVerifier;
         d.fixtureCommitment = _deployInitGuardProxy(guard, deployer);
         d.roundManager = _deployInitGuardProxy(guard, deployer);
-        // Sticky address for future PpmVerifier upgrade (stubs under data/pbr/ today).
         d.ppmVerifierPlaceholder = _deployInitGuardProxy(guard, deployer);
+
+        d.eligibilityVerifierImpl = address(new EligibilityVerifier(c.addressProvider, c.cooldown));
+        d.fixtureCommitmentImpl = address(new FixtureCommitment());
+        d.roundManagerImpl = address(new RoundManager(c.tournamentRegistry, d.fixtureCommitment));
+
+        // --------------------------------------------
+        //  3) Register AddressProvider names
+        // --------------------------------------------
 
         ap.setName(Keys.CRE_FORWARDER, c.forwarder);
         ap.setName(Keys.PPM_VERIFIER, d.ppmVerifierPlaceholder);
 
-        d.fixtureCommitmentImpl = address(new FixtureCommitment());
-        _upgradeAndCall(
-            d.fixtureCommitment,
-            d.fixtureCommitmentImpl,
-            abi.encodeCall(FixtureCommitment.initialize, (c.automator, c.dao))
-        );
+        // --------------------------------------------
+        //  4) Initialize
+        // --------------------------------------------
 
-        d.roundManagerImpl = address(new RoundManager(c.tournamentRegistry, d.fixtureCommitment));
-        _upgradeAndCall(
-            d.roundManager, d.roundManagerImpl, abi.encodeCall(RoundManager.initialize, (c.automator, c.dao))
-        );
-
-        d.eligibilityVerifierImpl = address(new EligibilityVerifier(c.addressProvider, c.cooldown));
         _upgradeAndCall(
             d.eligibilityVerifier,
             d.eligibilityVerifierImpl,
             abi.encodeCall(EligibilityVerifier.initialize, (c.workflowId, c.leagueId, c.baseYear))
         );
+        _upgradeAndCall(
+            d.fixtureCommitment,
+            d.fixtureCommitmentImpl,
+            abi.encodeCall(FixtureCommitment.initialize, (c.automator, c.dao))
+        );
+        _upgradeAndCall(
+            d.roundManager, d.roundManagerImpl, abi.encodeCall(RoundManager.initialize, (c.automator, c.dao))
+        );
 
-        // Metadata oracle for DopplerLocker enqueue (writer is Automator).
         DopplerLocker(c.dopplerLocker).setEligibilityVerifier(d.eligibilityVerifier);
 
         if (deployer == c.dao) {

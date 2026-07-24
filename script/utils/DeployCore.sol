@@ -24,14 +24,16 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployCore
- * @notice Bootstrap: AddressProvider, access stack, deployment lockers, DeployTournament, registries.
- * @dev Matchweeks / eligibility impl / PBR live in `DeployData`. Market/vault factories in
- *      `DeployFactories`.
+ * @notice Bootstrap: AddressProvider, access stack, lockers, DeployTournament, registries.
+ * @dev AddressBook upgradeables follow:
+ *        1) Deploy AddressProvider
+ *        2) Deploy proxies + AddressBook implementations (ctors only store the provider)
+ *        3) Register names on AddressProvider
+ *        4) Initialize proxies (resolve once into storage)
  *
- *      EligibilityVerifier InitGuard proxy is created here so Automator can seed EV as a
- *      verified caller at construction. DeployData upgrades that proxy.
- *
- *      AddressProvider is seeded before AddressBook-aware ctors / `initialize` calls.
+ *      Non-AddressBook contracts (timelocks, lockers, Automator, DeployTournament) still take
+ *      explicit ctor args. EligibilityVerifier proxy is created here so Automator can seed EV
+ *      as a verified caller; DeployData upgrades that proxy.
  */
 abstract contract DeployCore is ProxyUtils {
     struct CoreDeployment {
@@ -54,35 +56,32 @@ abstract contract DeployCore is ProxyUtils {
         if (dao == address(0)) revert("DAO_ADDRESS required");
         if (deployer == address(0)) revert("deployer required");
 
+        // --------------------------------------------
+        //  1) AddressProvider (+ bootstrap access)
+        // --------------------------------------------
+
         InitGuard guard = new InitGuard();
         d.initGuard = address(guard);
 
         d.constitutionalTimelock = address(new ConstitutionalTimelock(dao, 0));
         d.maintenanceTimelock = address(new MaintenanceTimelock(dao, 0));
 
-        // AddressProvider: deployer seeds bootstrap names, then hands DEFAULT_ADMIN to DAO if needed.
         AddressProvider ap = new AddressProvider(deployer, d.constitutionalTimelock);
         d.addressProvider = address(ap);
 
-        ap.setName(Keys.DAO, dao);
-        ap.setName(Keys.CONSTITUTIONAL_TIMELOCK, d.constitutionalTimelock);
-        ap.setName(Keys.MAINTENANCE_TIMELOCK, d.maintenanceTimelock);
+        // --------------------------------------------
+        //  2) Deploy upgradeables + sibling infrastructure
+        // --------------------------------------------
 
-        d.dopplerLocker = address(new DopplerLocker(d.constitutionalTimelock, dao));
-        ap.setName(Keys.DOPPLER_LOCKER, d.dopplerLocker);
-
-        // Stable proxy addresses (impl = InitGuard until upgradeAndCall).
         d.tournamentRegistry = _deployInitGuardProxy(guard, deployer);
         d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
-        // EV proxy early — Automator constructor seeds it as a verified caller.
         d.eligibilityVerifier = _deployInitGuardProxy(guard, deployer);
 
-        ap.setName(Keys.TOURNAMENT_REGISTRY, d.tournamentRegistry);
-        ap.setName(Keys.PLAYER_SET_REGISTRY, d.playerSetRegistry);
+        d.tournamentRegistryImpl = address(new TournamentRegistry(d.addressProvider));
+        d.playerSetRegistryImpl = address(new PlayerSetRegistry(d.addressProvider));
 
-        // TransferLocker needs registry addresses for reactivate fee-topology checks.
+        d.dopplerLocker = address(new DopplerLocker(d.constitutionalTimelock, dao));
         d.transferLocker = address(new TransferLocker(d.playerSetRegistry, d.tournamentRegistry));
-        ap.setName(Keys.TRANSFER_LOCKER, d.transferLocker);
 
         address[] memory evDestinations = new address[](2);
         evDestinations[0] = d.dopplerLocker;
@@ -91,39 +90,47 @@ abstract contract DeployCore is ProxyUtils {
         callerConfigs[0] =
             VerifiedCallerConfig({ caller: d.eligibilityVerifier, destinations: evDestinations });
         d.automator = address(new Automator(dao, d.constitutionalTimelock, callerConfigs));
-        ap.setName(Keys.AUTOMATOR, d.automator);
 
-        // Waiting rooms accept enqueue only from Automator (EV calls through Automator).
         TransferLocker(d.transferLocker).setAutomator(d.automator);
         DopplerLocker(d.dopplerLocker).setAutomator(d.automator);
 
-        d.tournamentRegistryImpl = address(new TournamentRegistry(d.addressProvider));
+        d.deployTournament =
+            address(new DeployTournament(d.constitutionalTimelock, dao, d.tournamentRegistry, d.playerSetRegistry));
+
+        // --------------------------------------------
+        //  3) Register AddressProvider names
+        // --------------------------------------------
+
+        ap.setName(Keys.DAO, dao);
+        ap.setName(Keys.CONSTITUTIONAL_TIMELOCK, d.constitutionalTimelock);
+        ap.setName(Keys.MAINTENANCE_TIMELOCK, d.maintenanceTimelock);
+        ap.setName(Keys.AUTOMATOR, d.automator);
+        ap.setName(Keys.CREATE_TOURNAMENT, d.deployTournament);
+        ap.setName(Keys.TOURNAMENT_REGISTRY, d.tournamentRegistry);
+        ap.setName(Keys.PLAYER_SET_REGISTRY, d.playerSetRegistry);
+        ap.setName(Keys.DOPPLER_LOCKER, d.dopplerLocker);
+        ap.setName(Keys.TRANSFER_LOCKER, d.transferLocker);
+
+        // --------------------------------------------
+        //  4) Initialize AddressBook upgradeables
+        // --------------------------------------------
+
         _upgradeAndCall(
             d.tournamentRegistry, d.tournamentRegistryImpl, abi.encodeCall(TournamentRegistry.initialize, ())
         );
-
-        d.playerSetRegistryImpl = address(new PlayerSetRegistry(d.addressProvider));
         _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, abi.encodeCall(PlayerSetRegistry.initialize, ()));
-
-        d.deployTournament =
-            address(new DeployTournament(d.constitutionalTimelock, dao, d.tournamentRegistry, d.playerSetRegistry));
-        ap.setName(Keys.CREATE_TOURNAMENT, d.deployTournament);
 
         if (deployer == dao) {
             AccessControl(d.tournamentRegistry).grantRole(Roles.CATEGORY_ONE, d.deployTournament);
             AccessControl(d.tournamentRegistry).grantRole(Roles.CATEGORY_THREE, d.deployTournament);
         } else {
             console.log("DAO != deployer: grant DeployTournament CAT_ONE + CAT_THREE on TournamentRegistry");
+            AccessControl(d.addressProvider).grantRole(bytes32(0), dao);
         }
 
         _transferProxyAdmin(d.tournamentRegistry, d.constitutionalTimelock);
         _transferProxyAdmin(d.playerSetRegistry, d.constitutionalTimelock);
         // EV proxy admin stays with deployer until DeployData upgrades then transfers.
-
-        // Keep deployer as AddressProvider admin through later bootstrap scripts; also grant DAO.
-        if (deployer != dao) {
-            AccessControl(d.addressProvider).grantRole(bytes32(0), dao);
-        }
 
         _logCore(d);
     }

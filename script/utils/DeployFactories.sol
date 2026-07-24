@@ -15,7 +15,9 @@ import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 /**
  * @title DeployFactories
  * @notice Market + vault beacon factories; wires `DeployTournament.configureFactories`.
- * @dev Requires Core addresses via env. Factories resolve deps from `ADDRESS_PROVIDER`.
+ * @dev Non-upgradeable factories resolve AddressProvider slots in their constructors, so Core
+ *      must already have registered governance + registry names. Beacon child proxies still
+ *      resolve roles at their own `initialize` (after factory deploy).
  *      `configureFactories` is cat-1 on DeployTournament — when `dao == deployer`, temporarily
  *      grant the deployer `CATEGORY_ONE` to call it.
  */

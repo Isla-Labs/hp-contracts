@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
-library HP8543 {
+library HP8453 {
     //  Aragon Multisig
     address internal constant DAO = 0x0000000000000000000000000000000000000000;
 

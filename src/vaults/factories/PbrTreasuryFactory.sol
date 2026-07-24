@@ -6,7 +6,7 @@ import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.
 import { ICreateX } from "@createx/ICreateX.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
-import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { CreateXAddresses } from "@base/global/libraries/addresses/CreateX.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
@@ -53,13 +53,13 @@ contract PbrTreasuryFactory is AddressBook, IPbrTreasuryFactory {
      * @param addressProvider_ Canonical `AddressProvider` — resolves governance + registry deps.
      */
     constructor(address addressProvider_) AddressBook(addressProvider_) {
-        automator = _getAddress(_addressKey(Keys.AUTOMATOR));
-        maintenanceTimelock = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
-        constitutionalTimelock = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
-        dao = _getAddress(_addressKey(Keys.DAO));
-        createTournament = _getAddress(_addressKey(Keys.CREATE_TOURNAMENT));
-        tournamentRegistry = _getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY));
-        playerSetRegistry = _getAddress(_addressKey(Keys.PLAYER_SET_REGISTRY));
+        automator = _getAddress(_addressKey(Addresses.AUTOMATOR));
+        maintenanceTimelock = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
+        constitutionalTimelock = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
+        dao = _getAddress(_addressKey(Addresses.DAO));
+        createTournament = _getAddress(_addressKey(Addresses.CREATE_TOURNAMENT));
+        tournamentRegistry = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
+        playerSetRegistry = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
         beacon = new UpgradeableBeacon(address(new PbrTreasury(addressProvider_)), constitutionalTimelock);
     }
 

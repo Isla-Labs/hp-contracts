@@ -5,7 +5,7 @@ import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
-import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
 import { FeeRouter } from "@markets/FeeRouter.sol";
@@ -39,10 +39,10 @@ contract FeeRouterFactory is AddressBook {
      * @param addressProvider_ Canonical `AddressProvider` — resolves governance + registry deps.
      */
     constructor(address addressProvider_) AddressBook(addressProvider_) {
-        automator = _getAddress(_addressKey(Keys.AUTOMATOR));
-        maintenanceTimelock = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
-        constitutionalTimelock = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
-        dao = _getAddress(_addressKey(Keys.DAO));
+        automator = _getAddress(_addressKey(Addresses.AUTOMATOR));
+        maintenanceTimelock = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
+        constitutionalTimelock = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
+        dao = _getAddress(_addressKey(Addresses.DAO));
 
         address impl = address(new FeeRouter(addressProvider_));
         beacon = new UpgradeableBeacon(impl, constitutionalTimelock);

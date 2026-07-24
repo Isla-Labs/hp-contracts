@@ -6,7 +6,7 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
-import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
@@ -92,10 +92,10 @@ contract PbrFeeHub is Initializable, AddressBook, AccessControl, ReentrancyGuard
         if (leagueTreasury_ == address(0)) revert Errors.ZeroAddress();
         if (leagueId_ == bytes32(0)) revert Errors.ZeroId();
 
-        address maintenanceTimelock_ = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
-        address constitutionalTimelock_ = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
-        address dao_ = _getAddress(_addressKey(Keys.DAO));
-        address createTournament_ = _getAddress(_addressKey(Keys.CREATE_TOURNAMENT));
+        address maintenanceTimelock_ = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
+        address constitutionalTimelock_ = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Addresses.DAO));
+        address createTournament_ = _getAddress(_addressKey(Addresses.CREATE_TOURNAMENT));
 
         leagueId = leagueId_;
         leagueTreasury = leagueTreasury_;

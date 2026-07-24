@@ -5,7 +5,7 @@ import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
-import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
 import { IPbrFeeHubFactory } from "@interfaces/markets/factories/IPbrFeeHubFactory.sol";
@@ -40,10 +40,10 @@ contract PbrFeeHubFactory is AddressBook, IPbrFeeHubFactory {
      * @param addressProvider_ Canonical `AddressProvider` — resolves governance + orchestrator deps.
      */
     constructor(address addressProvider_) AddressBook(addressProvider_) {
-        maintenanceTimelock = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
-        constitutionalTimelock = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
-        dao = _getAddress(_addressKey(Keys.DAO));
-        createTournament = _getAddress(_addressKey(Keys.CREATE_TOURNAMENT));
+        maintenanceTimelock = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
+        constitutionalTimelock = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
+        dao = _getAddress(_addressKey(Addresses.DAO));
+        createTournament = _getAddress(_addressKey(Addresses.CREATE_TOURNAMENT));
         beacon = new UpgradeableBeacon(address(new PbrFeeHub(addressProvider_)), constitutionalTimelock);
     }
 

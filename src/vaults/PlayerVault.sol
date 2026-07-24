@@ -9,7 +9,7 @@ import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
-import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
@@ -95,11 +95,11 @@ contract PlayerVault is Initializable, AddressBook, AccessControl, Pausable, Ree
         if (playerToken_ == address(0) || stToken_ == address(0)) revert Errors.ZeroAddress();
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
 
-        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
-        address maintenanceTimelock_ = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
-        address dao_ = _getAddress(_addressKey(Keys.DAO));
-        address tournamentRegistry_ = _getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY));
-        address playerSetRegistry_ = _getAddress(_addressKey(Keys.PLAYER_SET_REGISTRY));
+        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
+        address maintenanceTimelock_ = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Addresses.DAO));
+        address tournamentRegistry_ = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
+        address playerSetRegistry_ = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
 
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);

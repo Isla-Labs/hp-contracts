@@ -6,7 +6,7 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
-import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 
 import { IAutomator } from "@interfaces/governance/IAutomator.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
@@ -89,15 +89,15 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         if (expectedWorkflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
         if (leagueId_ == bytes32(0) || baseYear_ == 0) revert Errors.ZeroId();
 
-        address constitutionalTimelock_ = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
-        address dao_ = _getAddress(_addressKey(Keys.DAO));
-        address forwarder_ = _getAddress(_addressKey(Keys.CRE_FORWARDER));
-        address playerSetRegistry_ = _getAddress(_addressKey(Keys.PLAYER_SET_REGISTRY));
-        address tournamentRegistry_ = _getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY));
-        address ppmVerifier_ = _getAddress(_addressKey(Keys.PPM_VERIFIER));
-        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
-        address dopplerLocker_ = _getAddress(_addressKey(Keys.DOPPLER_LOCKER));
-        address transferLocker_ = _getAddress(_addressKey(Keys.TRANSFER_LOCKER));
+        address constitutionalTimelock_ = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Addresses.DAO));
+        address forwarder_ = _getAddress(_addressKey(Addresses.CRE_FORWARDER));
+        address playerSetRegistry_ = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
+        address tournamentRegistry_ = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
+        address ppmVerifier_ = _getAddress(_addressKey(Addresses.PPM_VERIFIER));
+        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
+        address dopplerLocker_ = _getAddress(_addressKey(Addresses.DOPPLER_LOCKER));
+        address transferLocker_ = _getAddress(_addressKey(Addresses.TRANSFER_LOCKER));
 
         __EligibilityCriteria_init(constitutionalTimelock_, dao_);
         __CreReceiver_init(forwarder_);

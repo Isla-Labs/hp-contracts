@@ -5,7 +5,7 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
-import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
@@ -76,9 +76,9 @@ contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayer
 
     /// @notice Resolves TournamentRegistry / DAO / Automator from `AddressProvider` once.
     function initialize() external initializer {
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY)));
-        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
-        address dao_ = _getAddress(_addressKey(Keys.DAO));
+        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
+        address dao_ = _getAddress(_addressKey(Addresses.DAO));
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
         _grantRole(Roles.CATEGORY_THREE, automator_);

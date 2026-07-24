@@ -7,7 +7,7 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
-import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
@@ -50,8 +50,8 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
     //  Storage
     // --------------------------------------------
 
-    ITournamentRegistry public immutable tournamentRegistry;
-    IPlayerSetRegistry public immutable playerSetRegistry;
+    ITournamentRegistry public tournamentRegistry;
+    IPlayerSetRegistry public playerSetRegistry;
 
     bytes32 public tournamentId;
 
@@ -91,8 +91,6 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_) AddressBook(addressProvider_) {
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY)));
-        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Keys.PLAYER_SET_REGISTRY)));
         _disableInitializers();
     }
 
@@ -105,10 +103,12 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
         if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
         if (initialSeason_ == 0) revert Errors.ZeroSeason();
 
-        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
-        address maintenanceTimelock_ = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
-        address dao_ = _getAddress(_addressKey(Keys.DAO));
-        address createTournament_ = _getAddress(_addressKey(Keys.CREATE_TOURNAMENT));
+        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
+        address maintenanceTimelock_ = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Addresses.DAO));
+        address createTournament_ = _getAddress(_addressKey(Addresses.CREATE_TOURNAMENT));
+        address tournamentRegistry_ = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
+        address playerSetRegistry_ = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
 
         tournamentId = tournamentId_;
         seasonId = initialSeason_;
@@ -119,6 +119,9 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
         _grantRole(Roles.CATEGORY_ONE, createTournament_);
         _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
         _grantRole(Roles.CATEGORY_THREE, automator_);
+
+        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
     }
 
     receive() external payable nonReentrant {

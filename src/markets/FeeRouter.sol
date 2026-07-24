@@ -8,7 +8,7 @@ import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
-import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
@@ -49,7 +49,7 @@ contract FeeRouter is Initializable, AddressBook, AccessControl, ReentrancyGuard
     using SafeERC20 for IERC20;
 
     /// @notice Registry used to enumerate domestic PBR fee hubs when unsupported
-    ITournamentRegistry public immutable tournamentRegistry;
+    ITournamentRegistry public tournamentRegistry;
 
     /// @notice Player identity associated with this FeeRouter proxy
     bytes32 public playerId;
@@ -66,7 +66,6 @@ contract FeeRouter is Initializable, AddressBook, AccessControl, ReentrancyGuard
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_) AddressBook(addressProvider_) {
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY)));
         _disableInitializers();
     }
 
@@ -80,10 +79,11 @@ contract FeeRouter is Initializable, AddressBook, AccessControl, ReentrancyGuard
     function initialize(bytes32 playerId_, address atFunding_, address pbrFeeHub_) external initializer {
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
 
-        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
-        address maintenanceTimelock_ = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
-        address constitutionalTimelock_ = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
-        address dao_ = _getAddress(_addressKey(Keys.DAO));
+        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
+        address maintenanceTimelock_ = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
+        address constitutionalTimelock_ = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Addresses.DAO));
+        address tournamentRegistry_ = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
 
         playerId = playerId_;
         minRelay = 0.0001 ether;
@@ -92,6 +92,8 @@ contract FeeRouter is Initializable, AddressBook, AccessControl, ReentrancyGuard
         _grantRole(Roles.CATEGORY_THREE, automator_);
         _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
         _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
+
+        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
 
         if (atFunding_ != address(0)) {
             _setAtFunding(atFunding_);

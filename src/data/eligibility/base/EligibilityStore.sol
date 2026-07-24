@@ -16,7 +16,6 @@ import {
     MinutesStore,
     POSITION_COUNT,
     SCORE_WAD,
-    SeasonMinutes,
     SquadFillReport,
     SquadList,
     SQUAD_FILL_PAGE_DONE
@@ -27,7 +26,8 @@ import {
  * @notice Abstract squad / minutes store: CRE squad-fill intake and PPM appearance ingest.
  * @dev Extended by `EligibilityVerifier` (criteria + rate-limited scan / waiting-room handoff).
  *      Domestic-league appearances update `weightedScoreWad` incrementally; verify decays to
- *      `G_now`. League-leavers stage in `_pendingLeftLeague` for the verifier (no Automator here).
+ *      `G_now`. Career `minsByPosition` drives `expectedPosition`. League-leavers stage in
+ *      `_pendingLeftLeague` for the verifier (no Automator here).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -81,6 +81,9 @@ abstract contract EligibilityStore is CreReceiver {
 
     /// @dev Deployed actives with no club after a full sweep — drained by `verifyEligibility`.
     bytes32[] internal _pendingLeftLeague;
+
+    /// @dev Domain separator for Cancun `tstore` membership marks in `_syncClubSquad`.
+    bytes32 private constant _INCOMING_SQUAD_TKEY = keccak256("EligibilityStore.incomingSquadMember");
 
     // --------------------------------------------
     //  Views
@@ -136,7 +139,7 @@ abstract contract EligibilityStore is CreReceiver {
         return _minutesStore[playerId];
     }
 
-    /// @notice Name/symbol only — avoids copying `seasonMinutes` into memory (Doppler enqueue path).
+    /// @notice Name/symbol only — avoids copying `minsByPosition` into memory (Doppler enqueue path).
     function getPlayerMetadata(bytes32 playerId)
         external
         view
@@ -183,10 +186,10 @@ abstract contract EligibilityStore is CreReceiver {
     // --------------------------------------------
 
     /**
-     * @notice Ingest match minutes; update position aggregates and (for domestic league) the score.
+     * @notice Ingest match minutes; update career position aggregates and (for domestic league) the score.
      * @dev Squad-fill must have created the `MinutesStore` already. Per-match rows are not stored.
-     *      Domestic-league batches incrementally update `weightedScoreWad` as of each appearance's
-     *      global round; `verifyEligibility` only decays that aggregate to `G_now`.
+     *      All comps update career `minsByPosition` / `expectedPosition`. Domestic-league batches
+     *      incrementally update `weightedScoreWad`; `verifyEligibility` only decays to `G_now`.
      */
     function recordAppearances(bytes32 seasonId, uint16 seasonStartYear, Appearance[] calldata appearances) external {
         if (msg.sender != ppmVerifier) revert Errors.Unauthorized();
@@ -207,11 +210,7 @@ abstract contract EligibilityStore is CreReceiver {
             if (posIndex >= POSITION_COUNT) revert Errors.ZeroId();
 
             MinutesStore storage store = _minutesStore[appearance.playerId];
-            SeasonMinutes storage season = _getOrCreateSeasonMinutes(store, seasonId, seasonStartYear);
-
-            uint32 cumulative = season.minsByPosition[posIndex] + appearance.minsPlayed;
-            season.minsByPosition[posIndex] = cumulative;
-            store.expectedPosition = _deriveExpectedPosition(store);
+            uint32 cumulative = _accumulatePosition(store, posIndex, appearance.minsPlayed);
 
             if (scoresLeague) {
                 _applyAppearanceScore(store, seasonStartYear, appearance.roundNumber, appearance.minsPlayed, frCache);
@@ -289,7 +288,7 @@ abstract contract EligibilityStore is CreReceiver {
             MinutesStore storage store = _minutesStore[playerId];
             store.birthDate = birthDate;
             store.earliestSeasonStartYear = r.seasonStartYear;
-            // `expectedPosition` defaults to Position(0); score / seasonMinutes stay empty until PPM.
+            // `expectedPosition` defaults to Position(0); score / minsByPosition stay empty until PPM.
 
             _tracked[playerId] = true;
             _playerIds.push(playerId);
@@ -356,27 +355,65 @@ abstract contract EligibilityStore is CreReceiver {
      * @dev Overwrite `SquadList` for `clubId` (CRE sends status=active only).
      *      Players previously on this list and absent from `squadPlayerIds` are pending leavers
      *      until DONE (they may still appear on another club later in the sweep).
+     *      Identical ordered squads skip all writes. Membership tests use transient storage
+     *      so the leaver pass is O(prev + squad), not O(prev × squad).
      */
     function _syncClubSquad(bytes32 clubId, bytes32[] memory squadPlayerIds) private {
         SquadList storage prev = _squadLists[clubId];
-        uint256 prevLen = prev.playerIds.length;
+        if (_samePlayerIds(prev.playerIds, squadPlayerIds)) return;
 
+        uint256 squadLen = squadPlayerIds.length;
+        for (uint256 i; i < squadLen; ++i) {
+            bytes32 playerId = squadPlayerIds[i];
+            if (playerId == bytes32(0)) revert Errors.ZeroId();
+            _tstoreIncoming(playerId, true);
+        }
+
+        uint256 prevLen = prev.playerIds.length;
         for (uint256 i; i < prevLen; ++i) {
             bytes32 playerId = prev.playerIds[i];
-            if (_contains(squadPlayerIds, playerId)) continue;
+            if (_tloadIncoming(playerId)) continue;
             if (_playerClub[playerId] != clubId) continue;
             delete _playerClub[playerId];
             _leftDuringSweep.push(playerId);
         }
 
-        for (uint256 i; i < squadPlayerIds.length; ++i) {
+        for (uint256 i; i < squadLen; ++i) {
             bytes32 playerId = squadPlayerIds[i];
-            if (playerId == bytes32(0)) revert Errors.ZeroId();
             _playerClub[playerId] = clubId;
+            _tstoreIncoming(playerId, false);
         }
 
         _squadLists[clubId] = SquadList({ clubId: clubId, playerIds: squadPlayerIds });
-        emit Events.SquadListUpdated(clubId, squadPlayerIds.length);
+        emit Events.SquadListUpdated(clubId, squadLen);
+    }
+
+    /// @dev Ordered equality of stored vs incoming squad arrays (CRE-stable order → common no-op).
+    function _samePlayerIds(bytes32[] storage a, bytes32[] memory b) private view returns (bool) {
+        uint256 n = a.length;
+        if (n != b.length) return false;
+        for (uint256 i; i < n; ++i) {
+            if (a[i] != b[i]) return false;
+        }
+        return true;
+    }
+
+    function _incomingTSlot(bytes32 playerId) private pure returns (bytes32) {
+        return keccak256(abi.encode(playerId, _INCOMING_SQUAD_TKEY));
+    }
+
+    function _tstoreIncoming(bytes32 playerId, bool marked) private {
+        bytes32 slot = _incomingTSlot(playerId);
+        assembly ("memory-safe") {
+            tstore(slot, marked)
+        }
+    }
+
+    function _tloadIncoming(bytes32 playerId) private view returns (bool marked) {
+        bytes32 slot = _incomingTSlot(playerId);
+        assembly ("memory-safe") {
+            marked := tload(slot)
+        }
     }
 
     /**
@@ -410,14 +447,6 @@ abstract contract EligibilityStore is CreReceiver {
 
         ids = _pendingLeftLeague;
         delete _pendingLeftLeague;
-    }
-
-    function _contains(bytes32[] memory arr, bytes32 value) private pure returns (bool) {
-        uint256 n = arr.length;
-        for (uint256 i; i < n; ++i) {
-            if (arr[i] == value) return true;
-        }
-        return false;
     }
 
     // --------------------------------------------
@@ -539,51 +568,26 @@ abstract contract EligibilityStore is CreReceiver {
     }
 
     // --------------------------------------------
-    //  Internal — minutes store helpers
+    //  Internal — position aggregate
     // --------------------------------------------
 
-    /// @dev Find `seasonId` row or push a new empty `SeasonMinutes`.
-    function _getOrCreateSeasonMinutes(
+    /**
+     * @dev Add `minsPlayed` to career `minsByPosition[posIndex]` and update `expectedPosition`
+     *      only when this slot strictly beats the current best (ties keep the incumbent).
+     */
+    function _accumulatePosition(
         MinutesStore storage store,
-        bytes32 seasonId,
-        uint16 seasonStartYear
-    ) private returns (SeasonMinutes storage season) {
-        uint256 n = store.seasonMinutes.length;
-        for (uint256 i; i < n; ++i) {
-            if (store.seasonMinutes[i].seasonId == seasonId) {
-                return store.seasonMinutes[i];
-            }
-        }
+        uint256 posIndex,
+        uint32 minsPlayed
+    ) private returns (uint32 cumulative) {
+        cumulative = store.minsByPosition[posIndex] + minsPlayed;
+        store.minsByPosition[posIndex] = cumulative;
 
-        store.seasonMinutes.push();
-        season = store.seasonMinutes[n];
-        season.seasonId = seasonId;
-        season.seasonStartYear = seasonStartYear;
-    }
-
-    /// @dev Argmax across all seasons' `minsByPosition`. Ties keep the current `expectedPosition`.
-    function _deriveExpectedPosition(MinutesStore storage store) private view returns (Position) {
-        uint32[POSITION_COUNT] memory totals;
-        uint256 n = store.seasonMinutes.length;
-        for (uint256 s; s < n; ++s) {
-            uint32[POSITION_COUNT] storage mins = store.seasonMinutes[s].minsByPosition;
-            for (uint256 i; i < POSITION_COUNT; ++i) {
-                totals[i] += mins[i];
-            }
-        }
-
-        Position best = store.expectedPosition;
         // forge-lint: disable-next-line(unsafe-typecast)
-        uint32 bestMins = totals[uint8(best)];
-
-        for (uint256 i; i < POSITION_COUNT; ++i) {
-            uint32 mins = totals[i];
-            if (mins > bestMins) {
-                bestMins = mins;
-                // forge-lint: disable-next-line(unsafe-typecast)
-                best = Position(uint8(i));
-            }
+        uint256 bestIdx = uint256(uint8(store.expectedPosition));
+        if (posIndex != bestIdx && cumulative > store.minsByPosition[bestIdx]) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            store.expectedPosition = Position(uint8(posIndex));
         }
-        return best;
     }
 }

@@ -21,24 +21,19 @@ uint16 constant SQUAD_FILL_PAGE_DONE = 1000;
 /// @notice Per-player eligibility store (CRE may fill `name` / `symbol` after create).
 /// @dev `weightedScoreWad` is maintained incrementally in `recordAppearances` and decayed
 ///      to `G_now` in `verifyEligibility` (`lastScoreGlobalRound` is the score's G-basis).
+///      `minsByPosition` is a career aggregate (all comps ingested on this EV) for `expectedPosition`.
 struct MinutesStore {
+    /// @dev Core metadata updated by cre/hp-v1/workflows/squad-fill
     string name;
     string symbol;
     uint16 earliestSeasonStartYear;
-    Position expectedPosition;
     uint256 birthDate;
-    SeasonMinutes[] seasonMinutes;
-    uint256 weightedScoreWad;
-    /// @dev Global round that `weightedScoreWad` is normalized to (`0` = never scored).
-    uint32 lastScoreGlobalRound;
-}
-
-/// @notice Aggregate minutes for one competition calendar (`seasonId` = tournamentCalendar HPID).
-/// @dev Per-match rows are not retained; score uses incremental decay, position uses minsByPosition.
-struct SeasonMinutes {
-    bytes32 seasonId; // tournamentCalendar
-    uint16 seasonStartYear;
+    /// @dev Career minutes by position (DOMESTIC_LEAGUE only)
+    Position expectedPosition;
     uint32[POSITION_COUNT] minsByPosition;
+    /// @dev Eligibility score (current DOMESTIC_LEAGUE only)
+    uint256 weightedScoreWad;
+    uint32 lastScoreGlobalRound;
 }
 
 /// @notice Latest active squad membership for one club (`clubId` = HPID of contestantUuid).
@@ -69,17 +64,18 @@ struct Appearance {
  *      Used on create (historical / quiet) and on quiet resweeps to backfill existing rows.
  */
 struct SquadFillReport {
-    bytes32 seasonId;
-    uint16 seasonStartYear;
     uint16 pageFetched;
     uint16 nextPage;
+    /// @dev Season metadata
+    bytes32 seasonId;
+    uint16 seasonStartYear;
+    /// @dev Player metadata
     bytes32[] playerIds;
     uint256[] birthDates;
-    /// @dev HPID(contestantUuid). Zero skips membership sync (historical path).
+    /// @dev Club metadata
     bytes32 clubId;
-    /// @dev Full active squad for `clubId` (not just newly created players).
     bytes32[] squadPlayerIds;
-    /// @dev Players receiving `name` / `symbol` this report (may overlap `playerIds`).
+    /// @dev Token metadata (low-volume runthrough; backfill only)
     bytes32[] metaPlayerIds;
     string[] names;
     string[] symbols;
@@ -116,8 +112,6 @@ struct EligibilityGroups {
     bytes32[] under21;
     bytes32[] outfield;
     bytes32[] newTransfers;
-    /// @dev Deployed + not `INACTIVE` + below GK/u21/outfield continuity threshold.
     bytes32[] toDeactivate;
-    /// @dev Deployed + `INACTIVE` + back above GK/u21/outfield continuity threshold.
     bytes32[] toReactivate;
 }

@@ -159,6 +159,7 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
         if (end > total) end = total;
 
         FinalRoundCache memory frCache;
+        uint16 currentSeasonYear = _currentSeasonYear();
         _syncPageScores(offset, end, limit, frCache);
 
         uint256 page = end - offset;
@@ -180,7 +181,7 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
 
         for (uint256 i = offset; i < end; ++i) {
             bytes32 playerId = _playerIds[i];
-            (VerifyAction action, uint32 effectiveMins) = _classify(playerId);
+            (VerifyAction action, uint32 effectiveMins) = _classify(playerId, currentSeasonYear);
 
             if (action == VerifyAction.DeployGoalkeeper) {
                 gk[gkN] = playerId;
@@ -265,13 +266,16 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
         );
     }
 
-    /// @dev Pass 0: idle-decay score sync for `[offset, end)` to `G_now`.
+    /// @dev Pass 0: idle-decay score sync for `[offset, end)` to `G_now` (skips no-op players).
     function _syncPageScores(uint256 offset, uint256 end, uint256 limit, FinalRoundCache memory frCache) private {
         uint32 gNow = _globalRoundNow(frCache);
         uint256 synced;
         for (uint256 i = offset; i < end; ++i) {
             bytes32 playerId = _playerIds[i];
             MinutesStore storage store = _minutesStore[playerId];
+            uint32 last = store.lastScoreGlobalRound;
+            if (last == 0 || store.weightedScoreWad == 0 || gNow <= last) continue;
+
             _syncScoreToNow(store, gNow);
             unchecked {
                 ++synced;
@@ -285,7 +289,10 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
      * @dev Deployed → continuity lifecycle; undeployed → deploy cohort (or none).
      *      Continuity ignores the newTransfer shortcut.
      */
-    function _classify(bytes32 playerId) private view returns (VerifyAction action, uint32 effectiveMins) {
+    function _classify(
+        bytes32 playerId,
+        uint16 currentSeasonYear
+    ) private view returns (VerifyAction action, uint32 effectiveMins) {
         if (playerSetRegistry.playerExists(playerId)) {
             PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
             bool stillActive;
@@ -299,7 +306,7 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
             return (VerifyAction.None, 0);
         }
 
-        (bool eligible, EligibilityBucket bucket, uint32 mins) = _evaluateForDeploy(playerId);
+        (bool eligible, EligibilityBucket bucket, uint32 mins) = _evaluateForDeploy(playerId, currentSeasonYear);
         if (!eligible) return (VerifyAction.None, 0);
         effectiveMins = mins;
 
@@ -331,11 +338,10 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
      *      newTransfer/backFromLoan (earliestSeasonStartYear == current) → `thresholdNewTransfer`;
      *      else continuity gates (`thresholdGk` / `thresholdUnder21` / `thresholdOutfield`).
      */
-    function _evaluateForDeploy(bytes32 playerId)
-        private
-        view
-        returns (bool eligible, EligibilityBucket bucket, uint32 effectiveMins)
-    {
+    function _evaluateForDeploy(
+        bytes32 playerId,
+        uint16 currentSeasonYear
+    ) private view returns (bool eligible, EligibilityBucket bucket, uint32 effectiveMins) {
         MinutesStore storage store = _minutesStore[playerId];
         if (store.birthDate == 0) {
             return (false, EligibilityBucket.None, 0);
@@ -345,7 +351,7 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
         effectiveMins = uint32(store.weightedScoreWad / SCORE_WAD);
 
         // DeployDoppler flag: newTransfer / backFromLoan for the current season.
-        if (store.earliestSeasonStartYear == _currentSeasonYear()) {
+        if (store.earliestSeasonStartYear == currentSeasonYear) {
             bucket = EligibilityBucket.NewTransfer;
             eligible = effectiveMins >= thresholdNewTransfer;
             return (eligible, bucket, effectiveMins);

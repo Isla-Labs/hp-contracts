@@ -92,7 +92,7 @@ interface IEligibilityVerifier {
     /// @notice Full per-player store (includes `name` / `symbol` when CRE has filled them).
     function getMinutesStore(bytes32 playerId) external view returns (MinutesStore memory);
 
-    /// @notice Name/symbol only (no `seasonMinutes` memory copy).
+    /// @notice Name/symbol only (avoids copying career `minsByPosition`).
     function getPlayerMetadata(bytes32 playerId)
         external
         view

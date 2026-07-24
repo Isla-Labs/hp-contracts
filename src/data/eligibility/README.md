@@ -34,7 +34,7 @@ Each tracked player has a `MinutesStore`:
 
 - `earliestSeasonStartYear` — set once at squad-fill create (newTransfer / backFromLoan flag)
 - `birthDate`, `expectedPosition`
-- `seasonMinutes[]` — per-calendar aggregates (`seasonId`, mins by position; no per-match log)
+- `minsByPosition[14]` — career minutes by position (all comps ingested on this EV)
 - `weightedScoreWad` + `lastScoreGlobalRound` — incremental score (PPM ingest + idle decay on verify)
 - `name` / `symbol` — optional CRE metadata (first fill only)
 
@@ -42,6 +42,7 @@ Squad membership (daily-active CRE path):
 
 - `SquadList` per `clubId`
 - `_playerClub[playerId]` — current club in this league’s latest sweep (`0` = none)
+- Club sync uses transient set membership (`O(prev + squad)`); identical ordered squads skip rewrite
 - League-leavers finalized at season `SQUAD_FILL_PAGE_DONE` → TransferLocker
 
 ---
@@ -74,8 +75,9 @@ See `cre/hp-v1/workflows/squad-fill/README.md` for CRE layout and naming rules.
 `recordAppearances(seasonId, seasonStartYear, appearances)` — **PpmVerifier only**.
 
 - Requires player already created by squad-fill
-- Updates `minsByPosition` / `expectedPosition` (all comps in the batch)
+- Updates career `minsByPosition` / `expectedPosition` (all comps in the batch; cheap argmax)
 - **Domestic league only:** incrementally updates `weightedScoreWad` as of each appearance’s global round
+- Batch `seasonId` / `seasonStartYear` are score filters only (not stored per season)
 - Per-match rows are **not** persisted
 
 ---
@@ -94,7 +96,7 @@ G(year, round) = Σ finalRound(y) for y ∈ [baseYear, year) + round
 | Path | Behaviour |
 |------|-----------|
 | `recordAppearances` (league season) | Decay aggregate to appearance `G`, add mins; set `lastScoreGlobalRound` |
-| `verifyEligibility` | Decay aggregate `lastScoreGlobalRound` → `G_now` (idle players lose weight) |
+| `verifyEligibility` | Decay aggregate `lastScoreGlobalRound` → `G_now` when needed (skips no-op players) |
 
 - `G_now` from this league’s `PbrTreasury` cursors
 - Non-league calendars update position aggregates only (no score)

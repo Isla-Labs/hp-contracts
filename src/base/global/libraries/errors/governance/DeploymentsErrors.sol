@@ -19,6 +19,8 @@ library DeploymentsErrors {
     error VaultMissing(bytes32 playerId);
     error InvalidOpenSeasonData();
     error AddressMismatch(address actual, address expected);
+    error SaltMineExhausted(uint256 maxAttempts);
+    error InvalidDN404Unit();
 
     //  DopplerConfig
     error InvalidLaunchSupply();

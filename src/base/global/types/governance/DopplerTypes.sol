@@ -64,6 +64,9 @@ library DopplerTypes {
     /// @dev Earliest timestamp offset for the ≥50 ETH graduation path.
     uint32 internal constant DEFAULT_MIN_BONDING_DURATION = 30 days;
 
+    /// @dev DN404 unit: 1000 whole tokens → 1 NFT (matches Doppler DN404 factory tests).
+    uint256 internal constant DEFAULT_DN404_UNIT = 1000 ether;
+
     /// @dev Doppler `MIN_PROTOCOL_OWNER_SHARES` = WAD / 20.
     uint96 internal constant PROTOCOL_OWNER_SHARES = uint96(WAD / 20);
 
@@ -83,12 +86,6 @@ library DopplerTypes {
     struct Beneficiary {
         address beneficiary;
         uint96 shares;
-    }
-
-    /// @dev Matches `DopplerERC20V1.VestingSchedule` (empty arrays only today).
-    struct VestingSchedule {
-        uint64 cliff;
-        uint64 duration;
     }
 
     // -------------------------------------------------------------------------
@@ -138,10 +135,10 @@ library DopplerTypes {
         uint24 migratorRehypeCustomFee;
         address proceedsRecipient;
         uint256 proceedsShare;
-        string tokenURI;
-        uint256 maxBalanceLimit;
-        uint48 balanceLimitEnd;
-        address balanceLimitController;
+        /// @dev NFT metadata base URI for `DopplerDN404` (`tokenURI = baseURI + tokenId`).
+        string baseURI;
+        /// @dev DN404 fungible→NFT unit; must be non-zero and divide `initialSupply`.
+        uint256 dn404Unit;
         uint256 minGraduateProceeds;
         uint32 minBondingDuration;
     }
@@ -183,10 +180,8 @@ library DopplerTypes {
         config.migratorRehypeCustomFee = DEFAULT_FEE;
         config.proceedsRecipient = address(0);
         config.proceedsShare = 0;
-        config.tokenURI = "";
-        config.maxBalanceLimit = 0;
-        config.balanceLimitEnd = 0;
-        config.balanceLimitController = address(0);
+        config.baseURI = "";
+        config.dn404Unit = DEFAULT_DN404_UNIT;
         config.minGraduateProceeds = DEFAULT_MIN_GRADUATE_PROCEEDS;
         config.minBondingDuration = DEFAULT_MIN_BONDING_DURATION;
     }
@@ -224,25 +219,13 @@ library DopplerTypes {
     //  Encoders → Airlock.create blobs
     // -------------------------------------------------------------------------
 
-    /// @notice `DopplerERC20V1Factory` tokenData (no vesting / no balance limit by default).
+    /// @notice `DN404Factory` tokenData: `(name, symbol, baseURI, unit)`.
     function encodeTokenFactoryData(
         string memory name,
         string memory symbol,
         MarketLaunchConfig memory config
     ) internal pure returns (bytes memory) {
-        return abi.encode(
-            name,
-            symbol,
-            new VestingSchedule[](0),
-            new address[](0),
-            new uint256[](0),
-            new uint256[](0),
-            config.tokenURI,
-            config.maxBalanceLimit,
-            config.balanceLimitEnd,
-            config.balanceLimitController,
-            new address[](0)
-        );
+        return abi.encode(name, symbol, config.baseURI, config.dn404Unit);
     }
 
     /// @notice Nested Rehype bonding-hook init calldata (`buybackDst` = per-player FeeRouter).

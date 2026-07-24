@@ -24,7 +24,8 @@ import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
  *    - Requires zk proof of eligibility (trustlessEligibility).
  *    - Held behind a timelock / DelayedBatchExecutor schedule path.
  *    - Creates the bonding market only — no VaultSet / AdvancedTradeSet yet.
- *    - `Airlock.create` params assembled via `DopplerTypes.buildCreateParams(marketLaunchConfig())`.
+ *    - `Airlock.create` params assembled via `DopplerTypes.buildCreateParams(marketLaunchConfig())`
+ *      with `DN404Factory` tokenData (`name`, `symbol`, `baseURI`, `dn404Unit`).
  *
  * 2) Bonding → graduated (public / permissionless)
  *    - No zk proof. Readiness is onchain Doppler state (tick vs farTick / PoolStatus)

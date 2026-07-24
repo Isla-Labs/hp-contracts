@@ -2,7 +2,6 @@
 pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
@@ -11,15 +10,17 @@ import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol"
 /**
  * @title EligibilityCriteria
  * @notice Governance-updatable deploy / continuity thresholds for `EligibilityVerifier`.
- * @dev Mirrors the `DopplerConfig` pattern: ringfenced criteria, `CATEGORY_ONE` may update
- *      without redeploying the verifier. Defaults match the original hardcoded constants.
+ * @dev Ringfenced policy module (same idea as `DopplerConfig`): `CATEGORY_ONE` may update
+ *      thresholds without redeploying the verifier. Defaults match the original hardcoded
+ *      constants. Call `__EligibilityCriteria_init` from the concrete verifier's `initialize`
+ *      (guarded by `initializer` there).
  *
  *      Effective-minute comparisons use `weightedScoreWad / SCORE_WAD`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-abstract contract EligibilityCriteria is Initializable, AccessControl {
+abstract contract EligibilityCriteria is AccessControl {
     // -------------------------------------------------------------------------
     //  Storage — shared until governance updates
     // -------------------------------------------------------------------------
@@ -47,7 +48,7 @@ abstract contract EligibilityCriteria is Initializable, AccessControl {
      * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE` config updates.
      * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
      */
-    function __EligibilityCriteria_init(address constitutionalTimelock_, address dao_) internal onlyInitializing {
+    function __EligibilityCriteria_init(address constitutionalTimelock_, address dao_) internal {
         if (constitutionalTimelock_ == address(0) || dao_ == address(0)) revert Errors.ZeroAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);

@@ -32,7 +32,7 @@ library EligibilityEvents {
     event SquadFillPageUpdated(bytes32 indexed seasonId, uint16 previousPage, uint16 nextPage);
 
     /// @notice Deployed player queued to TransferLocker (continuity under-threshold).
-    event PlayerDiscontinued(bytes32 indexed playerId, uint32 effectiveMins);
+    event PlayerDeactivated(bytes32 indexed playerId, uint32 effectiveMins);
 
     /// @notice `INACTIVE` player back above continuity → queued to TransferLocker for reactivate.
     event PlayerReactivateQueued(bytes32 indexed playerId, uint32 effectiveMins);

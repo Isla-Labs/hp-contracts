@@ -53,10 +53,11 @@ abstract contract DopplerConfig is AccessControl {
     address public proceedsRecipient;
     uint256 public proceedsShare;
 
-    string public tokenURI;
-    uint256 public maxBalanceLimit;
-    uint48 public balanceLimitEnd;
-    address public balanceLimitController;
+    /// @notice NFT metadata base URI for `DopplerDN404`.
+    string public baseURI;
+
+    /// @notice DN404 fungible→NFT unit (must divide `initialSupply`).
+    uint256 public dn404Unit;
 
     /// @notice Soft ETH floor for the time-based graduation path.
     uint256 public minGraduateProceeds;
@@ -109,10 +110,8 @@ abstract contract DopplerConfig is AccessControl {
         config.migratorRehypeCustomFee = migratorRehypeCustomFee;
         config.proceedsRecipient = proceedsRecipient;
         config.proceedsShare = proceedsShare;
-        config.tokenURI = tokenURI;
-        config.maxBalanceLimit = maxBalanceLimit;
-        config.balanceLimitEnd = balanceLimitEnd;
-        config.balanceLimitController = balanceLimitController;
+        config.baseURI = baseURI;
+        config.dn404Unit = dn404Unit;
         config.minGraduateProceeds = minGraduateProceeds;
         config.minBondingDuration = minBondingDuration;
     }
@@ -165,6 +164,9 @@ abstract contract DopplerConfig is AccessControl {
         if (config_.initialSupply == 0 || config_.numTokensToSell == 0) revert Errors.InvalidLaunchSupply();
         if (config_.numTokensToSell > config_.initialSupply) revert Errors.InvalidLaunchSupply();
         if (config_.tickSpacing <= 0) revert Errors.InvalidTickSpacing();
+        if (config_.dn404Unit == 0 || config_.initialSupply % config_.dn404Unit != 0) {
+            revert Errors.InvalidDN404Unit();
+        }
 
         _validateFeeDistribution(config_.feeDistribution);
         _setBondingCurves(config_.curves);
@@ -190,10 +192,8 @@ abstract contract DopplerConfig is AccessControl {
         proceedsRecipient = config_.proceedsRecipient;
         proceedsShare = config_.proceedsShare;
 
-        tokenURI = config_.tokenURI;
-        maxBalanceLimit = config_.maxBalanceLimit;
-        balanceLimitEnd = config_.balanceLimitEnd;
-        balanceLimitController = config_.balanceLimitController;
+        baseURI = config_.baseURI;
+        dn404Unit = config_.dn404Unit;
 
         minGraduateProceeds = config_.minGraduateProceeds;
         minBondingDuration = config_.minBondingDuration;

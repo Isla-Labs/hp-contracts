@@ -18,7 +18,7 @@ contract Automator is AccessControl, IAutomator {
      * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
      * @param constitutional_ `ConstitutionalTimelock` — `CATEGORY_ONE` (add/remove automators).
      * @param doppler_ Initial Doppler automator — `CATEGORY_THREE`.
-     * @param eligibilityVerifier_ `EligibilityVerifier` — `CATEGORY_THREE` (lifecycle / discontinue).
+     * @param eligibilityVerifier_ `EligibilityVerifier` — `CATEGORY_THREE` (lifecycle / deactivate).
      * @param matchweeks_ Initial matchweek automator — `CATEGORY_THREE`.
      */
     constructor(

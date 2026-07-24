@@ -14,51 +14,36 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { LifecycleReason } from "@types/governance/LifecycleTypes.sol";
 import { PlayerStatus, Position } from "@base/global/types/PlayerSetTypes.sol";
 
+import { EligibilityCriteria } from "@data/eligibility/base/EligibilityCriteria.sol";
+import { EligibilityStore } from "@data/eligibility/base/EligibilityStore.sol";
+
 import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol";
-import { EligibilityCriteria } from "@data/eligibility/config/EligibilityCriteria.sol";
 import {
     Appearance,
     EligibilityBucket,
     EligibilityGroups,
     LAMBDA_WAD,
     MinutesStore,
-    POSITION_COUNT,
     SCORE_WAD,
-    SeasonMinutes,
-    SquadFillReport,
-    SquadList,
-    SQUAD_FILL_PAGE_DONE
+    SeasonMinutes
 } from "@types/data/EligibilityTypes.sol";
 
 /**
  * @title EligibilityVerifier
- * @notice Squad-first eligibility store with a recency-weighted rolling minutes score.
+ * @notice Rate-limited eligibility runner over `EligibilityStore` minutes / squad state.
  * @dev Deploy behind `TransparentUpgradeableProxy`. See `README.md` in this directory for
  *      CRE report shape, score formula, thresholds, and DopplerLocker / TransferLocker routing.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver, RateLimit {
+contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCriteria, RateLimit {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
 
-    IPlayerSetRegistry public playerSetRegistry;
-    ITournamentRegistry public tournamentRegistry;
     IDopplerLocker public dopplerLocker;
-    /// @notice Waiting-room receiver for soft-inactivity candidates.
-    ITransferLocker public transferLocker;
-
-    /// @dev Domestic-league `tournamentId` whose calendars count toward the rolling score.
-    bytes32 public leagueId;
-
-    /// @dev Earliest season start year used as G-index origin (e.g. 2024).
-    uint16 public baseYear;
-
-    /// @notice Sole address allowed to call `recordAppearances` (PpmVerifier).
-    address public ppmVerifier;
 
     /// @dev Max distinct season years cached in one recompute (memory).
     uint256 private constant _FINAL_ROUND_CACHE_CAP = 16;
@@ -70,25 +55,16 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         uint8 len;
     }
 
-    mapping(bytes32 playerId => MinutesStore) private _minutesStore;
-
-    bytes32[] private _playerIds;
-    mapping(bytes32 playerId => bool) private _tracked;
-
-    /// @dev Per-calendar cursor for squad-fill SP pagination (`seasonId` = calendar HPID).
-    mapping(bytes32 seasonId => uint16 page) private _squadFillPage;
-
-    /// @dev Timestamp when `seasonId` last transitioned to `SQUAD_FILL_PAGE_DONE`.
-    mapping(bytes32 seasonId => uint256) private _lastSquadFillSweepAt;
-
-    /// @dev Latest active squad per club (daily-active membership sync).
-    mapping(bytes32 clubId => SquadList) private _squadLists;
-
-    /// @dev Current club for a player within this league's latest membership view (`0` = none).
-    mapping(bytes32 playerId => bytes32 clubId) private _playerClub;
-
-    /// @dev Players cleared from a club during the in-progress daily-active sweep (pending DONE).
-    bytes32[] private _leftDuringSweep;
+    /// @dev Per-player outcome of the verify scan (after score sync).
+    enum VerifyAction {
+        None,
+        DeployGoalkeeper,
+        DeployUnder21,
+        DeployOutfield,
+        DeployNewTransfer,
+        Deactivate,
+        Reactivate
+    }
 
     // --------------------------------------------
     //  Construction / initialization
@@ -158,81 +134,6 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         return AccessControl.supportsInterface(interfaceId) || CreReceiver.supportsInterface(interfaceId);
     }
 
-    function playerCount() external view returns (uint256) {
-        return _playerIds.length;
-    }
-
-    function playerIds(uint256 offset, uint256 limit) external view returns (bytes32[] memory out) {
-        uint256 total = _playerIds.length;
-        if (offset >= total || limit == 0) {
-            return new bytes32[](0);
-        }
-
-        uint256 end = offset + limit;
-        if (end > total) end = total;
-
-        uint256 n = end - offset;
-        out = new bytes32[](n);
-        for (uint256 i; i < n; ++i) {
-            out[i] = _playerIds[offset + i];
-        }
-    }
-
-    /// @notice Timestamp when `seasonId` last hit `SQUAD_FILL_PAGE_DONE` (0 if never).
-    /// @dev Used by CRE for active-season daily resweep throttle.
-    function getLastSquadFillSweepAt(bytes32 seasonId) external view returns (uint256) {
-        return _lastSquadFillSweepAt[seasonId];
-    }
-
-    /// @notice CRE cursor: SP `_pgNm` to request next (`0` → `1`; done → `(0, true)`).
-    function nextSquadFillPageToFetch(bytes32 seasonId) external view returns (uint16 pageToFetch, bool done) {
-        uint16 stored = _squadFillPage[seasonId];
-        if (stored == SQUAD_FILL_PAGE_DONE) {
-            return (0, true);
-        }
-        return (stored == 0 ? 1 : stored, false);
-    }
-
-    /// @notice Latest stored active squad for `clubId` (empty if never synced).
-    function getSquadList(bytes32 clubId) external view returns (SquadList memory) {
-        return _squadLists[clubId];
-    }
-
-    /// @notice Current club membership for `playerId` (`0` if not on any synced squad).
-    function playerClub(bytes32 playerId) external view returns (bytes32) {
-        return _playerClub[playerId];
-    }
-
-    /// @notice Full per-player store (includes CRE `name` / `symbol` when set).
-    function getMinutesStore(bytes32 playerId) external view returns (MinutesStore memory) {
-        return _minutesStore[playerId];
-    }
-
-    /// @notice `true` when `name` is non-empty.
-    function hasPlayerMetadata(bytes32 playerId) external view returns (bool) {
-        return bytes(_minutesStore[playerId].name).length != 0;
-    }
-
-    /// @notice Compact ids in `playerIds` that are tracked but still missing `name`.
-    function playersMissingMetadata(bytes32[] calldata mdPlayerIds) external view returns (bytes32[] memory missing) {
-        uint256 length = mdPlayerIds.length;
-        bytes32[] memory tmp = new bytes32[](length);
-        uint256 n;
-        for (uint256 i; i < length; ++i) {
-            bytes32 playerId = mdPlayerIds[i];
-            if (!_tracked[playerId]) continue;
-            if (bytes(_minutesStore[playerId].name).length != 0) continue;
-            tmp[n] = playerId;
-            unchecked {
-                ++n;
-            }
-        }
-        missing = new bytes32[](n);
-        for (uint256 i; i < n; ++i) {
-            missing[i] = tmp[i];
-        }
-    }
-
     // --------------------------------------------
     //  Eligibility (offchain runner)
     // --------------------------------------------
@@ -241,11 +142,8 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
      * @notice Recompute weighted scores for a page; enqueue eligibles / lifecycle candidates.
      * @dev Sole write path for `weightedScoreWad`. Public (anyone may run the page).
      *      1) Replay domestic-league `Appearance[]` → score at `G_now` for every player on the page
-     *      2) Undeployed + eligible → deploy cohorts
-     *         Deployed + below continuity → `toDiscontinue`
-     *         Deployed + `INACTIVE` + above continuity → `toReactivate`
-     *      3) `dopplerLocker.enqueueEligible` for deploy cohorts;
-     *         `transferLocker.enqueueLifecycle` for deactivate / reactivate
+     *      2) Classify once → deploy cohorts / lifecycle sets (page-sized buffers, then compact)
+     *      3) `dopplerLocker.enqueueEligible` / `transferLocker.enqueueLifecycle`
      *      Continuity uses GK/u21/outfield thresholds only (not the newTransfer ≥ 1 shortcut).
      */
     function verifyEligibility(
@@ -261,10 +159,96 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         if (end > total) end = total;
 
         FinalRoundCache memory frCache;
+        _syncPageScores(offset, end, limit, frCache);
+
+        uint256 page = end - offset;
+        bytes32[] memory gk = new bytes32[](page);
+        bytes32[] memory u21 = new bytes32[](page);
+        bytes32[] memory outf = new bytes32[](page);
+        bytes32[] memory nt = new bytes32[](page);
+        bytes32[] memory deact = new bytes32[](page);
+        bytes32[] memory react = new bytes32[](page);
+        uint32[] memory deactMinsBuf = new uint32[](page);
+        uint32[] memory reactMinsBuf = new uint32[](page);
+
+        uint256 gkN;
+        uint256 u21N;
+        uint256 outN;
+        uint256 ntN;
+        uint256 deactN;
+        uint256 reactN;
+
+        for (uint256 i = offset; i < end; ++i) {
+            bytes32 playerId = _playerIds[i];
+            (VerifyAction action, uint32 effectiveMins) = _classify(playerId);
+
+            if (action == VerifyAction.DeployGoalkeeper) {
+                gk[gkN] = playerId;
+                unchecked {
+                    ++gkN;
+                }
+            } else if (action == VerifyAction.DeployUnder21) {
+                u21[u21N] = playerId;
+                unchecked {
+                    ++u21N;
+                }
+            } else if (action == VerifyAction.DeployOutfield) {
+                outf[outN] = playerId;
+                unchecked {
+                    ++outN;
+                }
+            } else if (action == VerifyAction.DeployNewTransfer) {
+                nt[ntN] = playerId;
+                unchecked {
+                    ++ntN;
+                }
+            } else if (action == VerifyAction.Deactivate) {
+                deact[deactN] = playerId;
+                deactMinsBuf[deactN] = effectiveMins;
+                unchecked {
+                    ++deactN;
+                }
+                emit Events.PlayerDeactivated(playerId, effectiveMins);
+            } else if (action == VerifyAction.Reactivate) {
+                react[reactN] = playerId;
+                reactMinsBuf[reactN] = effectiveMins;
+                unchecked {
+                    ++reactN;
+                }
+                emit Events.PlayerReactivateQueued(playerId, effectiveMins);
+            }
+        }
+
+        groups.goalkeepers = _compactIds(gk, gkN);
+        groups.under21 = _compactIds(u21, u21N);
+        groups.outfield = _compactIds(outf, outN);
+        groups.newTransfers = _compactIds(nt, ntN);
+        groups.toDeactivate = _compactIds(deact, deactN);
+        groups.toReactivate = _compactIds(react, reactN);
+
+        if (gkN + u21N + outN + ntN != 0) {
+            dopplerLocker.enqueueEligible(groups);
+        }
+        if (deactN != 0) {
+            transferLocker.enqueueLifecycle(
+                groups.toDeactivate, LifecycleReason.ContinuityUnderThreshold, _compactMins(deactMinsBuf, deactN)
+            );
+        }
+        if (reactN != 0) {
+            transferLocker.enqueueLifecycle(
+                groups.toReactivate, LifecycleReason.Reactivate, _compactMins(reactMinsBuf, reactN)
+            );
+        }
+    }
+
+    // --------------------------------------------
+    //  Internal — eligibility
+    // --------------------------------------------
+
+    /// @dev Pass 0: ringfenced score sync for `[offset, end)`.
+    function _syncPageScores(uint256 offset, uint256 end, uint256 limit, FinalRoundCache memory frCache) private {
         uint32 gNow = _globalRoundNow(frCache);
         uint256 synced;
-
-        // Pass 0: ringfenced score sync for the whole page (including idle / already-deployed).
         for (uint256 i = offset; i < end; ++i) {
             bytes32 playerId = _playerIds[i];
             MinutesStore storage store = _minutesStore[playerId];
@@ -275,384 +259,51 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
             emit Events.WeightedScoreUpdated(playerId, store.weightedScoreWad);
         }
         emit Events.WeightedScoresSynced(offset, limit, synced, gNow);
-
-        uint256 gkCount;
-        uint256 u21Count;
-        uint256 outCount;
-        uint256 ntCount;
-        uint256 discCount;
-        uint256 reactCount;
-
-        // Pass 1: size deploy cohorts + lifecycle sets for this page.
-        for (uint256 i = offset; i < end; ++i) {
-            bytes32 playerId = _playerIds[i];
-
-            if (playerSetRegistry.playerExists(playerId)) {
-                PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
-                (bool stillActive,) = _evaluateContinuity(playerId);
-
-                if (status == PlayerStatus.INACTIVE) {
-                    if (stillActive) {
-                        unchecked {
-                            ++reactCount;
-                        }
-                    }
-                    continue;
-                }
-
-                if (!stillActive) {
-                    unchecked {
-                        ++discCount;
-                    }
-                }
-                continue;
-            }
-
-            (bool eligible, EligibilityBucket bucket,) = _evaluateForDeploy(playerId);
-            if (!eligible) continue;
-
-            if (bucket == EligibilityBucket.Goalkeeper) {
-                unchecked {
-                    ++gkCount;
-                }
-            } else if (bucket == EligibilityBucket.Under21) {
-                unchecked {
-                    ++u21Count;
-                }
-            } else if (bucket == EligibilityBucket.Outfield) {
-                unchecked {
-                    ++outCount;
-                }
-            } else if (bucket == EligibilityBucket.NewTransfer) {
-                unchecked {
-                    ++ntCount;
-                }
-            }
-        }
-
-        groups.goalkeepers = new bytes32[](gkCount);
-        groups.under21 = new bytes32[](u21Count);
-        groups.outfield = new bytes32[](outCount);
-        groups.newTransfers = new bytes32[](ntCount);
-        groups.toDiscontinue = new bytes32[](discCount);
-        groups.toReactivate = new bytes32[](reactCount);
-
-        uint256 gkIdx;
-        uint256 u21Idx;
-        uint256 outIdx;
-        uint256 ntIdx;
-        uint256 discIdx;
-        uint256 reactIdx;
-        uint32[] memory discMins = new uint32[](discCount);
-        uint32[] memory reactMins = new uint32[](reactCount);
-
-        // Pass 2: fill.
-        for (uint256 i = offset; i < end; ++i) {
-            bytes32 playerId = _playerIds[i];
-
-            if (playerSetRegistry.playerExists(playerId)) {
-                PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
-                (bool stillActive, uint32 effectiveMins) = _evaluateContinuity(playerId);
-
-                if (status == PlayerStatus.INACTIVE) {
-                    if (!stillActive) continue;
-                    groups.toReactivate[reactIdx] = playerId;
-                    reactMins[reactIdx] = effectiveMins;
-                    unchecked {
-                        ++reactIdx;
-                    }
-                    emit Events.PlayerReactivateQueued(playerId, effectiveMins);
-                    continue;
-                }
-
-                if (stillActive) continue;
-
-                groups.toDiscontinue[discIdx] = playerId;
-                discMins[discIdx] = effectiveMins;
-                unchecked {
-                    ++discIdx;
-                }
-                emit Events.PlayerDiscontinued(playerId, effectiveMins);
-                continue;
-            }
-
-            (bool eligible, EligibilityBucket bucket,) = _evaluateForDeploy(playerId);
-            if (!eligible) continue;
-
-            if (bucket == EligibilityBucket.Goalkeeper) {
-                groups.goalkeepers[gkIdx] = playerId;
-                unchecked {
-                    ++gkIdx;
-                }
-            } else if (bucket == EligibilityBucket.Under21) {
-                groups.under21[u21Idx] = playerId;
-                unchecked {
-                    ++u21Idx;
-                }
-            } else if (bucket == EligibilityBucket.Outfield) {
-                groups.outfield[outIdx] = playerId;
-                unchecked {
-                    ++outIdx;
-                }
-            } else if (bucket == EligibilityBucket.NewTransfer) {
-                groups.newTransfers[ntIdx] = playerId;
-                unchecked {
-                    ++ntIdx;
-                }
-            }
-        }
-
-        // Pass 3: hand off to waiting rooms (skip empty pages).
-        if (gkCount + u21Count + outCount + ntCount != 0) {
-            dopplerLocker.enqueueEligible(groups);
-        }
-        if (discCount != 0) {
-            transferLocker.enqueueLifecycle(groups.toDiscontinue, LifecycleReason.ContinuityUnderThreshold, discMins);
-        }
-        if (reactCount != 0) {
-            transferLocker.enqueueLifecycle(groups.toReactivate, LifecycleReason.Reactivate, reactMins);
-        }
-    }
-
-    // --------------------------------------------
-    //  Minutes ingest (PPM / DMS)
-    // --------------------------------------------
-
-    /// @notice Accumulate appearance minutes into an existing player's `SeasonMinutes` row.
-    /// @dev Squad-fill must have created the `MinutesStore` already. No DOB enqueue.
-    ///      One batch = one calendar (`seasonId` / `seasonStartYear`); each row carries its `roundNumber`.
-    ///      Does not update `weightedScoreWad` — that happens in `verifyEligibility`.
-    function recordAppearances(bytes32 seasonId, uint16 seasonStartYear, Appearance[] calldata appearances) external {
-        if (msg.sender != ppmVerifier) revert Errors.Unauthorized();
-        if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
-
-        uint256 length = appearances.length;
-        for (uint256 i; i < length; ++i) {
-            Appearance calldata appearance = appearances[i];
-            if (appearance.playerId == bytes32(0) || appearance.roundNumber == 0) revert Errors.ZeroId();
-            if (appearance.minsPlayed == 0) continue;
-            if (!_tracked[appearance.playerId]) revert Errors.UnknownPlayer(appearance.playerId);
-
-            // forge-lint: disable-next-line(unsafe-typecast)
-            uint256 posIndex = uint256(uint8(appearance.position));
-            if (posIndex >= POSITION_COUNT) revert Errors.ZeroId();
-
-            MinutesStore storage store = _minutesStore[appearance.playerId];
-            SeasonMinutes storage season = _getOrCreateSeasonMinutes(store, seasonId, seasonStartYear);
-
-            uint32 cumulative = season.minsByPosition[posIndex] + appearance.minsPlayed;
-            season.minsByPosition[posIndex] = cumulative;
-            season.totalMinutes += appearance.minsPlayed;
-            season.appearances.push(appearance);
-            store.expectedPosition = _deriveExpectedPosition(store);
-
-            emit Events.MinutesUpdated(
-                appearance.playerId,
-                seasonId,
-                appearance.roundNumber,
-                appearance.position,
-                appearance.minsPlayed,
-                cumulative,
-                store.expectedPosition
-            );
-        }
-
-        emit Events.AppearancesRecorded(length);
-    }
-
-    // --------------------------------------------
-    //  CRE fulfill (squad-fill)
-    // --------------------------------------------
-
-    /// @inheritdoc CreReceiver
-    /// @dev CRE payload is ABI-encoded `SquadFillReport` (flat tuple of its fields).
-    function _processReport(bytes calldata, bytes calldata report) internal override {
-        SquadFillReport memory r = abi.decode(report, (SquadFillReport));
-
-        if (r.seasonId == bytes32(0) || r.seasonStartYear == 0) revert Errors.ZeroId();
-        if (r.pageFetched == 0 || r.pageFetched >= SQUAD_FILL_PAGE_DONE) {
-            revert Errors.InvalidSquadFillNextPage(r.pageFetched, r.nextPage);
-        }
-        if (r.nextPage == 0 || r.nextPage > SQUAD_FILL_PAGE_DONE) {
-            revert Errors.InvalidSquadFillNextPage(r.pageFetched, r.nextPage);
-        }
-        // Allow stay-on-page (partial drain), advance, or DONE — not rewind / skip ahead arbitrarily.
-        if (!(r.nextPage == r.pageFetched || r.nextPage == r.pageFetched + 1 || r.nextPage == SQUAD_FILL_PAGE_DONE)) {
-            revert Errors.InvalidSquadFillNextPage(r.pageFetched, r.nextPage);
-        }
-
-        uint16 stored = _squadFillPage[r.seasonId];
-
-        if (stored == SQUAD_FILL_PAGE_DONE) {
-            // Active-season daily resweep: only restart from page 1.
-            if (r.pageFetched != 1) revert Errors.SquadFillSeasonDone(r.seasonId);
-            // Drop any stale pending leavers from a prior incomplete sweep.
-            delete _leftDuringSweep;
-        } else {
-            uint16 expectedFetch = stored == 0 ? 1 : stored;
-            if (r.pageFetched != expectedFetch) {
-                revert Errors.SquadFillPageMismatch(r.seasonId, expectedFetch, r.pageFetched);
-            }
-        }
-
-        uint256 length = r.playerIds.length;
-        if (length != r.birthDates.length) revert Errors.LengthMismatch(length, r.birthDates.length);
-
-        uint256 created;
-        uint256 skipped;
-
-        for (uint256 i; i < length; ++i) {
-            bytes32 playerId = r.playerIds[i];
-            if (playerId == bytes32(0)) revert Errors.ZeroId();
-
-            if (_tracked[playerId]) {
-                unchecked {
-                    ++skipped;
-                }
-                continue;
-            }
-
-            uint256 birthDate = r.birthDates[i];
-            if (birthDate == 0) revert Errors.ZeroBirthDate(playerId);
-
-            MinutesStore storage store = _minutesStore[playerId];
-            store.birthDate = birthDate;
-            store.earliestSeasonStartYear = r.seasonStartYear;
-            // `expectedPosition` defaults to Position(0); score / seasonMinutes stay empty until PPM.
-
-            _tracked[playerId] = true;
-            _playerIds.push(playerId);
-
-            unchecked {
-                ++created;
-            }
-
-            emit Events.SquadPlayerCreated(playerId, birthDate);
-        }
-
-        _applyPlayerMetadata(r.metaPlayerIds, r.names, r.symbols);
-
-        // Daily-active membership: overwrite club squad + track leavers for DONE finalize.
-        if (r.clubId != bytes32(0)) {
-            _syncClubSquad(r.clubId, r.squadPlayerIds);
-        }
-
-        _squadFillPage[r.seasonId] = r.nextPage;
-        if (r.nextPage == SQUAD_FILL_PAGE_DONE) {
-            _lastSquadFillSweepAt[r.seasonId] = block.timestamp;
-            _finalizeLeagueRemovals();
-        }
-
-        emit Events.SquadFillPageUpdated(r.seasonId, stored, r.nextPage);
-        emit Events.SquadPlayersCreated(r.seasonId, r.pageFetched, created, skipped);
     }
 
     /**
-     * @dev First-fill `name` / `symbol` for tracked players. Skips empty names and rows that
-     *      already have metadata (waiting-room / governance overrides stay intact).
+     * @dev Deployed → continuity lifecycle; undeployed → deploy cohort (or none).
+     *      Continuity ignores the newTransfer shortcut.
      */
-    function _applyPlayerMetadata(
-        bytes32[] memory metaPlayerIds,
-        string[] memory names,
-        string[] memory symbols
-    ) private {
-        uint256 length = metaPlayerIds.length;
-        if (length == 0) {
-            if (names.length != 0 || symbols.length != 0) {
-                revert Errors.LengthMismatch(names.length, symbols.length);
+    function _classify(bytes32 playerId) private view returns (VerifyAction action, uint32 effectiveMins) {
+        if (playerSetRegistry.playerExists(playerId)) {
+            PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
+            bool stillActive;
+            (stillActive, effectiveMins) = _evaluateContinuity(playerId);
+
+            if (status == PlayerStatus.INACTIVE) {
+                if (stillActive) return (VerifyAction.Reactivate, effectiveMins);
+                return (VerifyAction.None, 0);
             }
-            return;
+            if (!stillActive) return (VerifyAction.Deactivate, effectiveMins);
+            return (VerifyAction.None, 0);
         }
-        if (length != names.length) revert Errors.LengthMismatch(length, names.length);
-        if (length != symbols.length) revert Errors.LengthMismatch(length, symbols.length);
 
-        for (uint256 i; i < length; ++i) {
-            bytes32 playerId = metaPlayerIds[i];
-            if (playerId == bytes32(0)) revert Errors.ZeroId();
-            if (!_tracked[playerId]) continue;
+        (bool eligible, EligibilityBucket bucket, uint32 mins) = _evaluateForDeploy(playerId);
+        if (!eligible) return (VerifyAction.None, 0);
+        effectiveMins = mins;
 
-            MinutesStore storage store = _minutesStore[playerId];
-            if (bytes(store.name).length != 0) continue;
-            if (bytes(names[i]).length == 0) continue;
-
-            store.name = names[i];
-            store.symbol = symbols[i];
-            emit Events.SquadPlayerMetadataSet(playerId, names[i], symbols[i]);
-        }
+        if (bucket == EligibilityBucket.Goalkeeper) return (VerifyAction.DeployGoalkeeper, mins);
+        if (bucket == EligibilityBucket.Under21) return (VerifyAction.DeployUnder21, mins);
+        if (bucket == EligibilityBucket.Outfield) return (VerifyAction.DeployOutfield, mins);
+        if (bucket == EligibilityBucket.NewTransfer) return (VerifyAction.DeployNewTransfer, mins);
+        return (VerifyAction.None, 0);
     }
 
-    /**
-     * @dev Overwrite `SquadList` for `clubId` (CRE sends status=active only).
-     *      Players previously on this list and absent from `squadPlayerIds` are pending leavers
-     *      until DONE (they may still appear on another club later in the sweep).
-     */
-    function _syncClubSquad(bytes32 clubId, bytes32[] memory squadPlayerIds) private {
-        SquadList storage prev = _squadLists[clubId];
-        uint256 prevLen = prev.playerIds.length;
-
-        for (uint256 i; i < prevLen; ++i) {
-            bytes32 playerId = prev.playerIds[i];
-            if (_contains(squadPlayerIds, playerId)) continue;
-            if (_playerClub[playerId] != clubId) continue;
-            delete _playerClub[playerId];
-            _leftDuringSweep.push(playerId);
-        }
-
-        for (uint256 i; i < squadPlayerIds.length; ++i) {
-            bytes32 playerId = squadPlayerIds[i];
-            if (playerId == bytes32(0)) revert Errors.ZeroId();
-            _playerClub[playerId] = clubId;
-        }
-
-        _squadLists[clubId] = SquadList({ clubId: clubId, playerIds: squadPlayerIds });
-        emit Events.SquadListUpdated(clubId, squadPlayerIds.length);
-    }
-
-    /**
-     * @dev After a full membership sweep: any player who was on some `SquadList` and is now on
-     *      none (`_playerClub == 0`) has left the league. Enqueue deployed actives to ManageLifecycle.
-     *      Intra-league transfers re-acquire `_playerClub` before DONE and are skipped.
-     */
-    function _finalizeLeagueRemovals() private {
-        uint256 n = _leftDuringSweep.length;
-        bytes32[] memory leavers = new bytes32[](n);
-        uint256 leaverCount;
-
+    function _compactIds(bytes32[] memory src, uint256 n) private pure returns (bytes32[] memory out) {
+        out = new bytes32[](n);
         for (uint256 i; i < n; ++i) {
-            bytes32 playerId = _leftDuringSweep[i];
-            if (_playerClub[playerId] != bytes32(0)) continue;
-            if (!playerSetRegistry.playerExists(playerId)) continue;
-            if (playerSetRegistry.getPlayerSet(playerId).status == PlayerStatus.INACTIVE) continue;
-
-            leavers[leaverCount] = playerId;
-            unchecked {
-                ++leaverCount;
-            }
-            emit Events.PlayerLeftLeague(playerId);
+            out[i] = src[i];
         }
-        delete _leftDuringSweep;
-
-        if (leaverCount == 0) return;
-
-        // Compact before enqueue (ManageLifecycle skips zeros, but keep the array tight).
-        bytes32[] memory compact = new bytes32[](leaverCount);
-        for (uint256 i; i < leaverCount; ++i) {
-            compact[i] = leavers[i];
-        }
-        transferLocker.enqueueLifecycle(compact, LifecycleReason.LeftLeague, new uint32[](0));
     }
 
-    function _contains(bytes32[] memory arr, bytes32 value) private pure returns (bool) {
-        uint256 n = arr.length;
+    function _compactMins(uint32[] memory src, uint256 n) private pure returns (uint32[] memory out) {
+        out = new uint32[](n);
         for (uint256 i; i < n; ++i) {
-            if (arr[i] == value) return true;
+            out[i] = src[i];
         }
-        return false;
     }
 
-    // --------------------------------------------
-    //  Internal — eligibility
-    // --------------------------------------------
 
     /**
      * @dev Deploy path. Uses stored `weightedScoreWad` (fresh after pass 0).
@@ -833,54 +484,5 @@ contract EligibilityVerifier is Initializable, EligibilityCriteria, CreReceiver,
         } catch {
             return false;
         }
-    }
-
-    // --------------------------------------------
-    //  Internal — minutes store helpers
-    // --------------------------------------------
-
-    /// @dev Find `seasonId` row or push a new empty `SeasonMinutes`.
-    function _getOrCreateSeasonMinutes(
-        MinutesStore storage store,
-        bytes32 seasonId,
-        uint16 seasonStartYear
-    ) private returns (SeasonMinutes storage season) {
-        uint256 n = store.seasonMinutes.length;
-        for (uint256 i; i < n; ++i) {
-            if (store.seasonMinutes[i].seasonId == seasonId) {
-                return store.seasonMinutes[i];
-            }
-        }
-
-        store.seasonMinutes.push();
-        season = store.seasonMinutes[n];
-        season.seasonId = seasonId;
-        season.seasonStartYear = seasonStartYear;
-    }
-
-    /// @dev Argmax across all seasons' `minsByPosition`. Ties keep the current `expectedPosition`.
-    function _deriveExpectedPosition(MinutesStore storage store) private view returns (Position) {
-        uint32[POSITION_COUNT] memory totals;
-        uint256 n = store.seasonMinutes.length;
-        for (uint256 s; s < n; ++s) {
-            uint32[POSITION_COUNT] storage mins = store.seasonMinutes[s].minsByPosition;
-            for (uint256 i; i < POSITION_COUNT; ++i) {
-                totals[i] += mins[i];
-            }
-        }
-
-        Position best = store.expectedPosition;
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint32 bestMins = totals[uint8(best)];
-
-        for (uint256 i; i < POSITION_COUNT; ++i) {
-            uint32 mins = totals[i];
-            if (mins > bestMins) {
-                bestMins = mins;
-                // forge-lint: disable-next-line(unsafe-typecast)
-                best = Position(uint8(i));
-            }
-        }
-        return best;
     }
 }

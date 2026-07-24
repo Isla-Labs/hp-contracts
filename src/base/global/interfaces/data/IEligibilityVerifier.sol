@@ -33,7 +33,7 @@ interface IEligibilityVerifier {
      * @notice Recompute scores for a page; enqueue undeployed eligibles; queue lifecycle candidates.
      * @dev Sole write path for `weightedScoreWad`. Globally rate-limited (`RateLimit`).
      *      `groups.newTransfers` = DopplerLocker newTransfer / backFromLoan flag.
-     *      `groups.toDiscontinue` → TransferLocker (continuity under-threshold).
+     *      `groups.toDeactivate` → TransferLocker (continuity under-threshold).
      *      `groups.toReactivate` → TransferLocker (`INACTIVE` back above continuity).
      */
     function verifyEligibility(uint256 offset, uint256 limit) external returns (EligibilityGroups memory groups);

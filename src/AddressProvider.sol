@@ -5,6 +5,8 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { EnumerableSet } from "@openzeppelin/utils/structs/EnumerableSet.sol";
 
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+import { AddressProviderErrors as Errors } from "@errors/AddressProviderErrors.sol";
+import { AddressProviderEvents as Events } from "@events/AddressProviderEvents.sol";
 
 /// @title HighPotential Address Provider
 /// @notice Dynamic registry: each logical slot is a `bytes32` key; string names use `keccak256(bytes(name))`.
@@ -12,35 +14,87 @@ import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 contract AddressProvider is AccessControl {
     using EnumerableSet for EnumerableSet.Bytes32Set;
 
-    // --------------------------------------------
-    //  Configuration
-    // --------------------------------------------
-
     EnumerableSet.Bytes32Set private _keys;
     mapping(bytes32 key => address) private _addr;
     mapping(bytes32 key => string) private _label;
-
-    // --------------------------------------------
-    //  Events and Errors
-    // --------------------------------------------
-
-    event AddressSet(uint256 indexed version, bytes32 indexed key, string name, address previous, address current);
-
-    error ZeroDefaultAdmin();
-    error ZeroKey();
-    error EmptyName();
-    error NameKeyMismatch();
-    error AddressAlreadyBound(bytes32 key, address current);
-    error ZeroAddress();
 
     // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     constructor(address dao_, address constitutionalTimelock_) {
-        if (dao_ == address(0)) revert ZeroDefaultAdmin();
+        if (
+            dao_ == address(0) || 
+            constitutionalTimelock_ == address(0)
+        ) revert Errors.ZeroAddress();
+
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
         _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
+    }
+
+    // --------------------------------------------
+    //  Deployment wiring
+    // --------------------------------------------
+
+    /// @notice First-write only: reverts if `key` already holds a non-zero address.
+    function registerName(string calldata name, address addr) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (bytes(name).length == 0) revert Errors.EmptyName();
+        if (addr == address(0)) return;
+
+        bytes32 key = keccak256(bytes(name));
+        address cur = _addr[key];
+        if (cur != address(0)) revert Errors.AddressAlreadyBound(key, cur);
+
+        _set(key, addr, name);
+        emit Events.AddressSet(key, name, _addr[key], addr);
+    }
+
+    /// @notice First-write only for raw keys.
+    function registerKey(bytes32 key, address addr, string calldata name) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (key == bytes32(0)) revert Errors.ZeroKey();
+        if (addr == address(0)) return;
+        if (bytes(name).length != 0 && keccak256(bytes(name)) != key) revert Errors.NameKeyMismatch();
+
+        address cur = _addr[key];
+        if (cur != address(0)) revert Errors.AddressAlreadyBound(key, cur);
+
+        string memory label_ = name;
+        if (bytes(name).length == 0) {
+            label_ = _label[key];
+        }
+
+        _set(key, addr, label_);
+        emit Events.AddressSet(key, name, _addr[key], addr);
+    }
+
+    // --------------------------------------------
+    //  Upkeep (CATEGORY_ONE)
+    // --------------------------------------------
+
+    /// @notice Upsert by human-readable `name`. Storage key is `keccak256(bytes(name))`.
+    function setName(string calldata name, address addr) external onlyRole(Roles.CATEGORY_ONE) {
+        if (bytes(name).length == 0) revert Errors.EmptyName();
+
+        bytes32 key = keccak256(bytes(name));
+
+        _set(key, addr, name);
+        emit Events.AddressSet(key, name, _addr[key], addr);
+    }
+
+    /// @notice Upsert by raw key. Non-empty `name` must satisfy `keccak256(bytes(name)) == key`; use "" to keep the existing label.
+    function setKey(bytes32 key, address addr, string calldata name) external onlyRole(Roles.CATEGORY_ONE) {
+        if (key == bytes32(0)) revert Errors.ZeroKey();
+        if (bytes(name).length != 0) {
+            if (keccak256(bytes(name)) != key) revert Errors.NameKeyMismatch();
+        }
+
+        string memory label_ = name;
+        if (bytes(name).length == 0) {
+            label_ = _label[key];
+        }
+
+        _set(key, addr, label_);
+        emit Events.AddressSet(key, name, _addr[key], addr);
     }
 
     // --------------------------------------------
@@ -65,64 +119,6 @@ contract AddressProvider is AccessControl {
         if (bytes(name).length != 0) {
             _label[key] = name;
         }
-
-    }
-
-    // --------------------------------------------
-    //  Interactions
-    // --------------------------------------------
-
-    /// @notice Upsert by human-readable `name`. Storage key is `keccak256(bytes(name))`.
-    function setName(string calldata name, address addr) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (bytes(name).length == 0) revert EmptyName();
-
-        bytes32 key = keccak256(bytes(name));
-
-        _set(key, addr, name);
-    }
-
-    /// @notice Upsert by raw key. Non-empty `name` must satisfy `keccak256(bytes(name)) == key`; use "" to keep the existing label.
-    function setKey(bytes32 key, address addr, string calldata name) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (key == bytes32(0)) revert ZeroKey();
-        if (bytes(name).length != 0) {
-            if (keccak256(bytes(name)) != key) revert NameKeyMismatch();
-        }
-
-        string memory label_ = name;
-        if (bytes(name).length == 0) {
-            label_ = _label[key];
-        }
-
-        _set(key, addr, label_);
-    }
-
-    /// @notice First-write only: reverts if `key` already holds a non-zero address.
-    function registerName(string calldata name, address addr) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (bytes(name).length == 0) revert EmptyName();
-        if (addr == address(0)) return;
-
-        bytes32 key = keccak256(bytes(name));
-        address cur = _addr[key];
-        if (cur != address(0)) revert AddressAlreadyBound(key, cur);
-
-        _set(key, addr, name);
-    }
-
-    /// @notice First-write only for raw keys.
-    function registerKey(bytes32 key, address addr, string calldata name) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (key == bytes32(0)) revert ZeroKey();
-        if (addr == address(0)) return;
-        if (bytes(name).length != 0 && keccak256(bytes(name)) != key) revert NameKeyMismatch();
-
-        address cur = _addr[key];
-        if (cur != address(0)) revert AddressAlreadyBound(key, cur);
-
-        string memory label_ = name;
-        if (bytes(name).length == 0) {
-            label_ = _label[key];
-        }
-
-        _set(key, addr, label_);
     }
 
     // --------------------------------------------
@@ -154,7 +150,7 @@ contract AddressProvider is AccessControl {
         uint256 len = names.length;
         addrs = new address[](len);
         for (uint256 i; i < len; ) {
-            if (bytes(names[i]).length == 0) revert EmptyName();
+            if (bytes(names[i]).length == 0) revert Errors.EmptyName();
             addrs[i] = _addr[keccak256(bytes(names[i]))];
             unchecked {
                 ++i;
@@ -191,7 +187,7 @@ contract AddressProvider is AccessControl {
     /// @notice Resolves `address` via `AddressProvider`; reverts if missing or zero
     function getAddress(string memory name) external view returns (address) {
         address returnAddress = _addr[_addressKey(name)];
-        if (returnAddress == address(0)) revert ZeroAddress();
+        if (returnAddress == address(0)) revert Errors.ZeroAddress();
         return returnAddress;
     }
 }

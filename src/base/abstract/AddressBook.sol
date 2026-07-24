@@ -2,9 +2,7 @@
 pragma solidity ^0.8.34;
 
 import { AddressProvider } from "@src/AddressProvider.sol";
-
-/// @notice Registry slot is unset or zero for this key
-error AddressNotFound();
+import { AddressProviderErrors as Errors } from "@errors/AddressProviderErrors.sol";
 
 abstract contract AddressBook {
     AddressProvider public immutable addressProvider;
@@ -20,7 +18,7 @@ abstract contract AddressBook {
     /// @notice Resolves `key` via `AddressProvider`; reverts if missing or zero
     function _getAddress(bytes32 key) internal view returns (address) {
         address returnAddress = addressProvider.get(key);
-        if (returnAddress == address(0)) revert AddressNotFound();
+        if (returnAddress == address(0)) revert Errors.AddressNotFound();
         return returnAddress;
     }
 
@@ -29,7 +27,7 @@ abstract contract AddressBook {
         addrs = addressProvider.getMany(keys);
         uint256 len = addrs.length;
         for (uint256 i; i < len; ) {
-            if (addrs[i] == address(0)) revert AddressNotFound();
+            if (addrs[i] == address(0)) revert Errors.AddressNotFound();
             unchecked {
                 ++i;
             }

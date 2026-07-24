@@ -13,9 +13,9 @@ import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
 /**
  * Two completely different flows live in this contract:
  *
- * 0) Eligibility waiting room (from EligibilityVerifier)
+ * 0) Eligibility waiting room (from EligibilityVerifier via Automator)
  *    - `enqueueEligible` stores cohort-tagged playerIds for later deploy formatting.
- *    - Only the configured `eligibilityVerifier` may write.
+ *    - Only the configured `automator` may write; EV is the minutes/metadata oracle.
  *    - Consumes deploy cohorts only; lifecycle arrays go to `TransferLocker`.
  *    - Name/symbol copied from `EligibilityVerifier` when CRE has filled them; else empty
  *      until waiting-room manual override (`DopplerTypes.PendingEligible`).
@@ -49,7 +49,10 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
     //  Eligibility waiting room
     // -------------------------------------------------------------------------
 
-    /// @notice Sole writer for `enqueueEligible` (set once after EligibilityVerifier deploy).
+    /// @notice Sole writer for `enqueueEligible` (Automator; set once after Automator deploy).
+    address public automator;
+
+    /// @notice Minutes/metadata oracle for enqueue (EligibilityVerifier; set once after EV deploy).
     address public eligibilityVerifier;
 
     DopplerTypes.PendingEligible[] private _pending;
@@ -61,7 +64,15 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
      */
     constructor(address constitutionalTimelock_, address dao_) DopplerConfig(constitutionalTimelock_, dao_) { }
 
-    /// @notice One-time wire from EligibilityVerifier → this waiting room.
+    /// @notice One-time wire: Automator is the only `enqueueEligible` caller.
+    function setAutomator(address automator_) external {
+        if (automator != address(0)) revert Errors.AlreadySet();
+        if (automator_ == address(0)) revert Errors.ZeroAddress();
+        automator = automator_;
+        emit Events.AutomatorSet(automator_);
+    }
+
+    /// @notice One-time wire: EligibilityVerifier for `getMinutesStore` during enqueue.
     function setEligibilityVerifier(address eligibilityVerifier_) external {
         if (eligibilityVerifier != address(0)) revert Errors.AlreadySet();
         if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
@@ -71,7 +82,8 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
 
     /// @inheritdoc IDopplerLocker
     function enqueueEligible(EligibilityGroups calldata groups) external {
-        if (msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
+        if (msg.sender != automator) revert Errors.Unauthorized();
+        if (eligibilityVerifier == address(0)) revert Errors.NotConfigured();
 
         uint256 added;
         added += _enqueueCohort(groups.goalkeepers, EligibilityBucket.Goalkeeper);
@@ -116,7 +128,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
             bytes32 playerId = playerIds[i];
             if (playerId == bytes32(0) || _queued[playerId]) continue;
 
-            MinutesStore memory store = IEligibilityVerifier(msg.sender).getMinutesStore(playerId);
+            MinutesStore memory store = IEligibilityVerifier(eligibilityVerifier).getMinutesStore(playerId);
             bool metadataSet = bytes(store.name).length != 0;
 
             _queued[playerId] = true;

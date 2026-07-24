@@ -56,13 +56,14 @@ ConstitutionalTimelock (CATEGORY_ONE on Automator)
         ▼
 Automator.executeAutomation(target, value, data)
         │ onlyRole(CATEGORY_THREE) operators
+        │ + allowedRoute[caller][target]
         ▼
-msg.sender = Automator → CATEGORY_THREE on registry / treasuries / etc.
+msg.sender = Automator → CATEGORY_THREE / sole-writer on registries, lockers, etc.
 ```
 
 **Timelocks:** OZ `TimelockController`. Aragon DAO is sole `PROPOSER_ROLE` / `CANCELLER_ROLE`. Execution is open (`EXECUTOR_ROLE` on `address(0)`). Targets always see the timelock as `msg.sender`.
 
-**Automator:** OZ `AccessControl`. DAO has `DEFAULT_ADMIN_ROLE`. Cat-1 manages the `CATEGORY_THREE` operator set. Operators call `executeAutomation`; privileged targets grant `CATEGORY_THREE` to the Automator address itself.
+**Automator:** OZ `AccessControl`. DAO has `DEFAULT_ADMIN_ROLE`. Cat-1 manages the `CATEGORY_THREE` operator set and the caller→target **route matrix** (`setRoute` / `setRoutes`, Airlock-style). Operators call lean `executeAutomation`; each call must have `allowedRoute[msg.sender][target]`. Privileged targets grant `CATEGORY_THREE` to Automator and/or set Automator as sole writer (e.g. waiting-room lockers).
 
 ---
 
@@ -72,7 +73,8 @@ msg.sender = Automator → CATEGORY_THREE on registry / treasuries / etc.
 2. Grant `CATEGORY_ONE` on config contracts (e.g. `EligibilityCriteria`, Doppler config) to `ConstitutionalTimelock`.
 3. Grant `CATEGORY_TWO` on ops surfaces to `MaintenanceTimelock`.
 4. Grant `CATEGORY_THREE` on registries / treasuries / etc. to `Automator` (not to individual keepers).
-5. Keepers and CRE receivers that need privileged writes should be Automator operators (`addAutomator`), or call through a waiting-room contract that eventually uses Automator (e.g. TransferLocker confirm paths).
+5. Keepers and CRE receivers that need privileged writes should be Automator operators (`addAutomator`) **and** have routes to their targets (`setRoutes`).
+6. Waiting-room lockers: `setAutomator(Automator)` for enqueue; DopplerLocker also `setEligibilityVerifier(EV)` as metadata oracle only.
 
 ---
 

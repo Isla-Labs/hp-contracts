@@ -12,8 +12,9 @@ Types: `@base/global/types/data/EligibilityTypes.sol`, `@base/global/types/gover
 
 | Path | Role |
 |------|------|
-| `EligibilityVerifier.sol` | CRE squad-fill receiver, minutes store, score + cohort routing |
-| `config/EligibilityCriteria.sol` | GK / u21 / outfield / newTransfer thresholds + under-21 age |
+| `EligibilityVerifier.sol` | Score sync + cohort routing (via Automator) |
+| `base/EligibilityStore.sol` | CRE squad-fill + PPM minutes store |
+| `base/EligibilityCriteria.sol` | GK / u21 / outfield / newTransfer thresholds + under-21 age |
 
 Downstream (not in this folder):
 
@@ -21,8 +22,9 @@ Downstream (not in this folder):
 |----------|------|
 | CRE `squad-fill` | Populate players, membership, name/symbol |
 | `PpmVerifier` (todo) | Call `recordAppearances` with match minutes |
-| `DopplerLocker` | Waiting room for **new** deploy cohorts |
-| `TransferLocker` | Waiting room for **deactivate** / **reactivate** |
+| `Automator` | Cat-3 relay + caller→target routes (EV → lockers) |
+| `DopplerLocker` | Waiting room for **new** deploy cohorts (`msg.sender` = Automator) |
+| `TransferLocker` | Waiting room for **deactivate** / **reactivate** (`msg.sender` = Automator) |
 
 ---
 
@@ -60,7 +62,8 @@ metaPlayerIds, names, symbols
 |-------|-----------|
 | Historical / first-fill | Create untracked players; attach name/symbol; no membership |
 | Recurring (daily-active, already swept once) | Membership overwrite; creates without strings; quiet pages backfill metadata |
-| Season DONE | `_finalizeLeagueRemovals` → enqueue `LeftLeague` to TransferLocker |
+| Season DONE | `_finalizeLeagueRemovals` → stage `_pendingLeftLeague` (no Automator call) |
+| `verifyEligibility` | Drains `_pendingLeftLeague` → TransferLocker `LeftLeague` via Automator |
 
 See `cre/hp-v1/workflows/squad-fill/README.md` for CRE layout and naming rules.
 
@@ -113,7 +116,7 @@ Under-21 age default: 21. Continuity checks **omit** the newTransfer shortcut.
 | Not in registry + eligible | → DopplerLocker (`goalkeepers` / `under21` / `outfield` / `newTransfers`) |
 | In registry, not `INACTIVE`, below continuity | → TransferLocker `ContinuityUnderThreshold` |
 | In registry, `INACTIVE`, above continuity | → TransferLocker `Reactivate` |
-| CRE league-leaver (deployed, no club at DONE) | → TransferLocker `LeftLeague` |
+| CRE league-leaver (deployed, no club at DONE) | staged → next `verifyEligibility` → TransferLocker `LeftLeague` |
 
 Actual `PlayerSetRegistry` status changes happen later in TransferLocker (waiting room + manual review), not inside EligibilityVerifier.
 
@@ -123,7 +126,9 @@ Deploy eligibility priority: newTransfer (if `earliestSeasonStartYear == current
 
 ## Deployment notes
 
-1. Factory `create(...)` with `dopplerLocker` + `transferLocker` addresses.
-2. `DopplerLocker.setEligibilityVerifier(proxy)` and `TransferLocker.setEligibilityVerifier(proxy)`.
-3. Size RateLimit `cooldown` for intended `verifyEligibility` page cadence.
-4. One EligibilityVerifier instance per domestic `leagueId`.
+1. DeployCore: `setAutomator(Automator)` on both lockers.
+2. DeployData: EV `initialize(..., automator, dopplerLocker, transferLocker, ...)`.
+3. `DopplerLocker.setEligibilityVerifier(EV)` — metadata oracle only.
+4. Automator: grant EV `CATEGORY_THREE` + `setRoutes(EV → DopplerLocker, TransferLocker)`.
+5. Size RateLimit `cooldown` for intended `verifyEligibility` page cadence.
+6. One EligibilityVerifier instance per domestic `leagueId`.

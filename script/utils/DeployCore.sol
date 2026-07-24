@@ -62,6 +62,10 @@ abstract contract DeployCore is ProxyUtils {
         // EV + matchweeks placeholders — replaced in DeployData via DAO grantRole / addAutomator.
         d.automator = address(new Automator(dao, d.constitutionalTimelock, d.dopplerLocker, d.initGuard, d.initGuard));
 
+        // Waiting rooms accept enqueue only from Automator (EV relays via routes).
+        TransferLocker(d.transferLocker).setAutomator(d.automator);
+        DopplerLocker(d.dopplerLocker).setAutomator(d.automator);
+
         d.tournamentRegistryImpl = address(new TournamentRegistry());
         _upgradeAndCall(
             d.tournamentRegistry,

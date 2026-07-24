@@ -10,7 +10,7 @@ import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTy
  * @title TransferLocker
  * @notice Waiting room for soft-inactivity / reactivation candidates (mirrors DopplerLocker).
  * @dev Flow:
- *      0) EligibilityVerifier enqueues continuity failures, league-leavers, or reactivations.
+ *      0) EligibilityVerifier (via Automator) enqueues continuity failures, league-leavers, or reactivations.
  *      1) Offchain / manual review (webhook + email — TBD) confirms or rejects.
  *      2) Confirmed deactivate → Automator → `setStatus(INACTIVE)` (not wired yet).
  *      3) Confirmed reactivate → Automator → restore prior active status (not wired yet).
@@ -22,8 +22,8 @@ import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTy
  * @custom:security-contact security@islalabs.co
  */
 contract TransferLocker is ITransferLocker {
-    /// @notice Sole writer for `enqueueLifecycle` (set once after EligibilityVerifier deploy).
-    address public eligibilityVerifier;
+    /// @notice Sole writer for `enqueueLifecycle` (Automator; set once after Automator deploy).
+    address public automator;
 
     PendingLifecycle[] private _pending;
     /// @dev ContinuityUnderThreshold / LeftLeague — pending soft-inactive review.
@@ -31,12 +31,12 @@ contract TransferLocker is ITransferLocker {
     /// @dev Reactivate — pending restore-from-INACTIVE review.
     mapping(bytes32 playerId => bool) private _queuedReactivate;
 
-    /// @notice One-time wire from EligibilityVerifier → this waiting room.
-    function setEligibilityVerifier(address eligibilityVerifier_) external {
-        if (eligibilityVerifier != address(0)) revert Errors.AlreadySet();
-        if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
-        eligibilityVerifier = eligibilityVerifier_;
-        emit Events.EligibilityVerifierSet(eligibilityVerifier_);
+    /// @notice One-time wire: Automator is the only `enqueueLifecycle` caller.
+    function setAutomator(address automator_) external {
+        if (automator != address(0)) revert Errors.AlreadySet();
+        if (automator_ == address(0)) revert Errors.ZeroAddress();
+        automator = automator_;
+        emit Events.AutomatorSet(automator_);
     }
 
     /// @inheritdoc ITransferLocker
@@ -45,7 +45,7 @@ contract TransferLocker is ITransferLocker {
         LifecycleReason reason,
         uint32[] calldata effectiveMins
     ) external {
-        if (msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
+        if (msg.sender != automator) revert Errors.Unauthorized();
 
         uint256 length = playerIds.length;
         if (effectiveMins.length != 0 && effectiveMins.length != length) {

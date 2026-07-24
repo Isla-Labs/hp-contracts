@@ -4,4 +4,6 @@ pragma solidity ^0.8.34;
 library GovernanceErrors {
     error ExecutionFailed();
     error ZeroAddress();
+    error ArrayLengthsMismatch();
+    error RouteNotAllowed(address caller, address target);
 }

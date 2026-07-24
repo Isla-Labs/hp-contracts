@@ -12,8 +12,8 @@ import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTy
 interface ITransferLocker {
     /**
      * @notice Queue players for lifecycle review (same `reason` / parallel `effectiveMins`).
-     * @dev Called by `EligibilityVerifier` only. Skips zero ids and already-queued players
-     *      for that direction (deactivate vs reactivate).
+     * @dev Called by `Automator` only (EV/Store relay via `executeAutomation`).
+     *      Skips zero ids and already-queued players for that direction (deactivate vs reactivate).
      *      `effectiveMins.length` must be 0 (treated as all zeros) or equal `playerIds.length`.
      */
     function enqueueLifecycle(

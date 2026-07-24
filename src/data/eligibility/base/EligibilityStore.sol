@@ -3,10 +3,8 @@ pragma solidity ^0.8.34;
 
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 
-import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
-import { LifecycleReason } from "@types/governance/LifecycleTypes.sol";
 import { PlayerStatus, Position } from "@base/global/types/PlayerSetTypes.sol";
 
 import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
@@ -24,8 +22,9 @@ import {
 /**
  * @title EligibilityStore
  * @notice Abstract squad / minutes store: CRE squad-fill intake and PPM appearance ingest.
- * @dev Extended by `EligibilityVerifier2` (criteria + rate-limited scan). Deploy the concrete
- *      verifier behind `TransparentUpgradeableProxy`.
+ * @dev Extended by `EligibilityVerifier` (criteria + rate-limited scan / waiting-room handoff).
+ *      League-leavers are staged in `_pendingLeftLeague` for the verifier to enqueue — the store
+ *      does not call Automator. Deploy the concrete verifier behind `TransparentUpgradeableProxy`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -37,8 +36,6 @@ abstract contract EligibilityStore is CreReceiver {
 
     IPlayerSetRegistry public playerSetRegistry;
     ITournamentRegistry public tournamentRegistry;
-    /// @notice Waiting-room receiver for soft-inactivity / league-leave candidates.
-    ITransferLocker public transferLocker;
 
     /// @dev Domestic-league `tournamentId` whose calendars count toward the rolling score.
     bytes32 public leagueId;
@@ -68,6 +65,9 @@ abstract contract EligibilityStore is CreReceiver {
 
     /// @dev Players cleared from a club during the in-progress daily-active sweep (pending DONE).
     bytes32[] private _leftDuringSweep;
+
+    /// @dev Deployed actives with no club after a full sweep — drained by `verifyEligibility`.
+    bytes32[] internal _pendingLeftLeague;
 
     // --------------------------------------------
     //  Views
@@ -146,6 +146,11 @@ abstract contract EligibilityStore is CreReceiver {
         for (uint256 i; i < n; ++i) {
             missing[i] = tmp[i];
         }
+    }
+
+    /// @notice Deployed league-leavers staged by CRE, not yet handed to TransferLocker.
+    function pendingLeftLeagueCount() external view returns (uint256) {
+        return _pendingLeftLeague.length;
     }
 
     // --------------------------------------------
@@ -344,13 +349,12 @@ abstract contract EligibilityStore is CreReceiver {
 
     /**
      * @dev After a full membership sweep: any player who was on some `SquadList` and is now on
-     *      none (`_playerClub == 0`) has left the league. Enqueue deployed actives to ManageLifecycle.
-     *      Intra-league transfers re-acquire `_playerClub` before DONE and are skipped.
+     *      none (`_playerClub == 0`) has left the league. Stage deployed actives for
+     *      `verifyEligibility` → TransferLocker (`LeftLeague`). Intra-league transfers
+     *      re-acquire `_playerClub` before DONE and are skipped.
      */
     function _finalizeLeagueRemovals() private {
         uint256 n = _leftDuringSweep.length;
-        bytes32[] memory leavers = new bytes32[](n);
-        uint256 leaverCount;
 
         for (uint256 i; i < n; ++i) {
             bytes32 playerId = _leftDuringSweep[i];
@@ -358,22 +362,22 @@ abstract contract EligibilityStore is CreReceiver {
             if (!playerSetRegistry.playerExists(playerId)) continue;
             if (playerSetRegistry.getPlayerSet(playerId).status == PlayerStatus.INACTIVE) continue;
 
-            leavers[leaverCount] = playerId;
-            unchecked {
-                ++leaverCount;
-            }
+            _pendingLeftLeague.push(playerId);
             emit Events.PlayerLeftLeague(playerId);
         }
         delete _leftDuringSweep;
+    }
 
-        if (leaverCount == 0) return;
+    /**
+     * @dev Snapshot + clear staged league-leavers for the verifier's Automator handoff.
+     *      Returns empty when nothing is pending.
+     */
+    function _takePendingLeftLeague() internal returns (bytes32[] memory ids) {
+        uint256 n = _pendingLeftLeague.length;
+        if (n == 0) return ids;
 
-        // Compact before enqueue (ManageLifecycle skips zeros, but keep the array tight).
-        bytes32[] memory compact = new bytes32[](leaverCount);
-        for (uint256 i; i < leaverCount; ++i) {
-            compact[i] = leavers[i];
-        }
-        transferLocker.enqueueLifecycle(compact, LifecycleReason.LeftLeague, new uint32[](0));
+        ids = _pendingLeftLeague;
+        delete _pendingLeftLeague;
     }
 
     function _contains(bytes32[] memory arr, bytes32 value) private pure returns (bool) {

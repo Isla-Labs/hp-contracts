@@ -6,6 +6,7 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 
+import { IAutomator } from "@interfaces/governance/IAutomator.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
@@ -32,8 +33,8 @@ import {
 /**
  * @title EligibilityVerifier
  * @notice Rate-limited eligibility runner over `EligibilityStore` minutes / squad state.
- * @dev Deploy behind `TransparentUpgradeableProxy`. See `README.md` in this directory for
- *      CRE report shape, score formula, thresholds, and DopplerLocker / TransferLocker routing.
+ * @dev Deploy behind `TransparentUpgradeableProxy`. Waiting-room writes go through `Automator`
+ *      (caller→target routes). See `README.md` for CRE report shape, score formula, thresholds.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -43,6 +44,11 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
     //  Storage
     // --------------------------------------------
 
+    /// @notice Cat-3 relay for waiting-room enqueue (must have routes to lockers).
+    IAutomator public automator;
+    /// @notice Waiting-room receiver for soft-inactivity / league-leave / reactivate.
+    ITransferLocker public transferLocker;
+    /// @notice Waiting-room receiver for eligible deploy cohorts (enqueued via Automator).
     IDopplerLocker public dopplerLocker;
 
     /// @dev Max distinct season years cached in one recompute (memory).
@@ -85,6 +91,7 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
      * @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
      * @param tournamentRegistry_ Season calendars + treasury lookup for the league clock.
      * @param ppmVerifier_ Authorized minutes ingest caller (PPMVerifier; required; non-zero).
+     * @param automator_ Cat-3 relay for waiting-room enqueue (required; non-zero).
      * @param dopplerLocker_ Waiting-room receiver for eligible cohorts (required; non-zero).
      * @param transferLocker_ Waiting-room receiver for soft-inactivity candidates (required).
      * @param leagueId_ Domestic-league tournament id (score filter + clock source).
@@ -98,6 +105,7 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
         address playerSetRegistry_,
         address tournamentRegistry_,
         address ppmVerifier_,
+        address automator_,
         address dopplerLocker_,
         address transferLocker_,
         bytes32 leagueId_,
@@ -106,7 +114,7 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
         if (expectedWorkflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
         if (
             ppmVerifier_ == address(0) || playerSetRegistry_ == address(0) || tournamentRegistry_ == address(0)
-                || dopplerLocker_ == address(0) || transferLocker_ == address(0)
+                || automator_ == address(0) || dopplerLocker_ == address(0) || transferLocker_ == address(0)
         ) {
             revert Errors.ZeroAddress();
         }
@@ -119,6 +127,7 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
         ppmVerifier = ppmVerifier_;
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+        automator = IAutomator(automator_);
         dopplerLocker = IDopplerLocker(dopplerLocker_);
         transferLocker = ITransferLocker(transferLocker_);
         leagueId = leagueId_;
@@ -143,13 +152,17 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
      * @dev Sole write path for `weightedScoreWad`. Public (anyone may run the page).
      *      1) Replay domestic-league `Appearance[]` → score at `G_now` for every player on the page
      *      2) Classify once → deploy cohorts / lifecycle sets (page-sized buffers, then compact)
-     *      3) `dopplerLocker.enqueueEligible` / `transferLocker.enqueueLifecycle`
+     *      3) Automator → `dopplerLocker.enqueueEligible` / `transferLocker.enqueueLifecycle`
+     *         (also drains CRE-staged `_pendingLeftLeague` as `LeftLeague`)
      *      Continuity uses GK/u21/outfield thresholds only (not the newTransfer ≥ 1 shortcut).
      */
     function verifyEligibility(
         uint256 offset,
         uint256 limit
     ) external rateLimited returns (EligibilityGroups memory groups) {
+        // CRE league-leavers are independent of the score page — drain whenever anyone scans.
+        _drainPendingLeftLeague();
+
         uint256 total = _playerIds.length;
         if (offset >= total || limit == 0) {
             return groups;
@@ -227,23 +240,43 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
         groups.toReactivate = _compactIds(react, reactN);
 
         if (gkN + u21N + outN + ntN != 0) {
-            dopplerLocker.enqueueEligible(groups);
+            automator.executeAutomation(
+                address(dopplerLocker), 0, abi.encodeCall(IDopplerLocker.enqueueEligible, (groups))
+            );
         }
         if (deactN != 0) {
-            transferLocker.enqueueLifecycle(
+            _enqueueLifecycle(
                 groups.toDeactivate, LifecycleReason.ContinuityUnderThreshold, _compactMins(deactMinsBuf, deactN)
             );
         }
         if (reactN != 0) {
-            transferLocker.enqueueLifecycle(
-                groups.toReactivate, LifecycleReason.Reactivate, _compactMins(reactMinsBuf, reactN)
-            );
+            _enqueueLifecycle(groups.toReactivate, LifecycleReason.Reactivate, _compactMins(reactMinsBuf, reactN));
         }
     }
 
     // --------------------------------------------
     //  Internal — eligibility
     // --------------------------------------------
+
+    /// @dev CRE-staged leavers → TransferLocker (`LeftLeague`), via Automator.
+    function _drainPendingLeftLeague() private {
+        bytes32[] memory ids = _takePendingLeftLeague();
+        if (ids.length == 0) return;
+        _enqueueLifecycle(ids, LifecycleReason.LeftLeague, new uint32[](0));
+    }
+
+    /// @dev Relay lifecycle enqueue through Automator (route: this → transferLocker).
+    function _enqueueLifecycle(
+        bytes32[] memory ids,
+        LifecycleReason reason,
+        uint32[] memory effectiveMins
+    ) private {
+        automator.executeAutomation(
+            address(transferLocker),
+            0,
+            abi.encodeCall(ITransferLocker.enqueueLifecycle, (ids, reason, effectiveMins))
+        );
+    }
 
     /// @dev Pass 0: ringfenced score sync for `[offset, end)`.
     function _syncPageScores(uint256 offset, uint256 end, uint256 limit, FinalRoundCache memory frCache) private {

@@ -7,8 +7,8 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { InitGuard } from "@base/abstract/InitGuard.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 
+import { Automator } from "@governance/access/cat-3/Automator.sol";
 import { DopplerLocker } from "@governance/deployments/assets/deploy/DopplerLocker.sol";
-import { TransferLocker } from "@governance/deployments/assets/transfer/TransferLocker.sol";
 
 import { EligibilityVerifier } from "@data/eligibility/EligibilityVerifier.sol";
 import { FixtureCommitment } from "@data/matchweeks/FixtureCommitment.sol";
@@ -23,7 +23,9 @@ import { ProxyUtils } from "./ProxyUtils.sol";
  *      passed as `ppmVerifier` so EV can initialize; upgrade that slot when PBR ships.
  *
  *      Wiring:
- *        - EligibilityVerifier → DopplerLocker / TransferLocker (`setEligibilityVerifier`)
+ *        - Lockers already have `setAutomator` from DeployCore
+ *        - DopplerLocker `setEligibilityVerifier` (metadata oracle only)
+ *        - Automator routes: EV → DopplerLocker + TransferLocker
  *        - RoundManager + EV → Automator `CATEGORY_THREE` (DAO grant when dao == deployer)
  *        - FixtureCommitment.setRoundManager + RoundManager cat-3 on TournamentRegistry
  */
@@ -113,6 +115,7 @@ abstract contract DeployData is ProxyUtils {
                     c.playerSetRegistry,
                     c.tournamentRegistry,
                     d.ppmVerifierPlaceholder,
+                    c.automator,
                     c.dopplerLocker,
                     c.transferLocker,
                     c.leagueId,
@@ -121,9 +124,8 @@ abstract contract DeployData is ProxyUtils {
             )
         );
 
-        // Waiting-room writers (one-shot, no ACL — call immediately after EV create).
+        // Metadata oracle for DopplerLocker enqueue (writer is Automator).
         DopplerLocker(c.dopplerLocker).setEligibilityVerifier(d.eligibilityVerifier);
-        TransferLocker(c.transferLocker).setEligibilityVerifier(d.eligibilityVerifier);
 
         if (deployer == c.dao) {
             FixtureCommitment(d.fixtureCommitment).setRoundManager(d.roundManager);
@@ -134,9 +136,21 @@ abstract contract DeployData is ProxyUtils {
             AccessControl(c.automator).grantRole(Roles.CATEGORY_THREE, d.roundManager);
             // Drop InitGuard placeholders seeded in DeployCore (`removeAutomator` is cat-1 only).
             AccessControl(c.automator).revokeRole(Roles.CATEGORY_THREE, c.initGuard);
+
+            // EV may only hit waiting rooms through the route matrix.
+            address[] memory callers = new address[](2);
+            address[] memory targets = new address[](2);
+            bool[] memory allowed = new bool[](2);
+            callers[0] = d.eligibilityVerifier;
+            callers[1] = d.eligibilityVerifier;
+            targets[0] = c.dopplerLocker;
+            targets[1] = c.transferLocker;
+            allowed[0] = true;
+            allowed[1] = true;
+            Automator(c.automator).setRoutes(callers, targets, allowed);
         } else {
             console.log(
-                "DAO != deployer: schedule setRoundManager, TR/Automator role grants, removeAutomator(InitGuard)"
+                "DAO != deployer: schedule setRoundManager, TR/Automator role+route grants, removeAutomator(InitGuard)"
             );
         }
 

@@ -5,7 +5,7 @@ import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsError
 import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
 import { IEligibilityVerifier } from "@interfaces/data/IEligibilityVerifier.sol";
-import { EligibilityBucket, EligibilityGroups, MinutesStore } from "@types/data/EligibilityTypes.sol";
+import { EligibilityBucket, EligibilityGroups } from "@types/data/EligibilityTypes.sol";
 
 import { DopplerConfig } from "@governance/deployments/assets/deploy/config/DopplerConfig.sol";
 import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
@@ -72,7 +72,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
         emit Events.AutomatorSet(automator_);
     }
 
-    /// @notice One-time wire: EligibilityVerifier for `getMinutesStore` during enqueue.
+    /// @notice One-time wire: EligibilityVerifier for `getPlayerMetadata` during enqueue.
     function setEligibilityVerifier(address eligibilityVerifier_) external {
         if (eligibilityVerifier != address(0)) revert Errors.AlreadySet();
         if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
@@ -128,13 +128,13 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
             bytes32 playerId = playerIds[i];
             if (playerId == bytes32(0) || _queued[playerId]) continue;
 
-            MinutesStore memory store = IEligibilityVerifier(eligibilityVerifier).getMinutesStore(playerId);
-            bool metadataSet = bytes(store.name).length != 0;
+            (string memory name, string memory symbol, bool metadataSet) =
+                IEligibilityVerifier(eligibilityVerifier).getPlayerMetadata(playerId);
 
             _queued[playerId] = true;
             _pending.push(
                 DopplerTypes.PendingEligible({
-                    playerId: playerId, bucket: bucket, name: store.name, symbol: store.symbol, metadataSet: metadataSet
+                    playerId: playerId, bucket: bucket, name: name, symbol: symbol, metadataSet: metadataSet
                 })
             );
             unchecked {

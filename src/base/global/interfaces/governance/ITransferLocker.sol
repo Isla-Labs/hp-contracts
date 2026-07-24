@@ -31,4 +31,10 @@ interface ITransferLocker {
     function isQueuedFor(bytes32 playerId, LifecycleReason reason) external view returns (bool);
 
     function pendingLifecycle(uint256 offset, uint256 limit) external view returns (PendingLifecycle[] memory out);
+
+    /**
+     * @notice Reverts unless `leagueId → FeeRouter.pbrFeeHub / PbrTreasury` topology matches.
+     * @dev Used by `confirmReactivate` and offchain scanners before cross-league / continuity restore.
+     */
+    function requireFeeTopologyConsistent(bytes32 playerId) external view;
 }

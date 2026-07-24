@@ -136,6 +136,18 @@ abstract contract EligibilityStore is CreReceiver {
         return _minutesStore[playerId];
     }
 
+    /// @notice Name/symbol only — avoids copying `seasonMinutes` into memory (Doppler enqueue path).
+    function getPlayerMetadata(bytes32 playerId)
+        external
+        view
+        returns (string memory name, string memory symbol, bool metadataSet)
+    {
+        MinutesStore storage store = _minutesStore[playerId];
+        name = store.name;
+        symbol = store.symbol;
+        metadataSet = bytes(name).length != 0;
+    }
+
     /// @notice `true` when `name` is non-empty.
     function hasPlayerMetadata(bytes32 playerId) external view returns (bool) {
         return bytes(_minutesStore[playerId].name).length != 0;
@@ -199,7 +211,6 @@ abstract contract EligibilityStore is CreReceiver {
 
             uint32 cumulative = season.minsByPosition[posIndex] + appearance.minsPlayed;
             season.minsByPosition[posIndex] = cumulative;
-            season.totalMinutes += appearance.minsPlayed;
             store.expectedPosition = _deriveExpectedPosition(store);
 
             if (scoresLeague) {

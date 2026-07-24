@@ -52,12 +52,14 @@ abstract contract DeployCore is ProxyUtils {
         d.constitutionalTimelock = address(new ConstitutionalTimelock(dao, 0));
         d.maintenanceTimelock = address(new MaintenanceTimelock(dao, 0));
 
-        d.transferLocker = address(new TransferLocker());
         d.dopplerLocker = address(new DopplerLocker(d.constitutionalTimelock, dao));
 
         // Stable proxy addresses (impl = InitGuard until upgradeAndCall).
         d.tournamentRegistry = _deployInitGuardProxy(guard, deployer);
         d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
+
+        // TransferLocker needs registry addresses for reactivate fee-topology checks.
+        d.transferLocker = address(new TransferLocker(d.playerSetRegistry, d.tournamentRegistry));
 
         // EV + matchweeks placeholders — replaced in DeployData via DAO grantRole / addAutomator.
         d.automator = address(new Automator(dao, d.constitutionalTimelock, d.dopplerLocker, d.initGuard, d.initGuard));

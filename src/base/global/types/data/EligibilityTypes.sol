@@ -38,7 +38,6 @@ struct MinutesStore {
 struct SeasonMinutes {
     bytes32 seasonId; // tournamentCalendar
     uint16 seasonStartYear;
-    uint32 totalMinutes;
     uint32[POSITION_COUNT] minsByPosition;
 }
 

@@ -74,7 +74,7 @@ See `cre/hp-v1/workflows/squad-fill/README.md` for CRE layout and naming rules.
 `recordAppearances(seasonId, seasonStartYear, appearances)` — **PpmVerifier only**.
 
 - Requires player already created by squad-fill
-- Updates `minsByPosition` / `totalMinutes` / `expectedPosition` (all comps in the batch)
+- Updates `minsByPosition` / `expectedPosition` (all comps in the batch)
 - **Domestic league only:** incrementally updates `weightedScoreWad` as of each appearance’s global round
 - Per-match rows are **not** persisted
 

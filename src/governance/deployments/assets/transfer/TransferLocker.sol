@@ -3,8 +3,17 @@ pragma solidity ^0.8.34;
 
 import { LifecycleErrors as Errors } from "@errors/governance/LifecycleErrors.sol";
 import { LifecycleEvents as Events } from "@events/governance/LifecycleEvents.sol";
+import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
+import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTypes.sol";
+import { PlayerSet } from "@types/PlayerSetTypes.sol";
+
+/// @dev Minimal FeeRouter surface for hub consistency checks (no markets import).
+interface IFeeRouterHub {
+    function pbrFeeHub() external view returns (address);
+}
 
 /**
  * @title TransferLocker
@@ -15,6 +24,11 @@ import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTy
  *      2) Confirmed deactivate → Automator → `setStatus(INACTIVE)` (not wired yet).
  *      3) Confirmed reactivate → Automator → restore prior active status (not wired yet).
  *
+ *      Cross-league moves (e.g. Bundesliga → EPL) are not standard continuity reactivates:
+ *      deactivate in the old league first, migrate `PlayerSet.leagueId` + `FeeRouter.pbrFeeHub`
+ *      (+ vault ↔ `PbrTreasury` registration), then reactivate. `confirmReactivate` refuses
+ *      unless `leagueId → PbrFeeHub / PbrTreasury` topology still matches.
+ *
  *      Deactivate and reactivate queues are independent so a prior deactivate enqueue
  *      does not block a later reactivate enqueue (and vice versa).
  *
@@ -22,6 +36,12 @@ import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTy
  * @custom:security-contact security@islalabs.co
  */
 contract TransferLocker is ITransferLocker {
+    /// @notice Canonical player market index.
+    IPlayerSetRegistry public immutable playerSetRegistry;
+
+    /// @notice Domestic hub + tournament treasury topology.
+    ITournamentRegistry public immutable tournamentRegistry;
+
     /// @notice Sole writer for `enqueueLifecycle` (Automator; set once after Automator deploy).
     address public automator;
 
@@ -30,6 +50,16 @@ contract TransferLocker is ITransferLocker {
     mapping(bytes32 playerId => bool) private _queuedDeactivate;
     /// @dev Reactivate — pending restore-from-INACTIVE review.
     mapping(bytes32 playerId => bool) private _queuedReactivate;
+
+    /**
+     * @param playerSetRegistry_ Canonical `PlayerSetRegistry` proxy.
+     * @param tournamentRegistry_ Canonical `TournamentRegistry` proxy.
+     */
+    constructor(address playerSetRegistry_, address tournamentRegistry_) {
+        if (playerSetRegistry_ == address(0) || tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
+        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
+        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+    }
 
     /// @notice One-time wire: Automator is the only `enqueueLifecycle` caller.
     function setAutomator(address automator_) external {
@@ -109,6 +139,11 @@ contract TransferLocker is ITransferLocker {
         }
     }
 
+    /// @inheritdoc ITransferLocker
+    function requireFeeTopologyConsistent(bytes32 playerId) external view {
+        _requireFeeTopologyConsistent(playerId);
+    }
+
     // -------------------------------------------------------------------------
     //  Confirm — manual / gated (NOT public yet)
     // -------------------------------------------------------------------------
@@ -128,12 +163,85 @@ contract TransferLocker is ITransferLocker {
     /**
      * After waiting-room review confirms PBR reactivation:
      * - Require status == INACTIVE and continuity still holds.
+     * - Require `leagueId → FeeRouter.pbrFeeHub / PbrTreasury` topology matches (cross-league
+     *   hub + vault migration must complete before this call).
      * - Automator → restore prior active status (typically GRADUATED).
      * - Clear `_queuedReactivate` for the player.
      *
      * Access: gated (timelock / proposer).
      */
-    function confirmReactivate( /* playerId */ ) external {
+    function confirmReactivate(bytes32 playerId) external {
         // gated: manual review + Automator setStatus(GRADUATED) / prior status
+        // Topology gate is live now so cross-league reactivates cannot skip hub migration.
+        _requireFeeTopologyConsistent(playerId);
+    }
+
+    // -------------------------------------------------------------------------
+    //  Fee topology
+    // -------------------------------------------------------------------------
+
+    /**
+     * @dev Ensures the player's recorded domestic league still lines up with fee routing
+     *      and treasury registration before status is restored.
+     *
+     *      Checks:
+     *      1) `tournamentData.leagueId` set and hub registered.
+     *      2) `FeeRouter.pbrFeeHub == TournamentRegistry.pbrFeeHubOf(leagueId)`.
+     *      3) Domestic-league treasury exists (`tournamentId == leagueId`).
+     *      4) Every `activeTournament` is linked to that league and has a treasury.
+     *      5) If a player vault exists: registered on the domestic treasury and on each
+     *         active tournament treasury.
+     */
+    function _requireFeeTopologyConsistent(bytes32 playerId) internal view {
+        PlayerSet memory set = playerSetRegistry.getPlayerSet(playerId);
+
+        bytes32 leagueId = set.tournamentData.leagueId;
+        if (leagueId == bytes32(0)) revert Errors.MissingLeagueId(playerId);
+
+        address expectedHub = tournamentRegistry.pbrFeeHubOf(leagueId);
+        if (expectedHub == address(0)) revert Errors.HubNotRegistered(leagueId);
+
+        address feeRouter = set.dopplerData.feeRouter;
+        if (feeRouter == address(0)) revert Errors.MissingFeeRouter(playerId);
+
+        address actualHub = IFeeRouterHub(feeRouter).pbrFeeHub();
+        if (actualHub != expectedHub) {
+            revert Errors.FeeHubMismatch(playerId, leagueId, expectedHub, actualHub);
+        }
+
+        // Domestic league tournament id equals `leagueId` (see TournamentRegistry.createTournament).
+        address domesticTreasury = tournamentRegistry.getPbrTreasury(leagueId);
+
+        bytes32[] memory linked = tournamentRegistry.getTournamentsForLeague(leagueId);
+        bytes32[] memory active = set.tournamentData.activeTournaments;
+        uint256 activeLen = active.length;
+
+        for (uint256 i; i < activeLen; ++i) {
+            bytes32 tournamentId = active[i];
+            if (!_containsId(linked, tournamentId)) {
+                revert Errors.ActiveTournamentNotLinked(playerId, leagueId, tournamentId);
+            }
+
+            // Reverts `NotFound` if the tournament / treasury was never created.
+            address treasury = tournamentRegistry.getPbrTreasury(tournamentId);
+
+            address vault = set.vaultData.playerVault;
+            if (vault != address(0) && !IPbrTreasury(treasury).isVault(vault)) {
+                revert Errors.VaultNotOnTournamentTreasury(playerId, tournamentId, treasury, vault);
+            }
+        }
+
+        address vault = set.vaultData.playerVault;
+        if (vault != address(0) && !IPbrTreasury(domesticTreasury).isVault(vault)) {
+            revert Errors.VaultNotOnLeagueTreasury(playerId, leagueId, domesticTreasury, vault);
+        }
+    }
+
+    function _containsId(bytes32[] memory ids, bytes32 id) private pure returns (bool) {
+        uint256 length = ids.length;
+        for (uint256 i; i < length; ++i) {
+            if (ids[i] == id) return true;
+        }
+        return false;
     }
 }

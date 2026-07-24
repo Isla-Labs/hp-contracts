@@ -5,7 +5,9 @@ pragma solidity ^0.8.34;
  * @notice Why a deployed player was queued for lifecycle review.
  * @dev Continuity = under GK/u21/outfield threshold → soft-inactive review.
  *      LeftLeague = no club after a full daily-active squad-fill sweep.
- *      Reactivate = already `INACTIVE`, now back above continuity threshold.
+ *      Reactivate = already `INACTIVE`, now back above continuity threshold
+ *      (same-league continuity, or post-migration cross-league restore after
+ *      `leagueId` / FeeHub / treasury records have been remapped).
  */
 enum LifecycleReason {
     ContinuityUnderThreshold,

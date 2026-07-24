@@ -6,7 +6,6 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 
 import { InitGuard } from "@base/abstract/InitGuard.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
-
 import { ConstitutionalTimelock } from "@governance/access/cat-1/ConstitutionalTimelock.sol";
 import { MaintenanceTimelock } from "@governance/access/cat-2/MaintenanceTimelock.sol";
 import { Automator } from "@governance/access/cat-3/Automator.sol";
@@ -22,10 +21,11 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 /**
  * @title DeployCore
  * @notice Bootstrap: access stack, deployment lockers, DeployTournament, registries.
- * @dev Matchweeks / eligibility / PBR live in `DeployData`. Market/vault factories in `DeployFactories`.
+ * @dev Matchweeks / eligibility impl / PBR live in `DeployData`. Market/vault factories in
+ *      `DeployFactories`.
  *
- *      Automator seeds `DopplerLocker` as cat-3; EligibilityVerifier and RoundManager are
- *      `InitGuard` placeholders until `DeployData` grants the real addresses.
+ *      EligibilityVerifier InitGuard proxy is created here so Automator can seed EV as a
+ *      verified caller at construction. DeployData upgrades that proxy.
  */
 abstract contract DeployCore is ProxyUtils {
     struct CoreDeployment {
@@ -34,6 +34,7 @@ abstract contract DeployCore is ProxyUtils {
         address maintenanceTimelock;
         address transferLocker;
         address dopplerLocker;
+        address eligibilityVerifier;
         address automator;
         address deployTournament;
         address tournamentRegistry;
@@ -57,14 +58,17 @@ abstract contract DeployCore is ProxyUtils {
         // Stable proxy addresses (impl = InitGuard until upgradeAndCall).
         d.tournamentRegistry = _deployInitGuardProxy(guard, deployer);
         d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
+        // EV proxy early — Automator constructor seeds it as a verified caller.
+        d.eligibilityVerifier = _deployInitGuardProxy(guard, deployer);
 
         // TransferLocker needs registry addresses for reactivate fee-topology checks.
         d.transferLocker = address(new TransferLocker(d.playerSetRegistry, d.tournamentRegistry));
 
-        // EV + matchweeks placeholders — replaced in DeployData via DAO grantRole / addAutomator.
-        d.automator = address(new Automator(dao, d.constitutionalTimelock, d.dopplerLocker, d.initGuard, d.initGuard));
+        address[] memory verifiedCallers = new address[](1);
+        verifiedCallers[0] = d.eligibilityVerifier;
+        d.automator = address(new Automator(dao, d.constitutionalTimelock, verifiedCallers));
 
-        // Waiting rooms accept enqueue only from Automator (EV relays via routes).
+        // Waiting rooms accept enqueue only from Automator (EV calls through Automator).
         TransferLocker(d.transferLocker).setAutomator(d.automator);
         DopplerLocker(d.dopplerLocker).setAutomator(d.automator);
 
@@ -94,6 +98,7 @@ abstract contract DeployCore is ProxyUtils {
 
         _transferProxyAdmin(d.tournamentRegistry, d.constitutionalTimelock);
         _transferProxyAdmin(d.playerSetRegistry, d.constitutionalTimelock);
+        // EV proxy admin stays with deployer until DeployData upgrades then transfers.
 
         _logCore(d);
     }
@@ -104,6 +109,7 @@ abstract contract DeployCore is ProxyUtils {
         console.log("MaintenanceTimelock", d.maintenanceTimelock);
         console.log("TransferLocker", d.transferLocker);
         console.log("DopplerLocker", d.dopplerLocker);
+        console.log("EligibilityVerifier (proxy)", d.eligibilityVerifier);
         console.log("Automator", d.automator);
         console.log("DeployTournament", d.deployTournament);
         console.log("TournamentRegistry (proxy)", d.tournamentRegistry);

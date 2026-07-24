@@ -5,5 +5,7 @@ library GovernanceErrors {
     error ExecutionFailed();
     error ZeroAddress();
     error ArrayLengthsMismatch();
-    error RouteNotAllowed(address caller, address target);
+    error EmptyVerifiedCallers();
+    error AlreadyVerifiedCaller(address caller);
+    error NotVerifiedCaller(address caller);
 }

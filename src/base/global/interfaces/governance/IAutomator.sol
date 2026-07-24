@@ -3,15 +3,20 @@ pragma solidity ^0.8.34;
 
 /**
  * @title IAutomator
- * @notice Cat-3 relay: allowlisted callers execute privileged protocol actions as this contract.
- * @dev Destinations are bounded by a caller→target route matrix (`allowedRoute`).
+ * @notice Cat-3 relay: verified callers execute privileged protocol actions as this contract.
+ * @dev Any destination is callable; targets enforce their own Automator-only access.
+ *      Verified callers are a dedicated allowlist (not AccessControl roles), managed by CAT_ONE.
  */
 interface IAutomator {
-    function allowedRoute(address caller, address target) external view returns (bool allowed);
+    function isVerifiedCaller(address caller) external view returns (bool);
 
-    function setRoute(address caller, address target, bool allowed) external;
+    function verifiedCallers() external view returns (address[] memory);
 
-    function setRoutes(address[] calldata callers, address[] calldata targets, bool[] calldata allowed) external;
+    /// @dev `CATEGORY_ONE` — add a verified caller.
+    function addAutomator(address caller) external;
+
+    /// @dev `CATEGORY_ONE` — remove a verified caller.
+    function removeAutomator(address caller) external;
 
     function executeAutomation(
         address target,

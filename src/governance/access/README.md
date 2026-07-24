@@ -55,15 +55,16 @@ ConstitutionalTimelock (CATEGORY_ONE on Automator)
         │ addAutomator / removeAutomator
         ▼
 Automator.executeAutomation(target, value, data)
-        │ onlyRole(CATEGORY_THREE) operators
-        │ + allowedRoute[caller][target]
+        │ msg.sender ∈ verifiedCallers allowlist
+        │ any destination address
         ▼
-msg.sender = Automator → CATEGORY_THREE / sole-writer on registries, lockers, etc.
+msg.sender = Automator → target's own access control
+        (typically CATEGORY_THREE / sole-writer granted only to Automator)
 ```
 
 **Timelocks:** OZ `TimelockController`. Aragon DAO is sole `PROPOSER_ROLE` / `CANCELLER_ROLE`. Execution is open (`EXECUTOR_ROLE` on `address(0)`). Targets always see the timelock as `msg.sender`.
 
-**Automator:** OZ `AccessControl`. DAO has `DEFAULT_ADMIN_ROLE`. Cat-1 manages the `CATEGORY_THREE` operator set and the caller→target **route matrix** (`setRoute` / `setRoutes`, Airlock-style). Operators call lean `executeAutomation`; each call must have `allowedRoute[msg.sender][target]`. Privileged targets grant `CATEGORY_THREE` to Automator and/or set Automator as sole writer (e.g. waiting-room lockers).
+**Automator:** OZ `AccessControl` only for DAO (`DEFAULT_ADMIN_ROLE`) and cat-1 (`CATEGORY_ONE`) admin of the allowlist. **Verified callers** are a separate enumerable set (`isVerifiedCaller` / `verifiedCallers`) — not AccessControl roles. Cat-1 `addAutomator` / `removeAutomator` edits that set. Verified callers may relay to any `target`; each destination limits which functions Automator may invoke. Finer caller→destination scoping is deferred (`AutomatorTypes` drafts).
 
 ---
 
@@ -73,8 +74,9 @@ msg.sender = Automator → CATEGORY_THREE / sole-writer on registries, lockers, 
 2. Grant `CATEGORY_ONE` on config contracts (e.g. `EligibilityCriteria`, Doppler config) to `ConstitutionalTimelock`.
 3. Grant `CATEGORY_TWO` on ops surfaces to `MaintenanceTimelock`.
 4. Grant `CATEGORY_THREE` on registries / treasuries / etc. to `Automator` (not to individual keepers).
-5. Keepers and CRE receivers that need privileged writes should be Automator operators (`addAutomator`) **and** have routes to their targets (`setRoutes`).
-6. Waiting-room lockers: `setAutomator(Automator)` for enqueue; DopplerLocker also `setEligibilityVerifier(EV)` as metadata oracle only.
+5. DeployCore creates the EV InitGuard proxy early and seeds it as Automator's day-one verified caller. DeployData upgrades that proxy.
+6. Additional verified callers: cat-1 `addAutomator(caller)`.
+7. Waiting-room lockers: `setAutomator(Automator)` for enqueue; DopplerLocker also `setEligibilityVerifier(EV)` as metadata oracle only.
 
 ---
 

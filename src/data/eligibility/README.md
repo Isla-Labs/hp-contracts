@@ -135,9 +135,8 @@ Deploy eligibility priority: newTransfer (if `earliestSeasonStartYear == current
 
 ## Deployment notes
 
-1. DeployCore: `setAutomator(Automator)` on both lockers.
-2. DeployData: EV `initialize(..., automator, dopplerLocker, transferLocker, ...)`.
-3. `DopplerLocker.setEligibilityVerifier(EV)` — metadata oracle only.
-4. Automator: grant EV `CATEGORY_THREE` + `setRoutes(EV → DopplerLocker, TransferLocker)`.
-5. Size RateLimit `cooldown` for intended `verifyEligibility` page cadence.
-6. One EligibilityVerifier instance per domestic `leagueId`.
+1. DeployCore: EV InitGuard proxy + `Automator(..., EV)` (verified caller); `setAutomator` on both lockers.
+2. DeployData: upgrade/initialize that EV proxy; `DopplerLocker.setEligibilityVerifier(EV)` (metadata oracle only).
+3. Size RateLimit `cooldown` for intended `verifyEligibility` page cadence.
+4. One EligibilityVerifier instance per domestic `leagueId`.
+5. Additional Automator callers: cat-1 `addAutomator` (destinations self-gate).

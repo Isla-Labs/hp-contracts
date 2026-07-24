@@ -13,20 +13,7 @@ import { Appearance, EligibilityGroups, MinutesStore, SquadList } from "@types/d
  * @dev Intended behind `TransparentUpgradeableProxy`; call `initialize` via proxy constructor data.
  */
 interface IEligibilityVerifier {
-    function initialize(
-        address constitutionalTimelock_,
-        address dao_,
-        address forwarder_,
-        bytes32 expectedWorkflowId_,
-        address playerSetRegistry_,
-        address tournamentRegistry_,
-        address ppmVerifier_,
-        address automator_,
-        address dopplerLocker_,
-        address transferLocker_,
-        bytes32 leagueId_,
-        uint16 baseYear_
-    ) external;
+    function initialize(bytes32 expectedWorkflowId_, bytes32 leagueId_, uint16 baseYear_) external;
 
     /// @notice Ingest minutes; domestic-league rows update `weightedScoreWad` incrementally.
     function recordAppearances(bytes32 seasonId, uint16 seasonStartYear, Appearance[] calldata appearances) external;

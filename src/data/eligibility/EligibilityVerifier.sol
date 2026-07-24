@@ -3,8 +3,10 @@ pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 
 import { IAutomator } from "@interfaces/governance/IAutomator.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
@@ -32,11 +34,12 @@ import {
  * @dev Deploy behind `TransparentUpgradeableProxy`. Waiting-room writes go through `Automator`
  *      (caller→target routes). Scores are maintained in `recordAppearances`; verify only decays
  *      to `G_now` then classifies. See `README.md` for formula and thresholds.
+ *      Protocol addresses are resolved once from `AddressProvider` at `initialize`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCriteria, RateLimit {
+contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, EligibilityCriteria, RateLimit {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -63,49 +66,38 @@ contract EligibilityVerifier is Initializable, EligibilityStore, EligibilityCrit
     //  Construction / initialization
     // --------------------------------------------
 
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @param cooldown_ Global cooldown for `verifyEligibility` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(uint256 cooldown_) RateLimit(cooldown_) {
+    constructor(address addressProvider_, uint256 cooldown_) AddressBook(addressProvider_) RateLimit(cooldown_) {
         _disableInitializers();
     }
 
     /**
      * @notice Initialize proxy storage (call via `TransparentUpgradeableProxy` constructor data).
-     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE` threshold updates.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE` on criteria.
-     * @param forwarder_ Chainlink `KeystoneForwarder` for this chain.
+     * @dev Resolves DAO / timelock / registries / lockers / CRE forwarder / PPM verifier from
+     *      `AddressProvider` once into storage; only league-specific params are explicit.
      * @param expectedWorkflowId_ Squad-fill CRE workflow id (required; non-zero).
-     * @param playerSetRegistry_ Canonical registry used to skip already-deployed markets.
-     * @param tournamentRegistry_ Season calendars + treasury lookup for the league clock.
-     * @param ppmVerifier_ Authorized minutes ingest caller (PPMVerifier; required; non-zero).
-     * @param automator_ Cat-3 relay for waiting-room enqueue (required; non-zero).
-     * @param dopplerLocker_ Waiting-room receiver for eligible cohorts (required; non-zero).
-     * @param transferLocker_ Waiting-room receiver for soft-inactivity candidates (required).
      * @param leagueId_ Domestic-league tournament id (score filter + clock source).
      * @param baseYear_ G-index origin season start year.
      */
     function initialize(
-        address constitutionalTimelock_,
-        address dao_,
-        address forwarder_,
         bytes32 expectedWorkflowId_,
-        address playerSetRegistry_,
-        address tournamentRegistry_,
-        address ppmVerifier_,
-        address automator_,
-        address dopplerLocker_,
-        address transferLocker_,
         bytes32 leagueId_,
         uint16 baseYear_
     ) external initializer {
         if (expectedWorkflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
-        if (
-            ppmVerifier_ == address(0) || playerSetRegistry_ == address(0) || tournamentRegistry_ == address(0)
-                || automator_ == address(0) || dopplerLocker_ == address(0) || transferLocker_ == address(0)
-        ) {
-            revert Errors.ZeroAddress();
-        }
         if (leagueId_ == bytes32(0) || baseYear_ == 0) revert Errors.ZeroId();
+
+        address constitutionalTimelock_ = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Keys.DAO));
+        address forwarder_ = _getAddress(_addressKey(Keys.CRE_FORWARDER));
+        address playerSetRegistry_ = _getAddress(_addressKey(Keys.PLAYER_SET_REGISTRY));
+        address tournamentRegistry_ = _getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY));
+        address ppmVerifier_ = _getAddress(_addressKey(Keys.PPM_VERIFIER));
+        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
+        address dopplerLocker_ = _getAddress(_addressKey(Keys.DOPPLER_LOCKER));
+        address transferLocker_ = _getAddress(_addressKey(Keys.TRANSFER_LOCKER));
 
         __EligibilityCriteria_init(constitutionalTimelock_, dao_);
         __CreReceiver_init(forwarder_);

@@ -4,6 +4,8 @@ pragma solidity ^0.8.34;
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
 import { FeeRouter } from "@markets/FeeRouter.sol";
@@ -13,10 +15,11 @@ import { FeeRouter } from "@markets/FeeRouter.sol";
  * @notice Deploys per-market `BeaconProxy` FeeRouters sharing one `UpgradeableBeacon`.
  * @dev Beacon ownership (logic upgrades) is assigned to `ConstitutionalTimelock`. Each `create`
  *      call deploys a thin proxy with player-specific storage via `FeeRouter.initialize`.
+ *      Protocol addresses are resolved once from `AddressProvider` in the factory constructor.
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract FeeRouterFactory {
+contract FeeRouterFactory is AddressBook {
     /// @notice Shared beacon; upgrade to change logic for every market FeeRouter
     UpgradeableBeacon public immutable beacon;
 
@@ -33,31 +36,16 @@ contract FeeRouterFactory {
     address public immutable dao;
 
     /**
-     * @param automator_ `Automator` — cat-3 on each FeeRouter.
-     * @param maintenanceTimelock_ `MaintenanceTimelock` — cat-2 on each FeeRouter.
-     * @param constitutionalTimelock_ `ConstitutionalTimelock` — cat-1 + beacon owner.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE` on each FeeRouter.
-     * @param tournamentRegistry_ TournamentRegistry baked into the FeeRouter implementation.
+     * @param addressProvider_ Canonical `AddressProvider` — resolves governance + registry deps.
      */
-    constructor(
-        address automator_,
-        address maintenanceTimelock_,
-        address constitutionalTimelock_,
-        address dao_,
-        address tournamentRegistry_
-    ) {
-        if (
-            automator_ == address(0) || maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0)
-                || dao_ == address(0) || tournamentRegistry_ == address(0)
-        ) revert Errors.ZeroAddress();
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
+        automator = _getAddress(_addressKey(Keys.AUTOMATOR));
+        maintenanceTimelock = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
+        constitutionalTimelock = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
+        dao = _getAddress(_addressKey(Keys.DAO));
 
-        automator = automator_;
-        maintenanceTimelock = maintenanceTimelock_;
-        constitutionalTimelock = constitutionalTimelock_;
-        dao = dao_;
-
-        address impl = address(new FeeRouter(tournamentRegistry_));
-        beacon = new UpgradeableBeacon(impl, constitutionalTimelock_);
+        address impl = address(new FeeRouter(addressProvider_));
+        beacon = new UpgradeableBeacon(impl, constitutionalTimelock);
     }
 
     /**
@@ -70,10 +58,7 @@ contract FeeRouterFactory {
     function create(bytes32 playerId, address atFunding, address pbrFeeHub) external returns (address feeRouter) {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
 
-        bytes memory initData = abi.encodeCall(
-            FeeRouter.initialize,
-            (automator, maintenanceTimelock, constitutionalTimelock, dao, playerId, atFunding, pbrFeeHub)
-        );
+        bytes memory initData = abi.encodeCall(FeeRouter.initialize, (playerId, atFunding, pbrFeeHub));
 
         feeRouter = address(new BeaconProxy(address(beacon), initData));
 

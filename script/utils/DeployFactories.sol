@@ -15,8 +15,9 @@ import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 /**
  * @title DeployFactories
  * @notice Market + vault beacon factories; wires `DeployTournament.configureFactories`.
- * @dev Requires Core addresses via env. `configureFactories` is cat-1 on DeployTournament —
- *      when `dao == deployer`, temporarily grant the deployer `CATEGORY_ONE` to call it.
+ * @dev Requires Core addresses via env. Factories resolve deps from `ADDRESS_PROVIDER`.
+ *      `configureFactories` is cat-1 on DeployTournament — when `dao == deployer`, temporarily
+ *      grant the deployer `CATEGORY_ONE` to call it.
  */
 abstract contract DeployFactories is Script {
     struct FactoryDeployment {
@@ -28,59 +29,25 @@ abstract contract DeployFactories is Script {
 
     struct CoreAddresses {
         address dao;
-        address constitutionalTimelock;
-        address maintenanceTimelock;
-        address automator;
+        address addressProvider;
         address deployTournament;
-        address tournamentRegistry;
-        address playerSetRegistry;
     }
 
     function _loadCoreAddresses() internal view returns (CoreAddresses memory c) {
         c.dao = vm.envAddress("DAO_ADDRESS");
-        c.constitutionalTimelock = vm.envAddress("CONSTITUTIONAL_TIMELOCK");
-        c.maintenanceTimelock = vm.envAddress("MAINTENANCE_TIMELOCK");
-        c.automator = vm.envAddress("AUTOMATOR");
+        c.addressProvider = vm.envAddress("ADDRESS_PROVIDER");
         c.deployTournament = vm.envAddress("DEPLOY_TOURNAMENT");
-        c.tournamentRegistry = vm.envAddress("TOURNAMENT_REGISTRY");
-        c.playerSetRegistry = vm.envAddress("PLAYER_SET_REGISTRY");
     }
 
     function _deployFactories(address deployer) internal returns (FactoryDeployment memory f) {
         CoreAddresses memory c = _loadCoreAddresses();
         if (deployer == address(0)) revert("deployer required");
+        if (c.addressProvider == address(0)) revert("ADDRESS_PROVIDER required");
 
-        f.feeRouterFactory = address(
-            new FeeRouterFactory(
-                c.automator, c.maintenanceTimelock, c.constitutionalTimelock, c.dao, c.tournamentRegistry
-            )
-        );
-
-        f.playerVaultFactory = address(
-            new PlayerVaultFactory(
-                c.automator,
-                c.maintenanceTimelock,
-                c.dao,
-                c.constitutionalTimelock,
-                c.tournamentRegistry,
-                c.playerSetRegistry
-            )
-        );
-
-        f.pbrTreasuryFactory = address(
-            new PbrTreasuryFactory(
-                c.automator,
-                c.maintenanceTimelock,
-                c.constitutionalTimelock,
-                c.dao,
-                c.deployTournament,
-                c.tournamentRegistry,
-                c.playerSetRegistry
-            )
-        );
-
-        f.pbrFeeHubFactory =
-            address(new PbrFeeHubFactory(c.maintenanceTimelock, c.constitutionalTimelock, c.dao, c.deployTournament));
+        f.feeRouterFactory = address(new FeeRouterFactory(c.addressProvider));
+        f.playerVaultFactory = address(new PlayerVaultFactory(c.addressProvider));
+        f.pbrTreasuryFactory = address(new PbrTreasuryFactory(c.addressProvider));
+        f.pbrFeeHubFactory = address(new PbrFeeHubFactory(c.addressProvider));
 
         if (deployer == c.dao) {
             // configureFactories is onlyRole(CATEGORY_ONE); constitutional delay blocks timelock path here.

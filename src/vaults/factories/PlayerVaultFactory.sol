@@ -5,6 +5,8 @@ import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
 import { ICreateX } from "@createx/ICreateX.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { CreateXAddresses } from "@base/global/libraries/addresses/CreateX.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
@@ -19,11 +21,12 @@ import { StakedToken } from "@vaults/StakedToken.sol";
  *      vanity prefixes (e.g. `0x42…` vault / stToken) can be mined offline against `computeCreate3Address`.
  *      Prefer permissioned salts: `address(this) || 0x00 || entropy11` via `makeSalt`.
  *      `create` is restricted to `automator` to prevent salt sniping.
+ *      Protocol addresses are resolved once from `AddressProvider` in the factory constructor.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerVaultFactory {
+contract PlayerVaultFactory is AddressBook {
     ICreateX public constant CREATE_X = ICreateX(CreateXAddresses.CREATE_X);
 
     UpgradeableBeacon public immutable beacon;
@@ -43,27 +46,17 @@ contract PlayerVaultFactory {
     address public immutable tournamentRegistry;
     address public immutable playerSetRegistry;
 
-    constructor(
-        address automator_,
-        address maintenanceTimelock_,
-        address dao_,
-        address constitutionalTimelock_,
-        address tournamentRegistry_,
-        address playerSetRegistry_
-    ) {
-        if (
-            automator_ == address(0) || maintenanceTimelock_ == address(0) || dao_ == address(0)
-                || constitutionalTimelock_ == address(0) || tournamentRegistry_ == address(0)
-                || playerSetRegistry_ == address(0)
-        ) revert Errors.ZeroAddress();
-
-        automator = automator_;
-        maintenanceTimelock = maintenanceTimelock_;
-        dao = dao_;
-        constitutionalTimelock = constitutionalTimelock_;
-        tournamentRegistry = tournamentRegistry_;
-        playerSetRegistry = playerSetRegistry_;
-        beacon = new UpgradeableBeacon(address(new PlayerVault()), constitutionalTimelock_);
+    /**
+     * @param addressProvider_ Canonical `AddressProvider` — resolves governance + registry deps.
+     */
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
+        automator = _getAddress(_addressKey(Keys.AUTOMATOR));
+        maintenanceTimelock = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
+        dao = _getAddress(_addressKey(Keys.DAO));
+        constitutionalTimelock = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
+        tournamentRegistry = _getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY));
+        playerSetRegistry = _getAddress(_addressKey(Keys.PLAYER_SET_REGISTRY));
+        beacon = new UpgradeableBeacon(address(new PlayerVault(addressProvider_)), constitutionalTimelock);
     }
 
     /**
@@ -103,17 +96,7 @@ contract PlayerVaultFactory {
         stToken = CREATE_X.deployCreate3(stTokenSalt, stInitCode);
         if (stToken != expectedStToken) revert Errors.AddressMismatch(stToken, expectedStToken);
 
-        PlayerVault(playerVault)
-            .initialize(
-                automator,
-                maintenanceTimelock,
-                dao,
-                tournamentRegistry,
-                playerSetRegistry,
-                playerId,
-                playerToken,
-                stToken
-            );
+        PlayerVault(playerVault).initialize(playerId, playerToken, stToken);
 
         emit Events.PlayerVaultCreated(playerId, playerVault, stToken);
     }

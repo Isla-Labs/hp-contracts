@@ -4,6 +4,8 @@ pragma solidity ^0.8.34;
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
@@ -31,7 +33,7 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
+contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayerSetRegistry {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -66,19 +68,17 @@ contract PlayerSetRegistry is Initializable, AccessControl, IPlayerSetRegistry {
     //  Initialization
     // --------------------------------------------
 
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address tournamentRegistry_) {
-        if (tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
-        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
+        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY)));
         _disableInitializers();
     }
 
-    /**
-     * @param automator_ `Automator` — `CATEGORY_THREE`.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
-     */
-    function initialize(address automator_, address dao_) external initializer {
-        if (automator_ == address(0) || dao_ == address(0)) revert Errors.ZeroAddress();
+    /// @notice Resolves DAO / Automator from `AddressProvider` once into roles.
+    function initialize() external initializer {
+        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
+        address dao_ = _getAddress(_addressKey(Keys.DAO));
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
         _grantRole(Roles.CATEGORY_THREE, automator_);

@@ -1,0 +1,197 @@
+// SPDX-License-Identifier: AGPL-3.0
+pragma solidity ^0.8.34;
+
+import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { EnumerableSet } from "@openzeppelin/utils/structs/EnumerableSet.sol";
+
+import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
+
+/// @title HighPotential Address Provider
+/// @notice Dynamic registry: each logical slot is a `bytes32` key; string names use `keccak256(bytes(name))`.
+/// @dev Enumeration tracks keys with a non-zero address. Mutations are role-gated; `version` increments per mutation.
+contract AddressProvider is AccessControl {
+    using EnumerableSet for EnumerableSet.Bytes32Set;
+
+    // --------------------------------------------
+    //  Configuration
+    // --------------------------------------------
+
+    EnumerableSet.Bytes32Set private _keys;
+    mapping(bytes32 key => address) private _addr;
+    mapping(bytes32 key => string) private _label;
+
+    // --------------------------------------------
+    //  Events and Errors
+    // --------------------------------------------
+
+    event AddressSet(uint256 indexed version, bytes32 indexed key, string name, address previous, address current);
+
+    error ZeroDefaultAdmin();
+    error ZeroKey();
+    error EmptyName();
+    error NameKeyMismatch();
+    error AddressAlreadyBound(bytes32 key, address current);
+    error ZeroAddress();
+
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
+
+    constructor(address dao_, address constitutionalTimelock_) {
+        if (dao_ == address(0)) revert ZeroDefaultAdmin();
+        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
+        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
+    }
+
+    // --------------------------------------------
+    //  Internal
+    // --------------------------------------------
+
+    function _set(bytes32 key, address addr, string memory name) private {
+        address prev = _addr[key];
+        if (addr == address(0)) {
+            if (prev == address(0)) return;
+            _addr[key] = address(0);
+            _keys.remove(key);
+            delete _label[key];
+            return;
+        }
+
+        if (prev == address(0)) {
+            _keys.add(key);
+        }
+
+        _addr[key] = addr;
+        if (bytes(name).length != 0) {
+            _label[key] = name;
+        }
+
+    }
+
+    // --------------------------------------------
+    //  Interactions
+    // --------------------------------------------
+
+    /// @notice Upsert by human-readable `name`. Storage key is `keccak256(bytes(name))`.
+    function setName(string calldata name, address addr) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (bytes(name).length == 0) revert EmptyName();
+
+        bytes32 key = keccak256(bytes(name));
+
+        _set(key, addr, name);
+    }
+
+    /// @notice Upsert by raw key. Non-empty `name` must satisfy `keccak256(bytes(name)) == key`; use "" to keep the existing label.
+    function setKey(bytes32 key, address addr, string calldata name) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (key == bytes32(0)) revert ZeroKey();
+        if (bytes(name).length != 0) {
+            if (keccak256(bytes(name)) != key) revert NameKeyMismatch();
+        }
+
+        string memory label_ = name;
+        if (bytes(name).length == 0) {
+            label_ = _label[key];
+        }
+
+        _set(key, addr, label_);
+    }
+
+    /// @notice First-write only: reverts if `key` already holds a non-zero address.
+    function registerName(string calldata name, address addr) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (bytes(name).length == 0) revert EmptyName();
+        if (addr == address(0)) return;
+
+        bytes32 key = keccak256(bytes(name));
+        address cur = _addr[key];
+        if (cur != address(0)) revert AddressAlreadyBound(key, cur);
+
+        _set(key, addr, name);
+    }
+
+    /// @notice First-write only for raw keys.
+    function registerKey(bytes32 key, address addr, string calldata name) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (key == bytes32(0)) revert ZeroKey();
+        if (addr == address(0)) return;
+        if (bytes(name).length != 0 && keccak256(bytes(name)) != key) revert NameKeyMismatch();
+
+        address cur = _addr[key];
+        if (cur != address(0)) revert AddressAlreadyBound(key, cur);
+
+        string memory label_ = name;
+        if (bytes(name).length == 0) {
+            label_ = _label[key];
+        }
+
+        _set(key, addr, label_);
+    }
+
+    // --------------------------------------------
+    //  External
+    // --------------------------------------------
+
+    function get(bytes32 key) external view returns (address) {
+        return _addr[key];
+    }
+
+    function getByName(string calldata name) external view returns (address) {
+        return _addr[keccak256(bytes(name))];
+    }
+
+    /// @notice Batch read by key; unset slots return `address(0)` (same semantics as `get`).
+    function getMany(bytes32[] calldata keyList) external view returns (address[] memory addrs) {
+        uint256 len = keyList.length;
+        addrs = new address[](len);
+        for (uint256 i; i < len; ) {
+            addrs[i] = _addr[keyList[i]];
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @notice Batch read by registered name; empty `names[i]` reverts with `EmptyName`.
+    function getManyByName(string[] calldata names) external view returns (address[] memory addrs) {
+        uint256 len = names.length;
+        addrs = new address[](len);
+        for (uint256 i; i < len; ) {
+            if (bytes(names[i]).length == 0) revert EmptyName();
+            addrs[i] = _addr[keccak256(bytes(names[i]))];
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function label(bytes32 key) external view returns (string memory) {
+        return _label[key];
+    }
+
+    function keyCount() external view returns (uint256) {
+        return _keys.length();
+    }
+
+    function keyAt(uint256 index) external view returns (bytes32) {
+        return _keys.at(index);
+    }
+
+    function keys() external view returns (bytes32[] memory) {
+        return _keys.values();
+    }
+
+    /// @notice `AddressProvider` name key: `keccak256(bytes(name))` (matches `getByName`)
+    function addressKey(string memory name) external pure returns (bytes32 key) {
+        key = _addressKey(name);
+    }
+
+    /// @notice `AddressProvider` name key: `keccak256(bytes(name))` (matches `getByName`)
+    function _addressKey(string memory name) internal pure returns (bytes32 key) {
+        key = keccak256(bytes(name));
+    }
+
+    /// @notice Resolves `address` via `AddressProvider`; reverts if missing or zero
+    function getAddress(string memory name) external view returns (address) {
+        address returnAddress = _addr[_addressKey(name)];
+        if (returnAddress == address(0)) revert ZeroAddress();
+        return returnAddress;
+    }
+}

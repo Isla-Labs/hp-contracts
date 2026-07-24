@@ -6,7 +6,7 @@ pragma solidity ^0.8.34;
  * @notice Cross-contract surface for per-tournament `PbrTreasury` CREATE3 deploys.
  */
 interface IPbrTreasuryFactory {
-    function deployTournament() external view returns (address);
+    function createTournament() external view returns (address);
 
     function create(
         bytes32 tournamentId,

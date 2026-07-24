@@ -43,7 +43,7 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
  *
  *      Deploy order (addresses):
  *        1. Deploy this contract (factories unset)
- *        2. Deploy `PbrTreasuryFactory` / `PbrFeeHubFactory` with `deployTournament = this`
+ *        2. Deploy `PbrTreasuryFactory` / `PbrFeeHubFactory` with `CREATE_TOURNAMENT = this`
  *        3. Timelock calls `configureFactories` once
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
@@ -149,7 +149,7 @@ contract DeployTournament is AccessControl {
     }
 
     /**
-     * @notice One-shot factory wiring after factories are deployed with `deployTournament = this`.
+     * @notice One-shot factory wiring after factories are deployed with `CREATE_TOURNAMENT = this`.
      */
     function configureFactories(
         address pbrTreasuryFactory_,
@@ -158,8 +158,8 @@ contract DeployTournament is AccessControl {
         if (factoriesConfigured) revert Errors.Unauthorized();
         if (pbrTreasuryFactory_ == address(0) || pbrFeeHubFactory_ == address(0)) revert Errors.ZeroAddress();
         if (
-            IPbrTreasuryFactory(pbrTreasuryFactory_).deployTournament() != address(this)
-                || IPbrFeeHubFactory(pbrFeeHubFactory_).deployTournament() != address(this)
+            IPbrTreasuryFactory(pbrTreasuryFactory_).createTournament() != address(this)
+                || IPbrFeeHubFactory(pbrFeeHubFactory_).createTournament() != address(this)
         ) {
             revert Errors.Unauthorized();
         }

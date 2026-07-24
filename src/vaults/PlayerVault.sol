@@ -8,6 +8,8 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
@@ -30,7 +32,7 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard {
+contract PlayerVault is Initializable, AddressBook, AccessControl, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // --------------------------------------------
@@ -77,34 +79,27 @@ contract PlayerVault is Initializable, AccessControl, Pausable, ReentrancyGuard 
     //  Initialization
     // --------------------------------------------
 
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
         _disableInitializers();
     }
 
     /**
-     * @param automator_ `Automator` — `CATEGORY_THREE`.
-     * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE` (pause / role admin).
+     * @notice Resolves governance + registries from `AddressProvider` once; market ids stay explicit.
+     * @param playerId_ Player identity associated with this vault.
+     * @param playerToken_ Underlying player ERC20.
+     * @param stToken_ Bound staked-token share receipt.
      */
-    function initialize(
-        address automator_,
-        address maintenanceTimelock_,
-        address dao_,
-        address tournamentRegistry_,
-        address playerSetRegistry_,
-        bytes32 playerId_,
-        address playerToken_,
-        address stToken_
-    ) external initializer {
-        if (
-            automator_ == address(0) || maintenanceTimelock_ == address(0) || dao_ == address(0)
-                || tournamentRegistry_ == address(0) || playerSetRegistry_ == address(0) || playerToken_ == address(0)
-                || stToken_ == address(0)
-        ) {
-            revert Errors.ZeroAddress();
-        }
+    function initialize(bytes32 playerId_, address playerToken_, address stToken_) external initializer {
+        if (playerToken_ == address(0) || stToken_ == address(0)) revert Errors.ZeroAddress();
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
+
+        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
+        address maintenanceTimelock_ = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Keys.DAO));
+        address tournamentRegistry_ = _getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY));
+        address playerSetRegistry_ = _getAddress(_addressKey(Keys.PLAYER_SET_REGISTRY));
 
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);

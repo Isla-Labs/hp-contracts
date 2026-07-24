@@ -4,6 +4,8 @@ pragma solidity ^0.8.34;
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
@@ -31,7 +33,7 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry {
+contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITournamentRegistry {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -69,29 +71,18 @@ contract TournamentRegistry is Initializable, AccessControl, ITournamentRegistry
     //  Initialization
     // --------------------------------------------
 
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
         _disableInitializers();
     }
 
-    /**
-     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE`.
-     * @param automator_ `Automator` — `CATEGORY_THREE`.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
-     * @param playerSetRegistry_ Canonical player set (vault → playerId checks).
-     */
-    function initialize(
-        address constitutionalTimelock_,
-        address automator_,
-        address dao_,
-        address playerSetRegistry_
-    ) external initializer {
-        if (
-            constitutionalTimelock_ == address(0) || automator_ == address(0) || dao_ == address(0)
-                || playerSetRegistry_ == address(0)
-        ) {
-            revert Errors.ZeroAddress();
-        }
+    /// @notice Resolves DAO / cat-1 / Automator / `PlayerSetRegistry` from `AddressProvider` once.
+    function initialize() external initializer {
+        address constitutionalTimelock_ = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
+        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
+        address dao_ = _getAddress(_addressKey(Keys.DAO));
+        address playerSetRegistry_ = _getAddress(_addressKey(Keys.PLAYER_SET_REGISTRY));
 
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);

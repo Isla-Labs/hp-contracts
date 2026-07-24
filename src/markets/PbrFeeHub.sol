@@ -5,6 +5,8 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
@@ -35,7 +37,7 @@ import { TournamentType } from "@types/TournamentTypes.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
+contract PbrFeeHub is Initializable, AddressBook, AccessControl, ReentrancyGuard {
     uint16 public constant BPS_DENOMINATOR = 10_000;
 
     // --------------------------------------------
@@ -75,39 +77,32 @@ contract PbrFeeHub is Initializable, AccessControl, ReentrancyGuard {
     //  Initialization
     // --------------------------------------------
 
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
         _disableInitializers();
     }
 
     /**
-     * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
-     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE`.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
-     * @param deployTournament_ `DeployTournament` — `CATEGORY_ONE` (destination wiring).
+     * @notice Resolves governance roles from `AddressProvider` once; league wiring stays explicit.
      * @param leagueId_ Domestic league this hub serves.
      * @param leagueTreasury_ Primary domestic league `PbrTreasury`.
      */
-    function initialize(
-        address maintenanceTimelock_,
-        address constitutionalTimelock_,
-        address dao_,
-        address deployTournament_,
-        bytes32 leagueId_,
-        address leagueTreasury_
-    ) external initializer {
-        if (
-            maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0) || dao_ == address(0)
-                || deployTournament_ == address(0) || leagueTreasury_ == address(0)
-        ) revert Errors.ZeroAddress();
+    function initialize(bytes32 leagueId_, address leagueTreasury_) external initializer {
+        if (leagueTreasury_ == address(0)) revert Errors.ZeroAddress();
         if (leagueId_ == bytes32(0)) revert Errors.ZeroId();
+
+        address maintenanceTimelock_ = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
+        address constitutionalTimelock_ = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Keys.DAO));
+        address createTournament_ = _getAddress(_addressKey(Keys.CREATE_TOURNAMENT));
 
         leagueId = leagueId_;
         leagueTreasury = leagueTreasury_;
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
         _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
         _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
-        _grantRole(Roles.CATEGORY_ONE, deployTournament_);
+        _grantRole(Roles.CATEGORY_ONE, createTournament_);
 
         domesticBps = 9000;
         continentalBps = 900;

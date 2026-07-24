@@ -6,6 +6,8 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
@@ -34,7 +36,7 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreasury {
+contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGuard, IPbrTreasury {
     // --------------------------------------------
     //  Internal Constants
     // --------------------------------------------
@@ -86,38 +88,27 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
     //  Initialization
     // --------------------------------------------
 
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address tournamentRegistry_, address playerSetRegistry_) {
-        if (tournamentRegistry_ == address(0) || playerSetRegistry_ == address(0)) revert Errors.ZeroAddress();
-        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
-        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
+        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY)));
+        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Keys.PLAYER_SET_REGISTRY)));
         _disableInitializers();
     }
 
     /**
-     * @param automator_ `Automator` — `CATEGORY_THREE`.
-     * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
-     * @param deployTournament_ `DeployTournament` — `CATEGORY_THREE` (bootstrap vault registration).
+     * @notice Resolves governance roles from `AddressProvider` once; tournament ids stay explicit.
      * @param tournamentId_ Sole tournament this treasury serves.
      * @param initialSeason_ Starting season (e.g. 2025).
      */
-    function initialize(
-        address automator_,
-        address maintenanceTimelock_,
-        address dao_,
-        address deployTournament_,
-        bytes32 tournamentId_,
-        uint16 initialSeason_
-    ) external initializer {
-        if (
-            automator_ == address(0) || maintenanceTimelock_ == address(0) || dao_ == address(0)
-                || deployTournament_ == address(0)
-        ) {
-            revert Errors.ZeroAddress();
-        }
+    function initialize(bytes32 tournamentId_, uint16 initialSeason_) external initializer {
         if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
         if (initialSeason_ == 0) revert Errors.ZeroSeason();
+
+        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
+        address maintenanceTimelock_ = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Keys.DAO));
+        address createTournament_ = _getAddress(_addressKey(Keys.CREATE_TOURNAMENT));
 
         tournamentId = tournamentId_;
         seasonId = initialSeason_;
@@ -125,7 +116,7 @@ contract PbrTreasury is Initializable, AccessControl, ReentrancyGuard, IPbrTreas
         tradingRound = 1;
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, deployTournament_);
+        _grantRole(Roles.CATEGORY_ONE, createTournament_);
         _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
         _grantRole(Roles.CATEGORY_THREE, automator_);
     }

@@ -5,10 +5,12 @@ import { console2 as console } from "forge-std/console2.sol";
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 
 import { InitGuard } from "@base/abstract/InitGuard.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 
 import { DopplerLocker } from "@governance/deployments/assets/deploy/DopplerLocker.sol";
 
+import { AddressProvider } from "@src/AddressProvider.sol";
 import { EligibilityVerifier } from "@data/eligibility/EligibilityVerifier.sol";
 import { FixtureCommitment } from "@data/matchweeks/FixtureCommitment.sol";
 import { RoundManager } from "@data/matchweeks/RoundManager.sol";
@@ -19,7 +21,7 @@ import { ProxyUtils } from "./ProxyUtils.sol";
  * @title DeployData
  * @notice CRE data plane: EligibilityVerifier, FixtureCommitment, RoundManager.
  * @dev PBR (`PpmVerifier` / `StatsCommitment`) are stubs — a reserved InitGuard address is
- *      passed as `ppmVerifier` so EV can initialize; upgrade that slot when PBR ships.
+ *      registered as `PPM_VERIFIER` so EV can initialize; upgrade that slot when PBR ships.
  *
  *      Wiring:
  *        - Lockers already have `setAutomator` from DeployCore
@@ -42,6 +44,7 @@ abstract contract DeployData is ProxyUtils {
     struct DataConfig {
         address dao;
         address deployer;
+        address addressProvider;
         address constitutionalTimelock;
         address automator;
         address transferLocker;
@@ -60,6 +63,7 @@ abstract contract DeployData is ProxyUtils {
     function _loadDataConfig(address deployer) internal view returns (DataConfig memory c) {
         c.dao = vm.envAddress("DAO_ADDRESS");
         c.deployer = deployer;
+        c.addressProvider = vm.envAddress("ADDRESS_PROVIDER");
         c.constitutionalTimelock = vm.envAddress("CONSTITUTIONAL_TIMELOCK");
         c.automator = vm.envAddress("AUTOMATOR");
         c.transferLocker = vm.envAddress("TRANSFER_LOCKER");
@@ -82,14 +86,19 @@ abstract contract DeployData is ProxyUtils {
         if (c.baseYear == 0) revert("BASE_YEAR required");
         if (c.forwarder == address(0)) revert("KEYSTONE_FORWARDER required");
         if (c.eligibilityVerifier == address(0)) revert("ELIGIBILITY_VERIFIER required");
+        if (c.addressProvider == address(0)) revert("ADDRESS_PROVIDER required");
 
         InitGuard guard = InitGuard(payable(c.initGuard));
+        AddressProvider ap = AddressProvider(c.addressProvider);
 
         d.eligibilityVerifier = c.eligibilityVerifier;
         d.fixtureCommitment = _deployInitGuardProxy(guard, deployer);
         d.roundManager = _deployInitGuardProxy(guard, deployer);
         // Sticky address for future PpmVerifier upgrade (stubs under data/pbr/ today).
         d.ppmVerifierPlaceholder = _deployInitGuardProxy(guard, deployer);
+
+        ap.setName(Keys.CRE_FORWARDER, c.forwarder);
+        ap.setName(Keys.PPM_VERIFIER, d.ppmVerifierPlaceholder);
 
         d.fixtureCommitmentImpl = address(new FixtureCommitment());
         _upgradeAndCall(
@@ -103,27 +112,11 @@ abstract contract DeployData is ProxyUtils {
             d.roundManager, d.roundManagerImpl, abi.encodeCall(RoundManager.initialize, (c.automator, c.dao))
         );
 
-        d.eligibilityVerifierImpl = address(new EligibilityVerifier(c.cooldown));
+        d.eligibilityVerifierImpl = address(new EligibilityVerifier(c.addressProvider, c.cooldown));
         _upgradeAndCall(
             d.eligibilityVerifier,
             d.eligibilityVerifierImpl,
-            abi.encodeCall(
-                EligibilityVerifier.initialize,
-                (
-                    c.constitutionalTimelock,
-                    c.dao,
-                    c.forwarder,
-                    c.workflowId,
-                    c.playerSetRegistry,
-                    c.tournamentRegistry,
-                    d.ppmVerifierPlaceholder,
-                    c.automator,
-                    c.dopplerLocker,
-                    c.transferLocker,
-                    c.leagueId,
-                    c.baseYear
-                )
-            )
+            abi.encodeCall(EligibilityVerifier.initialize, (c.workflowId, c.leagueId, c.baseYear))
         );
 
         // Metadata oracle for DopplerLocker enqueue (writer is Automator).

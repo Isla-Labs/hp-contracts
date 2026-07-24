@@ -7,6 +7,8 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
@@ -43,7 +45,7 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
+contract FeeRouter is Initializable, AddressBook, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Registry used to enumerate domestic PBR fee hubs when unsupported
@@ -61,37 +63,27 @@ contract FeeRouter is Initializable, AccessControl, ReentrancyGuard {
     /// @notice Minimum ETH balance before auto-relay on `receive` (default 0.0001 ether at init)
     uint256 public minRelay;
 
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address tournamentRegistry_) {
-        if (tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
-        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
+        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Keys.TOURNAMENT_REGISTRY)));
         _disableInitializers();
     }
 
     /**
      * @notice Initializes per-market proxy storage. Called once via BeaconProxy constructor data.
-     * @param automator_ `Automator` — `CATEGORY_THREE`.
-     * @param maintenanceTimelock_ `MaintenanceTimelock` — `CATEGORY_TWO`.
-     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE`.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
+     * @dev Resolves Automator / timelocks / DAO from `AddressProvider` once into roles.
      * @param playerId_ Player identity associated with this FeeRouter.
      * @param atFunding_ Optional ATFunding for the 11% FR share (zero = all fees via PBR).
      * @param pbrFeeHub_ Initial league `PbrFeeHub` (zero = unsupported / OOF even-split).
      */
-    function initialize(
-        address automator_,
-        address maintenanceTimelock_,
-        address constitutionalTimelock_,
-        address dao_,
-        bytes32 playerId_,
-        address atFunding_,
-        address pbrFeeHub_
-    ) external initializer {
+    function initialize(bytes32 playerId_, address atFunding_, address pbrFeeHub_) external initializer {
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
-        if (
-            automator_ == address(0) || maintenanceTimelock_ == address(0) || constitutionalTimelock_ == address(0)
-                || dao_ == address(0)
-        ) revert Errors.ZeroAddress();
+
+        address automator_ = _getAddress(_addressKey(Keys.AUTOMATOR));
+        address maintenanceTimelock_ = _getAddress(_addressKey(Keys.MAINTENANCE_TIMELOCK));
+        address constitutionalTimelock_ = _getAddress(_addressKey(Keys.CONSTITUTIONAL_TIMELOCK));
+        address dao_ = _getAddress(_addressKey(Keys.DAO));
 
         playerId = playerId_;
         minRelay = 0.0001 ether;

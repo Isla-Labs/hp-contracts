@@ -14,6 +14,7 @@ library AddressKeys {
     // Registries
     string internal constant TOURNAMENT_REGISTRY = "TOURNAMENT_REGISTRY";
     string internal constant PLAYER_SET_REGISTRY = "PLAYER_SET_REGISTRY";
+    string internal constant REFERRAL_REGISTRY = "REFERRAL_REGISTRY";
 
     // Lockers / data
     string internal constant DOPPLER_LOCKER = "DOPPLER_LOCKER";

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 
@@ -11,22 +10,34 @@ import { SETH } from "@stabilityeth/SETH.sol";
 
 /**
  * @title Minter
- * @notice Optional app router over immutable SETH: attribute mint volume for PBR.
+ * @notice Optional immutable app router over SETH: attribute mint volume for PBR.
  * @dev Deposit: `SETH.deposit` (mints to this) → transfer SETH to user → `recordMint`.
  *      Withdraw: pull SETH from user → `SETH.withdraw` → forward ETH → `recordBurn`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract Minter is Initializable {
+contract Minter {
     using SafeERC20 for IERC20;
 
-    SETH public seth;
-    bytes32 public appId;
-    IAppRegistry public registry;
+    // --------------------------------------------
+    //  Immutables
+    // --------------------------------------------
+
+    SETH public immutable seth;
+    bytes32 public immutable appId;
+    IAppRegistry public immutable registry;
+
+    // --------------------------------------------
+    //  State
+    // --------------------------------------------
 
     /// @notice Cumulative SETH minted through this minter (mirrors `AppRegistry.totalMinted`)
     uint256 public totalMinted;
+
+    // --------------------------------------------
+    //  Events & Errors
+    // --------------------------------------------
 
     event Minted(address indexed user, uint256 ethIn, uint256 sethAmount);
     event Burned(address indexed user, uint256 sethAmount, uint256 ethOut);
@@ -39,23 +50,30 @@ contract Minter is Initializable {
     error TreasuryNotSet();
     error EthTransferFailed();
 
+    // --------------------------------------------
+    //  Access Control
+    // --------------------------------------------
+
     modifier onlyBeneficiary() {
         if (!registry.isBeneficiary(appId, msg.sender)) revert NotBeneficiary();
         _;
     }
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
-    }
+    // --------------------------------------------
+    //  Construction
+    // --------------------------------------------
 
-    function initialize(address seth_, bytes32 appId_, address registry_) external initializer {
+    constructor(address seth_, bytes32 appId_, address registry_) {
         if (seth_ == address(0) || registry_ == address(0)) revert ZeroAddress();
         if (appId_ == bytes32(0)) revert ZeroAppId();
         seth = SETH(payable(seth_));
         appId = appId_;
         registry = IAppRegistry(registry_);
     }
+
+    // --------------------------------------------
+    //  (Relay) Deposit / Withdraw
+    // --------------------------------------------
 
     receive() external payable {
         // ETH from SETH.withdraw is handled by `withdraw`; other ETH is a deposit.
@@ -101,6 +119,10 @@ contract Minter is Initializable {
 
         emit Burned(msg.sender, amountToBurn, ethOut);
     }
+
+    // --------------------------------------------
+    //  Claim PBR for Registered App
+    // --------------------------------------------
 
     function claim(
         uint64 epochId

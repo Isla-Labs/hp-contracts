@@ -14,6 +14,10 @@ import { ERC20 } from "@openzeppelin/token/ERC20/ERC20.sol";
  * @custom:security-contact security@islalabs.co
  */
 contract SETH is ERC20 {
+    // --------------------------------------------
+    //  State Variables
+    // --------------------------------------------
+
     /// @notice 100 SETH per 1 ETH
     uint256 public constant EXCHANGE_RATE = 100;
 
@@ -28,6 +32,10 @@ contract SETH is ERC20 {
     /// @notice Immutable PBR treasury that may `collectFees` (set at deploy)
     address public immutable feeCollector;
 
+    // --------------------------------------------
+    //  Events & Errors
+    // --------------------------------------------
+
     event Deposit(address indexed dst, uint256 ethAmount, uint256 sethAmount, uint256 fee);
     event Withdrawal(address indexed src, uint256 sethAmount, uint256 ethAmount, uint256 fee);
     event FeesCollected(address indexed to, uint256 amount);
@@ -36,6 +44,10 @@ contract SETH is ERC20 {
     error EthTransferFailed();
     error NotFeeCollector();
     error ZeroAddress();
+
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
 
     /**
      * @param feeCollector_ PBRTreasury (or proxy) address — immutable fee sink authority.
@@ -46,6 +58,10 @@ contract SETH is ERC20 {
         if (feeCollector_ == address(0)) revert ZeroAddress();
         feeCollector = feeCollector_;
     }
+
+    // --------------------------------------------
+    //  Deposit / Withdraw
+    // --------------------------------------------
 
     /// @notice Bare ETH transfers route into `deposit()`
     receive() external payable {
@@ -71,6 +87,10 @@ contract SETH is ERC20 {
     ) external returns (uint256 ethOut) {
         ethOut = _burnWithFee(msg.sender, msg.sender, sethAmount);
     }
+
+    // --------------------------------------------
+    //  PBR Routing for dApps
+    // --------------------------------------------
 
     /**
      * @notice Moves ringfenced fees to `to` for PBR distribution.

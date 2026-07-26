@@ -6,6 +6,19 @@ import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { MinterFactory } from "@stabilityeth/base/factories/MinterFactory.sol";
 import { SETH } from "@stabilityeth/SETH.sol";
 
+struct Beneficiary {
+    address account;
+    uint16 shareBps;
+}
+
+struct App {
+    address rootDeployer;
+    address minter;
+    address[] tvlContracts;
+    Beneficiary[] beneficiaries;
+    bool active;
+}
+
 /**
  * @title AppRegistry
  * @notice Registers dApps for SETH PBR: verified TVL targets, beneficiaries, and per-app Minter.
@@ -17,23 +30,14 @@ import { SETH } from "@stabilityeth/SETH.sol";
  * @custom:security-contact security@islalabs.co
  */
 contract AppRegistry is Ownable {
-    uint256 public constant BPS_DENOMINATOR = 10_000;
-
-    struct Beneficiary {
-        address account;
-        uint16 shareBps;
-    }
-
-    struct App {
-        address rootDeployer;
-        address minter;
-        address[] tvlContracts;
-        Beneficiary[] beneficiaries;
-        bool active;
-    }
-
     SETH public immutable seth;
     MinterFactory public immutable minterFactory;
+
+    // --------------------------------------------
+    //  State Variables
+    // --------------------------------------------
+
+    uint256 public constant BPS_DENOMINATOR = 10_000;
 
     /// @notice SETH PBR treasury used by minters for yield claims
     address public pbrTreasury;
@@ -52,6 +56,10 @@ contract AppRegistry is Ownable {
     mapping(bytes32 appId => uint256) public netMinted;
 
     bytes32[] private _appIds;
+
+    // --------------------------------------------
+    //  Events & Errors
+    // --------------------------------------------
 
     event AppRegistered(
         bytes32 indexed appId,
@@ -81,6 +89,10 @@ contract AppRegistry is Ownable {
     error NotAppMinter();
     error InvalidAmount();
 
+    // --------------------------------------------
+    //  Access Control
+    // --------------------------------------------
+
     modifier onlyRootDeployer(
         bytes32 appId
     ) {
@@ -88,11 +100,19 @@ contract AppRegistry is Ownable {
         _;
     }
 
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
+
     constructor(address seth_, address minterFactory_, address owner_) Ownable(owner_) {
         if (seth_ == address(0) || minterFactory_ == address(0)) revert ZeroAddress();
         seth = SETH(payable(seth_));
         minterFactory = MinterFactory(minterFactory_);
     }
+
+    // --------------------------------------------
+    //  Register App
+    // --------------------------------------------
 
     /**
      * @notice Finalize verification: create `appId`, bind TVL, deploy Minter, seed rootDeployer as sole beneficiary.
@@ -100,7 +120,7 @@ contract AppRegistry is Ownable {
      * @param rootDeployer Verified root deployer (or factory-as-app).
      * @param tvlContracts Contracts CRE should include in this app's TVL.
      * @return appId Canonical app identity for Minter / claims / TVL.
-     * @return minter Newly deployed Minter proxy.
+     * @return minter Newly deployed immutable Minter.
      */
     function register(
         address rootDeployer,
@@ -129,6 +149,10 @@ contract AppRegistry is Ownable {
 
         emit AppRegistered(appId, rootDeployer, minter, tvlContracts);
     }
+
+    // --------------------------------------------
+    //  Upkeep
+    // --------------------------------------------
 
     /**
      * @notice Replace the beneficiary set for `appId`. Shares must sum to 10_000 bps.
@@ -176,6 +200,10 @@ contract AppRegistry is Ownable {
 
         emit TvlContractRemoved(appId, tvlContract);
     }
+
+    // --------------------------------------------
+    //  App Management
+    // --------------------------------------------
 
     /**
      * @notice Owner kill-switch for an app's PBR eligibility (minter remains usable for wrap UX).

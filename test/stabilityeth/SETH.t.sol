@@ -4,7 +4,7 @@ pragma solidity ^0.8.34;
 import { Test } from "forge-std/Test.sol";
 import { ERC1967Proxy } from "@openzeppelin/proxy/ERC1967/ERC1967Proxy.sol";
 
-import { AppRegistry } from "@stabilityeth/AppRegistry.sol";
+import { AppRegistry, Beneficiary } from "@stabilityeth/AppRegistry.sol";
 import { Minter } from "@stabilityeth/Minter.sol";
 import { MinterFactory } from "@stabilityeth/base/factories/MinterFactory.sol";
 import { PBRScoreOracle } from "@stabilityeth/pbr/PBRScoreOracle.sol";
@@ -40,7 +40,7 @@ contract SETHTest is Test {
 
         PBRTreasury treImpl = new PBRTreasury();
         seth = new SETH(predictedTreasury);
-        factory = new MinterFactory(address(seth), owner, owner);
+        factory = new MinterFactory(address(seth), owner);
         registry = new AppRegistry(address(seth), address(factory), owner);
 
         PBRScoreOracle scoreImpl = new PBRScoreOracle();
@@ -231,9 +231,9 @@ contract SETHTest is Test {
     }
 
     function test_claim_respectsBeneficiaryShares() public {
-        AppRegistry.Beneficiary[] memory next = new AppRegistry.Beneficiary[](2);
-        next[0] = AppRegistry.Beneficiary({ account: rootDeployer, shareBps: 7_000 });
-        next[1] = AppRegistry.Beneficiary({ account: beneficiary, shareBps: 3_000 });
+        Beneficiary[] memory next = new Beneficiary[](2);
+        next[0] = Beneficiary({ account: rootDeployer, shareBps: 7_000 });
+        next[1] = Beneficiary({ account: beneficiary, shareBps: 3_000 });
         vm.prank(rootDeployer);
         registry.setBeneficiaries(appId, next);
 

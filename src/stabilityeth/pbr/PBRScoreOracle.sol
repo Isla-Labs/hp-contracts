@@ -5,8 +5,8 @@ import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
-import { IAppRegistry } from "@stabilityeth/interfaces/IAppRegistry.sol";
-import { IPBRScoreOracle } from "@stabilityeth/interfaces/IPBRScoreOracle.sol";
+import { IAppRegistry } from "@stabilityeth/base/interfaces/IAppRegistry.sol";
+import { IPBRScoreOracle } from "@stabilityeth/base/interfaces/IPBRScoreOracle.sol";
 
 /**
  * @title PBRScoreOracle

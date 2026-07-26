@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
-import { MinterFactory } from "@stabilityeth/factories/MinterFactory.sol";
+import { MinterFactory } from "@stabilityeth/base/factories/MinterFactory.sol";
 import { SETH } from "@stabilityeth/SETH.sol";
 
 /**

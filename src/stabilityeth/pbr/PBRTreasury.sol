@@ -7,9 +7,9 @@ import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
-import { IAppRegistry } from "@stabilityeth/interfaces/IAppRegistry.sol";
-import { IPBRScoreOracle } from "@stabilityeth/interfaces/IPBRScoreOracle.sol";
-import { IPBRTreasury } from "@stabilityeth/interfaces/IPBRTreasury.sol";
+import { IAppRegistry } from "@stabilityeth/base/interfaces/IAppRegistry.sol";
+import { IPBRScoreOracle } from "@stabilityeth/base/interfaces/IPBRScoreOracle.sol";
+import { IPBRTreasury } from "@stabilityeth/base/interfaces/IPBRTreasury.sol";
 import { SETH } from "@stabilityeth/SETH.sol";
 
 /**

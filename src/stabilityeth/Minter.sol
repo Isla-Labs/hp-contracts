@@ -3,8 +3,8 @@ pragma solidity ^0.8.34;
 
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
-import { IAppRegistry } from "@stabilityeth/interfaces/IAppRegistry.sol";
-import { IPBRTreasury } from "@stabilityeth/interfaces/IPBRTreasury.sol";
+import { IAppRegistry } from "@stabilityeth/base/interfaces/IAppRegistry.sol";
+import { IPBRTreasury } from "@stabilityeth/base/interfaces/IPBRTreasury.sol";
 import { SETH } from "@stabilityeth/SETH.sol";
 
 /**

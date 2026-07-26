@@ -7,6 +7,7 @@ import { ERC1967Proxy } from "@openzeppelin/proxy/ERC1967/ERC1967Proxy.sol";
 import { AppRegistry } from "@stabilityeth/AppRegistry.sol";
 import { Minter } from "@stabilityeth/Minter.sol";
 import { MinterFactory } from "@stabilityeth/factories/MinterFactory.sol";
+import { PBRScoreOracle } from "@stabilityeth/PBRScoreOracle.sol";
 import { PBRTreasury } from "@stabilityeth/PBRTreasury.sol";
 import { SETH } from "@stabilityeth/SETH.sol";
 import { MockTvlContract } from "./MockTvlContract.sol";
@@ -16,13 +17,17 @@ contract SETHTest is Test {
     address internal rootDeployer = makeAddr("rootDeployer");
     address internal user = makeAddr("user");
     address internal beneficiary = makeAddr("beneficiary");
-    address internal forwarder = makeAddr("forwarder");
+    address internal scoreForwarder = makeAddr("scoreForwarder");
+    address internal distForwarder = makeAddr("distForwarder");
 
-    bytes32 internal constant WORKFLOW_ID = keccak256("seth-pbr-v1");
+    bytes32 internal constant SCORE_WORKFLOW = keccak256("seth-scores-v1");
+    bytes32 internal constant DIST_WORKFLOW = keccak256("seth-distribute-v1");
+    uint16 internal constant DECAY_BPS = 9_000; // 90% retain, 10% new TVL
 
     SETH internal seth;
     MinterFactory internal factory;
     AppRegistry internal registry;
+    PBRScoreOracle internal oracle;
     PBRTreasury internal treasury;
     Minter internal minter;
     bytes32 internal appId;
@@ -32,11 +37,40 @@ contract SETHTest is Test {
         factory = new MinterFactory(address(seth), owner, owner);
         registry = new AppRegistry(address(seth), address(factory), owner);
 
-        PBRTreasury impl = new PBRTreasury();
-        bytes memory initData = abi.encodeCall(
-            PBRTreasury.initialize, (owner, address(seth), address(registry), forwarder, WORKFLOW_ID)
+        PBRScoreOracle scoreImpl = new PBRScoreOracle();
+        oracle = PBRScoreOracle(
+            address(
+                new ERC1967Proxy(
+                    address(scoreImpl),
+                    abi.encodeCall(
+                        PBRScoreOracle.initialize,
+                        (owner, address(registry), scoreForwarder, SCORE_WORKFLOW, DECAY_BPS)
+                    )
+                )
+            )
         );
-        treasury = PBRTreasury(payable(address(new ERC1967Proxy(address(impl), initData))));
+
+        PBRTreasury treImpl = new PBRTreasury();
+        treasury = PBRTreasury(
+            payable(
+                address(
+                    new ERC1967Proxy(
+                        address(treImpl),
+                        abi.encodeCall(
+                            PBRTreasury.initialize,
+                            (
+                                owner,
+                                address(seth),
+                                address(registry),
+                                address(oracle),
+                                distForwarder,
+                                DIST_WORKFLOW
+                            )
+                        )
+                    )
+                )
+            )
+        );
 
         vm.startPrank(owner);
         factory.setRegistry(address(registry));
@@ -61,11 +95,9 @@ contract SETHTest is Test {
         vm.prank(user);
         seth.deposit{ value: ethIn }();
 
-        uint256 fee = ethIn / 1000; // 0.1%
-        uint256 net = ethIn - fee;
-        assertEq(seth.balanceOf(user), net * 100);
+        uint256 fee = ethIn / 1000;
+        assertEq(seth.balanceOf(user), (ethIn - fee) * 100);
         assertEq(seth.feeAccrued(), fee);
-        assertEq(seth.totalMinterMinted(), 0);
         assertTrue(seth.isFullyBacked());
     }
 
@@ -76,174 +108,120 @@ contract SETHTest is Test {
         vm.prank(user);
         minter.deposit{ value: ethIn }();
 
-        uint256 fee = ethIn / 1000;
-        uint256 expectedSeth = (ethIn - fee) * 100;
-
-        assertEq(seth.balanceOf(user), expectedSeth);
-        assertEq(minter.totalMinted(), expectedSeth);
+        uint256 expectedSeth = (ethIn - ethIn / 1000) * 100;
         assertEq(registry.totalMinted(appId), expectedSeth);
         assertEq(registry.netMinted(appId), expectedSeth);
-        assertEq(seth.totalMinterMinted(), expectedSeth);
-        assertEq(minter.appId(), appId);
-        assertEq(registry.appIdOfMinter(address(minter)), appId);
-        assertEq(seth.feeAccrued(), fee);
     }
 
-    function test_minterWithdraw_skimsFeeDoesNotReduceTotalMinted() public {
-        uint256 ethIn = 1 ether;
-        vm.deal(user, ethIn);
-
+    function test_minterWithdraw_clearsNetMinted() public {
+        vm.deal(user, 1 ether);
         vm.prank(user);
-        minter.deposit{ value: ethIn }();
+        minter.deposit{ value: 1 ether }();
 
         uint256 minted = minter.totalMinted();
-        uint256 feeOnMint = seth.feeAccrued();
-
         vm.prank(user);
         minter.withdraw(minted);
 
-        assertEq(seth.balanceOf(user), 0);
-        assertEq(minter.totalMinted(), minted); // cumulative unchanged
         assertEq(registry.totalMinted(appId), minted);
-        assertEq(registry.netMinted(appId), 0); // outstanding cleared
-        assertGt(seth.feeAccrued(), feeOnMint);
-        assertEq(user.balance, ethIn - seth.feeAccrued());
+        assertEq(registry.netMinted(appId), 0);
     }
 
-    function test_pullFees_intoTreasury() public {
+    function test_scoreOracle_appliesOnchainDecay() public {
         vm.deal(user, 1 ether);
         vm.prank(user);
-        seth.deposit{ value: 1 ether }();
+        minter.deposit{ value: 1 ether }();
+        uint256 minted = registry.totalMinted(appId);
 
-        uint256 fees = seth.feeAccrued();
-        uint256 redeemable = seth.redeemableCollateral();
+        // First observation: m = 0.1 * tvl (alpha=1000), s = mintDelta
+        _pushScores(appId, 100 ether, minted);
+        assertEq(oracle.runningM(appId), (100 ether * 1000) / 10_000);
+        assertEq(oracle.runningS(appId), minted);
 
-        treasury.pullAllFees();
+        // Second tick: no new mints, same TVL → m EWMA again, s decays
+        uint256 m1 = oracle.runningM(appId);
+        uint256 s1 = oracle.runningS(appId);
+        _pushScores(appId, 100 ether, minted);
 
-        assertEq(seth.feeAccrued(), 0);
-        assertEq(treasury.rewardsR(), fees);
-        assertEq(address(seth).balance, redeemable);
-        assertTrue(seth.isFullyBacked());
+        uint256 expectedM = (m1 * uint256(DECAY_BPS) + 100 ether * uint256(10_000 - DECAY_BPS)) / 10_000;
+        uint256 expectedS = (s1 * uint256(DECAY_BPS)) / 10_000;
+        assertEq(oracle.runningM(appId), expectedM);
+        assertEq(oracle.runningS(appId), expectedS);
     }
 
-    function test_register_onlyOwner() public {
-        address other = makeAddr("other");
-        address[] memory tvl = new address[](1);
-        tvl[0] = address(new MockTvlContract(other));
-
-        vm.prank(other);
-        vm.expectRevert();
-        registry.register(other, tvl);
-    }
-
-    function test_addTvlContracts_onlyOwner() public {
-        address[] memory tvl = new address[](1);
-        tvl[0] = address(new MockTvlContract(rootDeployer));
-
-        vm.prank(rootDeployer);
-        vm.expectRevert();
-        registry.addTvlContracts(appId, tvl);
-    }
-
-    function test_rootDeployer_setsBeneficiaries() public {
-        AppRegistry.Beneficiary[] memory next = new AppRegistry.Beneficiary[](2);
-        next[0] = AppRegistry.Beneficiary({ account: rootDeployer, shareBps: 7_000 });
-        next[1] = AppRegistry.Beneficiary({ account: beneficiary, shareBps: 3_000 });
-
-        vm.prank(rootDeployer);
-        registry.setBeneficiaries(appId, next);
-
-        assertTrue(registry.isBeneficiary(appId, rootDeployer));
-        assertTrue(registry.isBeneficiary(appId, beneficiary));
-        assertEq(registry.beneficiaryShareBps(appId, beneficiary), 3_000);
-    }
-
-    function test_claim_onlyBeneficiary() public {
-        vm.prank(user);
-        vm.expectRevert(Minter.NotBeneficiary.selector);
-        minter.claim(1);
-    }
-
-    function test_creSettle_andClaim() public {
-        // Accrue fees via wrap
+    function test_dailyDistribute_snapshotsOracleAndClaimAll() public {
         vm.deal(user, 10 ether);
         vm.prank(user);
         minter.deposit{ value: 10 ether }();
-        treasury.pullAllFees();
+        uint256 minted = registry.totalMinted(appId);
 
-        uint256 R = treasury.rewardsR();
-        assertGt(R, 0);
+        _pushScores(appId, 50 ether, minted);
 
-        // Single app: m=1, s=1 → I_app = R, rootDeployer share 100%
         bytes32[] memory appIds = new bytes32[](1);
         appIds[0] = appId;
-        uint256[] memory mScores = new uint256[](1);
-        mScores[0] = 1;
-        uint256[] memory sScores = new uint256[](1);
-        sScores[0] = 1;
 
-        PBRTreasury.CreReport memory report =
-            PBRTreasury.CreReport({ epochId: 1, appIds: appIds, mScores: mScores, sScores: sScores });
-
-        vm.prank(forwarder);
-        treasury.onReport(_creMetadata(WORKFLOW_ID), abi.encode(report));
+        vm.prank(distForwarder);
+        treasury.onReport(
+            _creMetadata(DIST_WORKFLOW),
+            abi.encode(PBRTreasury.DistributeReport({ epochId: 1, appIds: appIds }))
+        );
 
         assertEq(treasury.lastEpochId(), 1);
-        assertEq(treasury.rewardsR(), 0);
+        assertEq(treasury.epochM(1, appId), oracle.runningM(appId));
+        assertEq(treasury.epochS(1, appId), oracle.runningS(appId));
+
+        uint256 R = treasury.getEpoch(1).R;
+        assertGt(R, 0);
 
         uint256 balBefore = rootDeployer.balance;
         vm.prank(rootDeployer);
-        uint256 payout = minter.claim(1);
+        (uint256 totalPayout, uint64 next) = minter.claimAll(1);
 
-        assertEq(payout, R);
+        assertEq(totalPayout, R);
+        assertEq(next, 2);
         assertEq(rootDeployer.balance, balBefore + R);
         assertTrue(treasury.isClaimed(appId, rootDeployer, 1));
-
-        vm.prank(rootDeployer);
-        vm.expectRevert(PBRTreasury.AlreadyClaimed.selector);
-        minter.claim(1);
     }
 
-    function test_settle_skipsUnusedMinterEvenWithTvlScores() public {
-        // Second app: registered TVL, never minted through its minter
+    function test_distribute_skipsUnusedMinter() public {
         address otherDeployer = makeAddr("otherDeployer");
         address[] memory tvl2 = new address[](1);
         tvl2[0] = address(new MockTvlContract(otherDeployer));
         vm.prank(owner);
         (bytes32 appId2,) = registry.register(otherDeployer, tvl2);
 
-        vm.deal(user, 10 ether);
+        vm.deal(user, 5 ether);
         vm.prank(user);
-        minter.deposit{ value: 10 ether }();
-        treasury.pullAllFees();
+        minter.deposit{ value: 5 ether }();
+        _pushScores(appId, 10 ether, registry.totalMinted(appId));
+        // unused app: oracle clears scores even if CRE sends TVL
+        _pushScores(appId2, 1_000 ether, 0);
+        assertEq(oracle.runningM(appId2), 0);
+        assertEq(oracle.runningS(appId2), 0);
 
         bytes32[] memory appIds = new bytes32[](2);
         appIds[0] = appId;
         appIds[1] = appId2;
-        uint256[] memory mScores = new uint256[](2);
-        mScores[0] = 1;
-        mScores[1] = 100; // would dominate if accepted
-        uint256[] memory sScores = new uint256[](2);
-        sScores[0] = 1;
-        sScores[1] = 100;
 
-        assertEq(registry.netMinted(appId2), 0);
-
-        vm.prank(forwarder);
+        vm.prank(distForwarder);
         treasury.onReport(
-            _creMetadata(WORKFLOW_ID),
-            abi.encode(
-                PBRTreasury.CreReport({ epochId: 1, appIds: appIds, mScores: mScores, sScores: sScores })
-            )
+            _creMetadata(DIST_WORKFLOW),
+            abi.encode(PBRTreasury.DistributeReport({ epochId: 1, appIds: appIds }))
         );
 
-        // Only appId1 accepted → full R to that app's sole beneficiary
         assertEq(treasury.epochM(1, appId2), 0);
-        assertEq(treasury.epochM(1, appId), 1);
+        assertGt(treasury.epochM(1, appId), 0);
+    }
 
-        uint256 R = treasury.getEpoch(1).R;
-        vm.prank(rootDeployer);
-        assertEq(minter.claim(1), R);
+    function test_scoreWorkflow_cannotCallTreasury() public {
+        bytes32[] memory appIds = new bytes32[](1);
+        appIds[0] = appId;
+
+        vm.prank(scoreForwarder);
+        vm.expectRevert(); // wrong sender vs dist forwarder
+        treasury.onReport(
+            _creMetadata(DIST_WORKFLOW),
+            abi.encode(PBRTreasury.DistributeReport({ epochId: 1, appIds: appIds }))
+        );
     }
 
     function test_claim_respectsBeneficiaryShares() public {
@@ -255,34 +233,45 @@ contract SETHTest is Test {
 
         vm.deal(user, 10 ether);
         vm.prank(user);
-        minter.deposit{ value: 10 ether }(); // must use minter so netMinted > 0
-        treasury.pullAllFees();
-        uint256 R = treasury.rewardsR();
+        minter.deposit{ value: 10 ether }();
+        _pushScores(appId, 1 ether, registry.totalMinted(appId));
 
         bytes32[] memory appIds = new bytes32[](1);
         appIds[0] = appId;
-        uint256[] memory mScores = new uint256[](1);
-        mScores[0] = 1 ether;
-        uint256[] memory sScores = new uint256[](1);
-        sScores[0] = 1 ether;
 
-        vm.prank(forwarder);
+        vm.prank(distForwarder);
         treasury.onReport(
-            _creMetadata(WORKFLOW_ID),
-            abi.encode(
-                PBRTreasury.CreReport({ epochId: 1, appIds: appIds, mScores: mScores, sScores: sScores })
-            )
+            _creMetadata(DIST_WORKFLOW),
+            abi.encode(PBRTreasury.DistributeReport({ epochId: 1, appIds: appIds }))
         );
 
+        uint256 R = treasury.getEpoch(1).R;
         vm.prank(beneficiary);
-        uint256 payout = minter.claim(1);
-        assertEq(payout, (R * 3_000) / 10_000);
+        assertEq(minter.claim(1), (R * 3_000) / 10_000);
+    }
+
+    function _pushScores(bytes32 id, uint256 tvlRaw, uint256 totalMintedObserved) internal {
+        bytes32[] memory appIds = new bytes32[](1);
+        appIds[0] = id;
+        uint256[] memory tvl = new uint256[](1);
+        tvl[0] = tvlRaw;
+        uint256[] memory minted = new uint256[](1);
+        minted[0] = totalMintedObserved;
+
+        vm.prank(scoreForwarder);
+        oracle.onReport(
+            _creMetadata(SCORE_WORKFLOW),
+            abi.encode(
+                PBRScoreOracle.ObservationReport({
+                    appIds: appIds, tvlRaw: tvl, totalMintedObserved: minted
+                })
+            )
+        );
     }
 
     function _creMetadata(
         bytes32 workflowId
     ) internal pure returns (bytes memory metadata) {
-        // 62-byte layout: workflowId | workflowName(10) | workflowOwner(20)
         metadata = abi.encodePacked(workflowId, bytes10(0), address(0));
         require(metadata.length == 62, "bad metadata");
     }

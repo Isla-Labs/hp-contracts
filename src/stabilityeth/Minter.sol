@@ -112,4 +112,17 @@ contract Minter is Initializable {
         payout = IPBRTreasury(treasury).claim(appId, epochId, msg.sender);
         emit YieldClaimed(msg.sender, epochId, payout);
     }
+
+    /**
+     * @notice Claim unpaid daily epochs from `fromEpoch` (batched). Resume with returned `nextEpoch`.
+     */
+    function claimAll(
+        uint64 fromEpoch
+    ) external onlyBeneficiary returns (uint256 totalPayout, uint64 nextEpoch) {
+        address treasury = registry.pbrTreasury();
+        if (treasury == address(0)) revert TreasuryNotSet();
+
+        (totalPayout, nextEpoch) = IPBRTreasury(treasury).claimAll(appId, msg.sender, fromEpoch);
+        if (totalPayout != 0) emit YieldClaimed(msg.sender, fromEpoch, totalPayout);
+    }
 }

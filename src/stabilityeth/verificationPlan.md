@@ -193,12 +193,12 @@ Keep `Minter` attribution (`totalMinted` / `s`) independent: mint path auth stay
 
 ## PBR settle / claim (implemented shape)
 
-- CRE (≈5m) computes **TWAVL (`m`)** and **TW mint-delta (`s`)** offchain; pushes `PBRTreasury.CreReport`.
-- Mint stats live on `AppRegistry`: `totalMinted` (cumulative, CRE delta source) and `netMinted` (outstanding).
-- CRE / treasury **must** skip apps with `netMinted == 0` (unused minter — no TVL-only yield).
-- Treasury locks `rewardsR` → epoch `R`, stores scores, marks claimable.
-- `I_app = R * m / M_adj * s / S_adj`; beneficiary gets `shareBps`.
-- Pull claim via `Minter.claim(epochId)` / bitmap `(appId, beneficiary, epochId)`.
+See [`pbrCadence.md`](./pbrCadence.md).
+
+- **5m scores CRE** → `PBRScoreOracle` (raw observations, **onchain** decay).
+- **Daily distribute CRE** → `PBRTreasury` (pull fees, snapshot oracle, open epoch).
+- Mint stats on `AppRegistry`: `totalMinted` / `netMinted`; `netMinted == 0` clears scores / skips settle.
+- Claims: `Minter.claim` / `claimAll` + bitmap `(appId, beneficiary, epochId)`.
 
 ---
 

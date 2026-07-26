@@ -8,17 +8,17 @@ import { Math } from "@openzeppelin/utils/math/Math.sol";
 
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { IAppRegistry } from "@stabilityeth/interfaces/IAppRegistry.sol";
+import { IPBRScoreOracle } from "@stabilityeth/interfaces/IPBRScoreOracle.sol";
 import { IPBRTreasury } from "@stabilityeth/interfaces/IPBRTreasury.sol";
 import { SETH } from "@stabilityeth/SETH.sol";
 
 /**
  * @title PBRTreasury (SETH)
- * @notice Epoch PBR pot for registered apps: CRE settles TW scores, beneficiaries pull-claim.
- * @dev CRE workflow (e.g. 5m cron) computes TWAVL (`m`) and TW mint-delta (`s`) offchain, then
- *      pushes `CreReport`. Onchain locks accrued fees into `R` and stores per-app scores.
+ * @notice Daily PBR distribution: pull fees, snapshot running scores from `PBRScoreOracle`, pull-claim.
+ * @dev Separate CRE workflow from the 5m score oracle. Distribute report only supplies `epochId` +
+ *      `appIds` to snapshot; weights come from the oracle (onchain-decayed running `m` / `s`).
  *
  *      Payout: `I_app = R * m / M_adj * s / S_adj`, then `payout = I_app * shareBps / 10_000`.
- *      Claims use a PlayerVault-style bitmap keyed by `(appId, beneficiary, epochId)`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -26,12 +26,13 @@ import { SETH } from "@stabilityeth/SETH.sol";
 contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IPBRTreasury {
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
-    /// @notice CRE payload: sequential epoch + per-app TW scores (already time-weighted offchain).
-    struct CreReport {
+    /// @notice Max unpaid epochs processed in one `claimAll` call (gas bound).
+    uint256 public constant CLAIM_ALL_BATCH = 64;
+
+    /// @notice Daily CRE payload — snapshots oracle scores; does not carry weights.
+    struct DistributeReport {
         uint64 epochId;
         bytes32[] appIds;
-        uint256[] mScores;
-        uint256[] sScores;
     }
 
     struct Epoch {
@@ -45,6 +46,7 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
 
     SETH public seth;
     IAppRegistry public appRegistry;
+    IPBRScoreOracle public scoreOracle;
 
     /// @notice Fees accrued since last epoch settle (ETH)
     uint256 public rewardsR;
@@ -70,7 +72,7 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
 
     error ZeroAddress();
     error ZeroWorkflowId();
-    error LengthMismatch();
+    error EmptyReport();
     error InvalidEpochId(uint64 received, uint64 expected);
     error InvalidScores();
     error EpochNotClaimable();
@@ -90,17 +92,24 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
      * @param owner_ Admin (DAO / verifier stack).
      * @param seth_ StabilityETH wrapper (fee source).
      * @param appRegistry_ Verified app registry.
+     * @param scoreOracle_ 5m running-score oracle.
      * @param forwarder_ CRE Keystone forwarder.
-     * @param workflowId_ Expected CRE workflow id.
+     * @param workflowId_ Distribute workflow id (daily).
      */
     function initialize(
         address owner_,
         address seth_,
         address appRegistry_,
+        address scoreOracle_,
         address forwarder_,
         bytes32 workflowId_
     ) external initializer {
-        if (owner_ == address(0) || seth_ == address(0) || appRegistry_ == address(0)) revert ZeroAddress();
+        if (
+            owner_ == address(0) || seth_ == address(0) || appRegistry_ == address(0)
+                || scoreOracle_ == address(0)
+        ) {
+            revert ZeroAddress();
+        }
         if (workflowId_ == bytes32(0)) revert ZeroWorkflowId();
 
         _transferOwnership(owner_);
@@ -109,9 +118,10 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
 
         seth = SETH(payable(seth_));
         appRegistry = IAppRegistry(appRegistry_);
+        scoreOracle = IPBRScoreOracle(scoreOracle_);
     }
 
-    /// @dev Not nonReentrant — must accept ETH from `SETH.collectFees` while `pullFees` holds the guard.
+    /// @dev Not nonReentrant — must accept ETH from `SETH.collectFees` while pull holds the guard.
     receive() external payable {
         if (msg.value == 0) return;
         rewardsR += msg.value;
@@ -122,7 +132,6 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
     //  Fee intake
     // --------------------------------------------
 
-    /// @notice Pull ringfenced fees from SETH into this treasury (`feeCollector` must be this).
     function pullFees(
         uint256 amount
     ) external nonReentrant {
@@ -131,21 +140,20 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
         emit FeesPulled(amount);
     }
 
-    /// @notice Pull all currently accrued SETH fees.
-    function pullAllFees() external nonReentrant {
+    function pullAllFees() public nonReentrant {
         uint256 amount = seth.feeAccrued();
-        if (amount == 0) revert NothingToClaim();
+        if (amount == 0) return;
         seth.collectFees(address(this), amount);
         emit FeesPulled(amount);
     }
 
     // --------------------------------------------
-    //  CRE settle
+    //  CRE daily distribute
     // --------------------------------------------
 
     /// @inheritdoc CreReceiver
     function _processReport(bytes calldata, bytes calldata report) internal override {
-        CreReport memory r = abi.decode(report, (CreReport));
+        DistributeReport memory r = abi.decode(report, (DistributeReport));
         _settleEpoch(r);
     }
 
@@ -153,50 +161,50 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
     //  Claims
     // --------------------------------------------
 
-    /**
-     * @notice Pull a beneficiary's share of an app's epoch yield.
-     * @dev Callable by the beneficiary or the app's Minter (on their behalf).
-     */
     function claim(
         bytes32 appId,
         uint64 epochId,
         address beneficiary
     ) external nonReentrant returns (uint256 payout) {
+        payout = _claim(appId, epochId, beneficiary);
+    }
+
+    /**
+     * @notice Claim unpaid epochs for `beneficiary` from `fromEpoch` upward (gas-capped batch).
+     * @return totalPayout Sum paid this call.
+     * @return nextEpoch First epoch not fully scanned (resume cursor); `lastEpochId+1` if done.
+     */
+    function claimAll(
+        bytes32 appId,
+        address beneficiary,
+        uint64 fromEpoch
+    ) external nonReentrant returns (uint256 totalPayout, uint64 nextEpoch) {
         if (beneficiary == address(0)) revert ZeroAddress();
 
         address minter = appRegistry.minterOf(appId);
         if (msg.sender != beneficiary && msg.sender != minter) revert NotBeneficiary();
         if (!appRegistry.isBeneficiary(appId, beneficiary)) revert NotBeneficiary();
 
-        Epoch storage epoch = _epochs[epochId];
-        if (!epoch.claimable) revert EpochNotClaimable();
-
-        bytes32 key = _claimKey(appId, beneficiary);
-        if (_isClaimed(key, epochId)) revert AlreadyClaimed();
-
-        uint16 shareBps = appRegistry.beneficiaryShareBps(appId, beneficiary);
-        if (shareBps == 0) revert NotBeneficiary();
-
-        uint256 m = epochM[epochId][appId];
-        uint256 s = epochS[epochId][appId];
-        if (m == 0 || s == 0 || epoch.R == 0 || epoch.M_adj == 0 || epoch.S_adj == 0) {
-            revert NothingToClaim();
+        uint64 last = lastEpochId;
+        if (last == 0 || fromEpoch == 0 || fromEpoch > last) {
+            return (0, last == 0 ? 1 : last + 1);
         }
 
-        uint256 appIncome = Math.mulDiv(Math.mulDiv(epoch.R, m, epoch.M_adj), s, epoch.S_adj);
-        payout = Math.mulDiv(appIncome, shareBps, BPS_DENOMINATOR);
-        if (payout == 0) revert NothingToClaim();
+        uint256 processed;
+        nextEpoch = fromEpoch;
 
-        uint256 newPaid = epoch.paid + payout;
-        if (newPaid > epoch.R) revert InsufficientEpochFunds();
-
-        _setClaimed(key, epochId);
-        epoch.paid = newPaid;
-
-        (bool ok,) = beneficiary.call{ value: payout }("");
-        if (!ok) revert TransferFailed();
-
-        emit ClaimPaid(epochId, appId, beneficiary, payout);
+        while (nextEpoch <= last && processed < CLAIM_ALL_BATCH) {
+            if (_epochs[nextEpoch].claimable && !_isClaimed(_claimKey(appId, beneficiary), nextEpoch)) {
+                uint256 payout = _preview(appId, nextEpoch, beneficiary);
+                if (payout > 0) {
+                    totalPayout += _claimUnchecked(appId, nextEpoch, beneficiary);
+                }
+            }
+            unchecked {
+                ++nextEpoch;
+                ++processed;
+            }
+        }
     }
 
     function previewClaim(
@@ -204,26 +212,19 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
         uint64 epochId,
         address beneficiary
     ) external view returns (uint256 payout) {
-        Epoch storage epoch = _epochs[epochId];
-        if (!epoch.claimable) return 0;
-        if (_isClaimed(_claimKey(appId, beneficiary), epochId)) return 0;
-
-        uint16 shareBps = appRegistry.beneficiaryShareBps(appId, beneficiary);
-        if (shareBps == 0) return 0;
-
-        uint256 m = epochM[epochId][appId];
-        uint256 s = epochS[epochId][appId];
-        if (m == 0 || s == 0 || epoch.R == 0 || epoch.M_adj == 0 || epoch.S_adj == 0) return 0;
-
-        uint256 appIncome = Math.mulDiv(Math.mulDiv(epoch.R, m, epoch.M_adj), s, epoch.S_adj);
-        payout = Math.mulDiv(appIncome, shareBps, BPS_DENOMINATOR);
-        uint256 remaining = epoch.R - epoch.paid;
-        if (payout > remaining) payout = remaining;
+        return _preview(appId, epochId, beneficiary);
     }
 
     // --------------------------------------------
     //  Admin
     // --------------------------------------------
+
+    function setScoreOracle(
+        address scoreOracle_
+    ) external onlyOwner {
+        if (scoreOracle_ == address(0)) revert ZeroAddress();
+        scoreOracle = IPBRScoreOracle(scoreOracle_);
+    }
 
     function setExpectedWorkflowId(
         bytes32 workflowId_
@@ -257,31 +258,35 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
     // --------------------------------------------
 
     function _settleEpoch(
-        CreReport memory r
+        DistributeReport memory r
     ) internal {
         uint64 expected = lastEpochId + 1;
         if (r.epochId != expected) revert InvalidEpochId(r.epochId, expected);
+        if (r.appIds.length == 0) revert EmptyReport();
 
-        uint256 len = r.appIds.length;
-        if (len != r.mScores.length || len != r.sScores.length) revert LengthMismatch();
-        if (len == 0) revert InvalidScores();
+        // Pull any pending SETH fees into rewardsR (via receive)
+        uint256 pending = seth.feeAccrued();
+        if (pending != 0) {
+            seth.collectFees(address(this), pending);
+            emit FeesPulled(pending);
+        }
 
         uint256 M_adj;
         uint256 S_adj;
         uint256 accepted;
+        uint256 len = r.appIds.length;
 
         for (uint256 i; i < len; ++i) {
             bytes32 appId = r.appIds[i];
-            uint256 m = r.mScores[i];
-            uint256 s = r.sScores[i];
 
             if (!appRegistry.isRegistered(appId) || !appRegistry.isActive(appId)) continue;
-            // Unused minters (no outstanding mint credit) cannot earn on TVL alone
             if (appRegistry.netMinted(appId) == 0) continue;
-            if (m == 0 || s == 0) continue;
             if (epochM[r.epochId][appId] != 0 || epochS[r.epochId][appId] != 0) {
                 revert DuplicateAppId(appId);
             }
+
+            (uint256 m, uint256 s,) = scoreOracle.getScores(appId);
+            if (m == 0 || s == 0) continue;
 
             epochM[r.epochId][appId] = m;
             epochS[r.epochId][appId] = s;
@@ -308,6 +313,69 @@ contract PBRTreasury is Initializable, Ownable, CreReceiver, ReentrancyGuard, IP
         lastEpochId = r.epochId;
 
         emit EpochSettled(r.epochId, R, M_adj, S_adj, accepted, epoch.settledAt);
+    }
+
+    function _claim(
+        bytes32 appId,
+        uint64 epochId,
+        address beneficiary
+    ) internal returns (uint256 payout) {
+        if (beneficiary == address(0)) revert ZeroAddress();
+
+        address minter = appRegistry.minterOf(appId);
+        if (msg.sender != beneficiary && msg.sender != minter) revert NotBeneficiary();
+        if (!appRegistry.isBeneficiary(appId, beneficiary)) revert NotBeneficiary();
+
+        return _claimUnchecked(appId, epochId, beneficiary);
+    }
+
+    /// @dev Caller already authenticated.
+    function _claimUnchecked(
+        bytes32 appId,
+        uint64 epochId,
+        address beneficiary
+    ) internal returns (uint256 payout) {
+        Epoch storage epoch = _epochs[epochId];
+        if (!epoch.claimable) revert EpochNotClaimable();
+
+        bytes32 key = _claimKey(appId, beneficiary);
+        if (_isClaimed(key, epochId)) revert AlreadyClaimed();
+
+        payout = _preview(appId, epochId, beneficiary);
+        if (payout == 0) revert NothingToClaim();
+
+        uint256 newPaid = epoch.paid + payout;
+        if (newPaid > epoch.R) revert InsufficientEpochFunds();
+
+        _setClaimed(key, epochId);
+        epoch.paid = newPaid;
+
+        (bool ok,) = beneficiary.call{ value: payout }("");
+        if (!ok) revert TransferFailed();
+
+        emit ClaimPaid(epochId, appId, beneficiary, payout);
+    }
+
+    function _preview(
+        bytes32 appId,
+        uint64 epochId,
+        address beneficiary
+    ) internal view returns (uint256 payout) {
+        Epoch storage epoch = _epochs[epochId];
+        if (!epoch.claimable) return 0;
+        if (_isClaimed(_claimKey(appId, beneficiary), epochId)) return 0;
+
+        uint16 shareBps = appRegistry.beneficiaryShareBps(appId, beneficiary);
+        if (shareBps == 0) return 0;
+
+        uint256 m = epochM[epochId][appId];
+        uint256 s = epochS[epochId][appId];
+        if (m == 0 || s == 0 || epoch.R == 0 || epoch.M_adj == 0 || epoch.S_adj == 0) return 0;
+
+        uint256 appIncome = Math.mulDiv(Math.mulDiv(epoch.R, m, epoch.M_adj), s, epoch.S_adj);
+        payout = Math.mulDiv(appIncome, shareBps, BPS_DENOMINATOR);
+        uint256 remaining = epoch.R - epoch.paid;
+        if (payout > remaining) payout = remaining;
     }
 
     function _claimKey(bytes32 appId, address beneficiary) internal pure returns (bytes32) {

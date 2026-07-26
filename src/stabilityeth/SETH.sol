@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { ERC20 } from "@openzeppelin/token/ERC20/ERC20.sol";
 
 /**
  * @title SETH | StabilityETH
- * @notice 1:100 ETH wrapper with a 0.1% mint/burn fee ringfenced for app PBR.
- * @dev Direct `deposit` / `withdraw` are unattributed. Registered apps route through
- *      allowlisted `Minter` proxies via `mintTo` / `burnFrom` so their `s` credit can accrue.
+ * @notice Immutable 1:100 ETH wrapper with a 0.1% mint/burn fee to `feeCollector` (PBRTreasury).
+ * @dev No minter ACL — anyone may `deposit` / `withdraw`. Apps optionally route through their
+ *      `Minter` (deposit → transfer SETH out; pull SETH → withdraw → forward ETH) to attribute volume.
  *      Reentrancy: `_burn` / fee accounting run before the ETH transfer.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract SETH is ERC20, Ownable {
+contract SETH is ERC20 {
     /// @notice 100 SETH per 1 ETH
     uint256 public constant EXCHANGE_RATE = 100;
 
@@ -26,129 +25,56 @@ contract SETH is ERC20, Ownable {
     /// @notice Ringfenced ETH fees awaiting PBR distribution (never part of redeemable collateral)
     uint256 public feeAccrued;
 
-    /// @notice Cumulative SETH minted through allowlisted minters (global `S` numerator basis)
-    uint256 public totalMinterMinted;
-
-    /// @notice Sole authority to allowlist minters (typically `AppRegistry`)
-    address public minterManager;
-
-    /// @notice Pulls ringfenced fees into the PBR distribution path
-    address public feeCollector;
-
-    mapping(address account => bool) public isMinter;
+    /// @notice Immutable PBR treasury that may `collectFees` (set at deploy)
+    address public immutable feeCollector;
 
     event Deposit(address indexed dst, uint256 ethAmount, uint256 sethAmount, uint256 fee);
     event Withdrawal(address indexed src, uint256 sethAmount, uint256 ethAmount, uint256 fee);
-    event MinterUpdated(address indexed minter, bool allowed);
-    event MinterManagerUpdated(address indexed minterManager);
-    event FeeCollectorUpdated(address indexed feeCollector);
     event FeesCollected(address indexed to, uint256 amount);
 
     error InvalidAmount();
     error EthTransferFailed();
-    error NotMinter();
-    error NotMinterManager();
     error NotFeeCollector();
     error ZeroAddress();
 
-    modifier onlyMinter() {
-        if (!isMinter[msg.sender]) revert NotMinter();
-        _;
+    /**
+     * @param feeCollector_ PBRTreasury (or proxy) address — immutable fee sink authority.
+     */
+    constructor(
+        address feeCollector_
+    ) ERC20("StabilityETH", "SETH") {
+        if (feeCollector_ == address(0)) revert ZeroAddress();
+        feeCollector = feeCollector_;
     }
 
-    modifier onlyMinterManager() {
-        if (msg.sender != minterManager) revert NotMinterManager();
-        _;
-    }
-
-    constructor(address owner_) ERC20("StabilityETH", "SETH") Ownable(owner_) { }
-
-    /// @notice Bare ETH transfers route into unattributed `deposit()`
+    /// @notice Bare ETH transfers route into `deposit()`
     receive() external payable {
         deposit();
     }
 
-    // --------------------------------------------
-    //  Unattributed wrap / unwrap
-    // --------------------------------------------
-
     /**
-     * @notice Mints SETH against ETH at 100:1 after the 0.1% fee.
-     * @dev Fee is skimmed from `msg.value`; mint amount uses the net ETH.
+     * @notice Mints SETH to the caller at 100:1 after the 0.1% fee.
+     * @return sethAmount SETH minted to `msg.sender`.
      */
-    function deposit() public payable {
+    function deposit() public payable returns (uint256 sethAmount) {
         if (msg.value == 0) revert InvalidAmount();
-        _mintWithFee(msg.sender, msg.value, false);
+        sethAmount = _mintWithFee(msg.sender, msg.value);
     }
 
     /**
-     * @notice Burns SETH and redeems ETH at 1:100 after the 0.1% fee.
+     * @notice Burns caller's SETH and redeems ETH to the caller after the 0.1% fee.
      * @dev Rounds the burn down to a multiple of `EXCHANGE_RATE`. Sub-rate dust stays with the caller.
+     * @return ethOut ETH sent to `msg.sender`.
      */
     function withdraw(
         uint256 sethAmount
-    ) external {
-        _burnWithFee(msg.sender, msg.sender, sethAmount);
-    }
-
-    // --------------------------------------------
-    //  Minter-attributed wrap / unwrap
-    // --------------------------------------------
-
-    /**
-     * @notice Minter-attributed mint: credits `totalMinterMinted` for the `s/S` leg.
-     * @return sethAmount SETH minted to `to` after the fee.
-     */
-    function mintTo(
-        address to
-    ) external payable onlyMinter returns (uint256 sethAmount) {
-        if (to == address(0)) revert ZeroAddress();
-        if (msg.value == 0) revert InvalidAmount();
-        sethAmount = _mintWithFee(to, msg.value, true);
+    ) external returns (uint256 ethOut) {
+        ethOut = _burnWithFee(msg.sender, msg.sender, sethAmount);
     }
 
     /**
-     * @notice Minter-attributed burn: redeems ETH to `to` after the fee.
-     * @return ethOut ETH sent to `to` after the fee.
-     */
-    function burnFrom(
-        address from,
-        address to,
-        uint256 sethAmount
-    ) external onlyMinter returns (uint256 ethOut) {
-        if (from == address(0) || to == address(0)) revert ZeroAddress();
-        ethOut = _burnWithFee(from, to, sethAmount);
-    }
-
-    // --------------------------------------------
-    //  Admin / fee surface
-    // --------------------------------------------
-
-    function setMinterManager(
-        address minterManager_
-    ) external onlyOwner {
-        if (minterManager_ == address(0)) revert ZeroAddress();
-        minterManager = minterManager_;
-        emit MinterManagerUpdated(minterManager_);
-    }
-
-    function setMinter(address minter, bool allowed) external onlyMinterManager {
-        if (minter == address(0)) revert ZeroAddress();
-        isMinter[minter] = allowed;
-        emit MinterUpdated(minter, allowed);
-    }
-
-    function setFeeCollector(
-        address feeCollector_
-    ) external onlyOwner {
-        if (feeCollector_ == address(0)) revert ZeroAddress();
-        feeCollector = feeCollector_;
-        emit FeeCollectorUpdated(feeCollector_);
-    }
-
-    /**
-     * @notice Moves ringfenced fees out for PBR distribution.
-     * @dev Never dips into redeemable collateral backing the SETH supply.
+     * @notice Moves ringfenced fees to `to` for PBR distribution.
+     * @dev Only `feeCollector`. Never dips into redeemable collateral.
      */
     function collectFees(address to, uint256 amount) external {
         if (msg.sender != feeCollector) revert NotFeeCollector();
@@ -191,19 +117,13 @@ contract SETH is ERC20, Ownable {
     //  Internals
     // --------------------------------------------
 
-    function _mintWithFee(
-        address to,
-        uint256 ethIn,
-        bool attributed
-    ) internal returns (uint256 sethAmount) {
+    function _mintWithFee(address to, uint256 ethIn) internal returns (uint256 sethAmount) {
         uint256 fee = (ethIn * FEE_BPS) / BPS_DENOMINATOR;
         uint256 net = ethIn - fee;
         if (net == 0) revert InvalidAmount();
 
         sethAmount = net * EXCHANGE_RATE;
         feeAccrued += fee;
-
-        if (attributed) totalMinterMinted += sethAmount;
 
         _mint(to, sethAmount);
         emit Deposit(to, ethIn, sethAmount, fee);

@@ -113,7 +113,6 @@ contract AppRegistry is Ownable {
         if (_apps[appId].rootDeployer != address(0)) revert AlreadyRegistered();
 
         minter = minterFactory.create(appId);
-        seth.setMinter(minter, true);
 
         App storage row = _apps[appId];
         row.rootDeployer = rootDeployer;

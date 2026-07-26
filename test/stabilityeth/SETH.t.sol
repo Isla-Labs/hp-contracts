@@ -6,9 +6,9 @@ import { ERC1967Proxy } from "@openzeppelin/proxy/ERC1967/ERC1967Proxy.sol";
 
 import { AppRegistry } from "@stabilityeth/AppRegistry.sol";
 import { Minter } from "@stabilityeth/Minter.sol";
-import { MinterFactory } from "@stabilityeth/factories/MinterFactory.sol";
-import { PBRScoreOracle } from "@stabilityeth/PBRScoreOracle.sol";
-import { PBRTreasury } from "@stabilityeth/PBRTreasury.sol";
+import { MinterFactory } from "@stabilityeth/base/factories/MinterFactory.sol";
+import { PBRScoreOracle } from "@stabilityeth/pbr/PBRScoreOracle.sol";
+import { PBRTreasury } from "@stabilityeth/pbr/PBRTreasury.sol";
 import { SETH } from "@stabilityeth/SETH.sol";
 import { MockTvlContract } from "./MockTvlContract.sol";
 
@@ -22,7 +22,7 @@ contract SETHTest is Test {
 
     bytes32 internal constant SCORE_WORKFLOW = keccak256("seth-scores-v1");
     bytes32 internal constant DIST_WORKFLOW = keccak256("seth-distribute-v1");
-    uint16 internal constant DECAY_BPS = 9_000; // 90% retain, 10% new TVL
+    uint16 internal constant DECAY_BPS = 9_000;
 
     SETH internal seth;
     MinterFactory internal factory;
@@ -33,7 +33,13 @@ contract SETHTest is Test {
     bytes32 internal appId;
 
     function setUp() public {
-        seth = new SETH(owner);
+        // Predict treasury proxy CREATE address so SETH.feeCollector can be immutable.
+        // Order below: treImpl, seth, factory, registry, scoreImpl, oracleProxy, treasuryProxy.
+        uint64 n = uint64(vm.getNonce(address(this)));
+        address predictedTreasury = vm.computeCreateAddress(address(this), n + 6);
+
+        PBRTreasury treImpl = new PBRTreasury();
+        seth = new SETH(predictedTreasury);
         factory = new MinterFactory(address(seth), owner, owner);
         registry = new AppRegistry(address(seth), address(factory), owner);
 
@@ -50,7 +56,6 @@ contract SETHTest is Test {
             )
         );
 
-        PBRTreasury treImpl = new PBRTreasury();
         treasury = PBRTreasury(
             payable(
                 address(
@@ -71,11 +76,11 @@ contract SETHTest is Test {
                 )
             )
         );
+        require(address(treasury) == predictedTreasury, "treasury address mismatch");
+        assertEq(seth.feeCollector(), address(treasury));
 
         vm.startPrank(owner);
         factory.setRegistry(address(registry));
-        seth.setMinterManager(address(registry));
-        seth.setFeeCollector(address(treasury));
         registry.setPbrTreasury(address(treasury));
         vm.stopPrank();
 
@@ -109,6 +114,7 @@ contract SETHTest is Test {
         minter.deposit{ value: ethIn }();
 
         uint256 expectedSeth = (ethIn - ethIn / 1000) * 100;
+        assertEq(seth.balanceOf(user), expectedSeth);
         assertEq(registry.totalMinted(appId), expectedSeth);
         assertEq(registry.netMinted(appId), expectedSeth);
     }
@@ -119,11 +125,14 @@ contract SETHTest is Test {
         minter.deposit{ value: 1 ether }();
 
         uint256 minted = minter.totalMinted();
-        vm.prank(user);
+        vm.startPrank(user);
+        seth.approve(address(minter), minted);
         minter.withdraw(minted);
+        vm.stopPrank();
 
         assertEq(registry.totalMinted(appId), minted);
         assertEq(registry.netMinted(appId), 0);
+        assertEq(seth.balanceOf(user), 0);
     }
 
     function test_scoreOracle_appliesOnchainDecay() public {
@@ -132,12 +141,10 @@ contract SETHTest is Test {
         minter.deposit{ value: 1 ether }();
         uint256 minted = registry.totalMinted(appId);
 
-        // First observation: m = 0.1 * tvl (alpha=1000), s = mintDelta
         _pushScores(appId, 100 ether, minted);
         assertEq(oracle.runningM(appId), (100 ether * 1000) / 10_000);
         assertEq(oracle.runningS(appId), minted);
 
-        // Second tick: no new mints, same TVL → m EWMA again, s decays
         uint256 m1 = oracle.runningM(appId);
         uint256 s1 = oracle.runningS(appId);
         _pushScores(appId, 100 ether, minted);
@@ -193,7 +200,6 @@ contract SETHTest is Test {
         vm.prank(user);
         minter.deposit{ value: 5 ether }();
         _pushScores(appId, 10 ether, registry.totalMinted(appId));
-        // unused app: oracle clears scores even if CRE sends TVL
         _pushScores(appId2, 1_000 ether, 0);
         assertEq(oracle.runningM(appId2), 0);
         assertEq(oracle.runningS(appId2), 0);
@@ -217,7 +223,7 @@ contract SETHTest is Test {
         appIds[0] = appId;
 
         vm.prank(scoreForwarder);
-        vm.expectRevert(); // wrong sender vs dist forwarder
+        vm.expectRevert();
         treasury.onReport(
             _creMetadata(DIST_WORKFLOW),
             abi.encode(PBRTreasury.DistributeReport({ epochId: 1, appIds: appIds }))

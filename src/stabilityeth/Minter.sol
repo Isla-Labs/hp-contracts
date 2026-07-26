@@ -2,6 +2,8 @@
 pragma solidity ^0.8.34;
 
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
+import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 
 import { IAppRegistry } from "@stabilityeth/base/interfaces/IAppRegistry.sol";
 import { IPBRTreasury } from "@stabilityeth/base/interfaces/IPBRTreasury.sol";
@@ -9,21 +11,18 @@ import { SETH } from "@stabilityeth/SETH.sol";
 
 /**
  * @title Minter
- * @notice Thin mint/burn router for one `appId`. Credits registry mint stats for CRE / PBR.
- * @dev Beacon-proxy per app. `AppRegistry.totalMinted` / `netMinted` are the canonical store;
- *      local `totalMinted` mirrors cumulative mints for convenience.
+ * @notice Optional app router over immutable SETH: attribute mint volume for PBR.
+ * @dev Deposit: `SETH.deposit` (mints to this) → transfer SETH to user → `recordMint`.
+ *      Withdraw: pull SETH from user → `SETH.withdraw` → forward ETH → `recordBurn`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract Minter is Initializable {
-    /// @notice StabilityETH wrapper
+    using SafeERC20 for IERC20;
+
     SETH public seth;
-
-    /// @notice Canonical app identity in `AppRegistry`
     bytes32 public appId;
-
-    /// @notice Registry that deployed this proxy
     IAppRegistry public registry;
 
     /// @notice Cumulative SETH minted through this minter (mirrors `AppRegistry.totalMinted`)
@@ -38,6 +37,7 @@ contract Minter is Initializable {
     error InvalidAmount();
     error NotBeneficiary();
     error TreasuryNotSet();
+    error EthTransferFailed();
 
     modifier onlyBeneficiary() {
         if (!registry.isBeneficiary(appId, msg.sender)) revert NotBeneficiary();
@@ -49,11 +49,6 @@ contract Minter is Initializable {
         _disableInitializers();
     }
 
-    /**
-     * @param seth_ StabilityETH wrapper.
-     * @param appId_ App identity from `AppRegistry.register`.
-     * @param registry_ `AppRegistry` that created this proxy.
-     */
     function initialize(address seth_, bytes32 appId_, address registry_) external initializer {
         if (seth_ == address(0) || registry_ == address(0)) revert ZeroAddress();
         if (appId_ == bytes32(0)) revert ZeroAppId();
@@ -62,18 +57,21 @@ contract Minter is Initializable {
         registry = IAppRegistry(registry_);
     }
 
-    /// @notice Bare ETH transfers mint SETH to the sender through this minter
     receive() external payable {
+        // ETH from SETH.withdraw is handled by `withdraw`; other ETH is a deposit.
+        if (msg.sender == address(seth)) return;
         deposit();
     }
 
     /**
-     * @notice Deposit ETH and mint SETH to the caller; credits registry `totalMinted` / `netMinted`.
+     * @notice Deposit ETH via SETH, send SETH to caller, attribute mint to this app.
      */
     function deposit() public payable {
         if (msg.value == 0) revert InvalidAmount();
 
-        uint256 sethAmount = seth.mintTo{ value: msg.value }(msg.sender);
+        uint256 sethAmount = seth.deposit{ value: msg.value }();
+        IERC20(address(seth)).safeTransfer(msg.sender, sethAmount);
+
         totalMinted += sethAmount;
         registry.recordMint(sethAmount);
 
@@ -81,8 +79,7 @@ contract Minter is Initializable {
     }
 
     /**
-     * @notice Burn caller's SETH and redeem ETH; debits registry `netMinted`.
-     * @dev Cumulative `totalMinted` is unchanged — CRE mint-delta uses the cumulative series.
+     * @notice Pull SETH from caller, redeem via SETH, forward ETH, debit `netMinted`.
      */
     function withdraw(
         uint256 sethAmount
@@ -94,15 +91,17 @@ contract Minter is Initializable {
         uint256 amountToBurn = (sethAmount / exchangeRate) * exchangeRate;
         if (amountToBurn == 0) revert InvalidAmount();
 
-        uint256 ethOut = seth.burnFrom(msg.sender, msg.sender, sethAmount);
+        IERC20(address(seth)).safeTransferFrom(msg.sender, address(this), amountToBurn);
+
+        uint256 ethOut = seth.withdraw(amountToBurn);
         registry.recordBurn(amountToBurn);
+
+        (bool ok,) = msg.sender.call{ value: ethOut }("");
+        if (!ok) revert EthTransferFailed();
 
         emit Burned(msg.sender, amountToBurn, ethOut);
     }
 
-    /**
-     * @notice Claim this beneficiary's share of app yield for `epochId`.
-     */
     function claim(
         uint64 epochId
     ) external onlyBeneficiary returns (uint256 payout) {
@@ -113,9 +112,6 @@ contract Minter is Initializable {
         emit YieldClaimed(msg.sender, epochId, payout);
     }
 
-    /**
-     * @notice Claim unpaid daily epochs from `fromEpoch` (batched). Resume with returned `nextEpoch`.
-     */
     function claimAll(
         uint64 fromEpoch
     ) external onlyBeneficiary returns (uint256 totalPayout, uint64 nextEpoch) {

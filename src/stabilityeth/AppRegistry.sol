@@ -35,12 +35,21 @@ contract AppRegistry is Ownable {
     SETH public immutable seth;
     MinterFactory public immutable minterFactory;
 
+    /// @notice SETH PBR treasury used by minters for yield claims
+    address public pbrTreasury;
+
     uint256 private _appIdNonce;
 
     mapping(bytes32 appId => App) private _apps;
     mapping(bytes32 appId => mapping(address account => uint16 shareBps)) public beneficiaryShareBps;
     mapping(address tvlContract => bytes32 appId) public appIdOfContract;
     mapping(address minter => bytes32 appId) public appIdOfMinter;
+
+    /// @notice Cumulative SETH minted through each app's minter (CRE samples for TW mint-delta)
+    mapping(bytes32 appId => uint256) public totalMinted;
+
+    /// @notice Minter-path outstanding supply: +mint / −burn via that app's minter
+    mapping(bytes32 appId => uint256) public netMinted;
 
     bytes32[] private _appIds;
 
@@ -54,6 +63,9 @@ contract AppRegistry is Ownable {
     event TvlContractRemoved(bytes32 indexed appId, address indexed tvlContract);
     event AppActiveUpdated(bytes32 indexed appId, bool active);
     event BeneficiariesUpdated(bytes32 indexed appId, Beneficiary[] beneficiaries);
+    event PbrTreasuryUpdated(address indexed pbrTreasury);
+    event MintRecorded(bytes32 indexed appId, uint256 amount, uint256 totalMinted_, uint256 netMinted_);
+    event BurnRecorded(bytes32 indexed appId, uint256 amount, uint256 totalMinted_, uint256 netMinted_);
 
     error ZeroAddress();
     error AlreadyRegistered();
@@ -66,6 +78,8 @@ contract AppRegistry is Ownable {
     error EmptyBeneficiaries();
     error InvalidShareBps();
     error DuplicateBeneficiary(address account);
+    error NotAppMinter();
+    error InvalidAmount();
 
     modifier onlyRootDeployer(
         bytes32 appId
@@ -173,6 +187,54 @@ contract AppRegistry is Ownable {
         emit AppActiveUpdated(appId, active);
     }
 
+    /// @notice Bind the SETH `PBRTreasury` used for beneficiary claims.
+    function setPbrTreasury(
+        address pbrTreasury_
+    ) external onlyOwner {
+        if (pbrTreasury_ == address(0)) revert ZeroAddress();
+        pbrTreasury = pbrTreasury_;
+        emit PbrTreasuryUpdated(pbrTreasury_);
+    }
+
+    // --------------------------------------------
+    //  Minter accounting (CRE + PBR eligibility)
+    // --------------------------------------------
+
+    /**
+     * @notice Credit mint volume for `msg.sender`'s app. Only the app's allowlisted Minter.
+     * @dev Increments `totalMinted` (cumulative) and `netMinted` (outstanding).
+     */
+    function recordMint(
+        uint256 sethAmount
+    ) external {
+        if (sethAmount == 0) revert InvalidAmount();
+        bytes32 appId = appIdOfMinter[msg.sender];
+        if (appId == bytes32(0)) revert NotAppMinter();
+
+        totalMinted[appId] += sethAmount;
+        netMinted[appId] += sethAmount;
+
+        emit MintRecorded(appId, sethAmount, totalMinted[appId], netMinted[appId]);
+    }
+
+    /**
+     * @notice Debit outstanding mint credit for `msg.sender`'s app. Only the app's Minter.
+     * @dev Decreases `netMinted` only (floors at 0). `totalMinted` is never reduced.
+     */
+    function recordBurn(
+        uint256 sethAmount
+    ) external {
+        if (sethAmount == 0) revert InvalidAmount();
+        bytes32 appId = appIdOfMinter[msg.sender];
+        if (appId == bytes32(0)) revert NotAppMinter();
+
+        uint256 net = netMinted[appId];
+        uint256 debit = sethAmount > net ? net : sethAmount;
+        netMinted[appId] = net - debit;
+
+        emit BurnRecorded(appId, debit, totalMinted[appId], netMinted[appId]);
+    }
+
     // --------------------------------------------
     //  Views
     // --------------------------------------------
@@ -212,6 +274,12 @@ contract AppRegistry is Ownable {
         return _apps[appId].rootDeployer != address(0);
     }
 
+    function isActive(
+        bytes32 appId
+    ) external view returns (bool) {
+        return _apps[appId].active;
+    }
+
     function isBeneficiary(bytes32 appId, address account) external view returns (bool) {
         return beneficiaryShareBps[appId][account] != 0;
     }
@@ -236,6 +304,20 @@ contract AppRegistry is Ownable {
         bytes32 appId
     ) external view returns (Beneficiary[] memory) {
         return _apps[appId].beneficiaries;
+    }
+
+    /**
+     * @notice CRE helper: mint stats for one app.
+     * @return total Cumulative SETH minted through the app minter.
+     * @return net Outstanding SETH attributed to the app minter (`netMinted`).
+     * @return minter App minter address.
+     * @return active Whether the app is PBR-active.
+     */
+    function getMintStats(
+        bytes32 appId
+    ) external view returns (uint256 total, uint256 net, address minter, bool active) {
+        App storage row = _apps[appId];
+        return (totalMinted[appId], netMinted[appId], row.minter, row.active);
     }
 
     // --------------------------------------------

@@ -46,6 +46,11 @@ abstract contract EligibilityStore is CreReceiver {
     /// @dev Earliest season start year used as G-index origin (e.g. 2024).
     uint16 public baseYear;
 
+    bytes32[] leagueIds;
+
+    /// @dev Earliest season start year used as G-index origin (e.g. 2024) for each league.
+    mapping(bytes32 leagueId => uint16 baseYear) public leagueBaseYear;
+
     /// @notice Sole address allowed to call `recordAppearances` (PpmVerifier).
     address public ppmVerifier;
 

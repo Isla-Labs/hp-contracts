@@ -13,6 +13,7 @@ forge-std/=lib/forge-std/src/
 @routers/=src/routers/
 @governance/=src/governance/
 @data/=src/data/
+@stabilityeth/=src/stabilityeth/
 
 @doppler/=lib/doppler/
 @cre/=lib/chainlink-evm/contracts/cre/src/

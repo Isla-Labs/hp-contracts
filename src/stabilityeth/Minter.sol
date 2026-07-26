@@ -4,12 +4,14 @@ pragma solidity ^0.8.34;
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { IAppRegistry } from "@stabilityeth/interfaces/IAppRegistry.sol";
+import { IPBRTreasury } from "@stabilityeth/interfaces/IPBRTreasury.sol";
 import { SETH } from "@stabilityeth/SETH.sol";
 
 /**
  * @title Minter
- * @notice Thin mint/burn router for one `appId`. Credits `totalMinted` for the `s/S` leg.
- * @dev Beacon-proxy per app. Yield claims are gated to `AppRegistry` beneficiaries for this `appId`.
+ * @notice Thin mint/burn router for one `appId`. Credits registry mint stats for CRE / PBR.
+ * @dev Beacon-proxy per app. `AppRegistry.totalMinted` / `netMinted` are the canonical store;
+ *      local `totalMinted` mirrors cumulative mints for convenience.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -24,18 +26,18 @@ contract Minter is Initializable {
     /// @notice Registry that deployed this proxy
     IAppRegistry public registry;
 
-    /// @notice Cumulative SETH minted through this minter (app `s`)
+    /// @notice Cumulative SETH minted through this minter (mirrors `AppRegistry.totalMinted`)
     uint256 public totalMinted;
 
     event Minted(address indexed user, uint256 ethIn, uint256 sethAmount);
     event Burned(address indexed user, uint256 sethAmount, uint256 ethOut);
-    event YieldClaimed(address indexed beneficiary, uint256 amount);
+    event YieldClaimed(address indexed beneficiary, uint64 indexed epochId, uint256 amount);
 
     error ZeroAddress();
     error ZeroAppId();
     error InvalidAmount();
     error NotBeneficiary();
-    error YieldNotAvailable();
+    error TreasuryNotSet();
 
     modifier onlyBeneficiary() {
         if (!registry.isBeneficiary(appId, msg.sender)) revert NotBeneficiary();
@@ -66,35 +68,48 @@ contract Minter is Initializable {
     }
 
     /**
-     * @notice Deposit ETH and mint SETH to the caller; credits `totalMinted`.
+     * @notice Deposit ETH and mint SETH to the caller; credits registry `totalMinted` / `netMinted`.
      */
     function deposit() public payable {
         if (msg.value == 0) revert InvalidAmount();
 
         uint256 sethAmount = seth.mintTo{ value: msg.value }(msg.sender);
         totalMinted += sethAmount;
+        registry.recordMint(sethAmount);
 
         emit Minted(msg.sender, msg.value, sethAmount);
     }
 
     /**
-     * @notice Burn caller's SETH and redeem ETH to the caller via this minter.
-     * @dev Does not decrease `totalMinted` — `s` is mint-volume based.
+     * @notice Burn caller's SETH and redeem ETH; debits registry `netMinted`.
+     * @dev Cumulative `totalMinted` is unchanged — CRE mint-delta uses the cumulative series.
      */
     function withdraw(
         uint256 sethAmount
     ) external {
         if (sethAmount == 0) revert InvalidAmount();
 
+        uint256 exchangeRate = seth.EXCHANGE_RATE();
+        // forge-lint: disable-next-line(divide-before-multiply) - match SETH floor-rounding
+        uint256 amountToBurn = (sethAmount / exchangeRate) * exchangeRate;
+        if (amountToBurn == 0) revert InvalidAmount();
+
         uint256 ethOut = seth.burnFrom(msg.sender, msg.sender, sethAmount);
-        emit Burned(msg.sender, sethAmount, ethOut);
+        registry.recordBurn(amountToBurn);
+
+        emit Burned(msg.sender, amountToBurn, ethOut);
     }
 
     /**
-     * @notice Claim this beneficiary's share of app yield.
-     * @dev Gated to registry beneficiaries. PBR accrual wiring lands in a later iteration.
+     * @notice Claim this beneficiary's share of app yield for `epochId`.
      */
-    function claim() external onlyBeneficiary {
-        revert YieldNotAvailable();
+    function claim(
+        uint64 epochId
+    ) external onlyBeneficiary returns (uint256 payout) {
+        address treasury = registry.pbrTreasury();
+        if (treasury == address(0)) revert TreasuryNotSet();
+
+        payout = IPBRTreasury(treasury).claim(appId, epochId, msg.sender);
+        emit YieldClaimed(msg.sender, epochId, payout);
     }
 }

@@ -191,6 +191,15 @@ Applicants never finalize verification onchain themselves; they submit claims th
 
 Keep `Minter` attribution (`totalMinted` / `s`) independent: mint path auth stays “allowlisted minter for app `A`”; TVL auth is only about which addresses enter `m/M_adj`.
 
+## PBR settle / claim (implemented shape)
+
+- CRE (≈5m) computes **TWAVL (`m`)** and **TW mint-delta (`s`)** offchain; pushes `PBRTreasury.CreReport`.
+- Mint stats live on `AppRegistry`: `totalMinted` (cumulative, CRE delta source) and `netMinted` (outstanding).
+- CRE / treasury **must** skip apps with `netMinted == 0` (unused minter — no TVL-only yield).
+- Treasury locks `rewardsR` → epoch `R`, stores scores, marks claimable.
+- `I_app = R * m / M_adj * s / S_adj`; beneficiary gets `shareBps`.
+- Pull claim via `Minter.claim(epochId)` / bitmap `(appId, beneficiary, epochId)`.
+
 ---
 
 ## Indexer / CRE data shape (suggested)

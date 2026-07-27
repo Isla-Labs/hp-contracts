@@ -59,9 +59,11 @@ enum RunStatus {
 /// @notice CRE → `_processReport` discriminator.
 /// @dev `FETCH_TRANSIENT` carries a **page slice** (store appends).
 ///      `SORT_TRANSIENT` is report-only (no HTTP); gas-chunked via `SortPage`.
+///      `SYNC_LEAGUE` reconciles `RunBook` with TournamentRegistry seasons (queue or append).
 enum SquadPhase {
     FETCH_TRANSIENT,
-    SORT_TRANSIENT
+    SORT_TRANSIENT,
+    SYNC_LEAGUE
 }
 
 /// @notice Which pass owns the single-slot work buffers.
@@ -169,12 +171,16 @@ struct SortCursor {
 /// @notice Unified CRE report decode target for all squad handlers.
 /// @dev `FETCH_TRANSIENT`: `data` is one page slice (store appends).
 ///      `SORT_TRANSIENT`: `data` empty; `leagueId` + `seasonId` select active work.
+///      `SYNC_LEAGUE`: `syncSeasonIds` / `syncSeasonYears` (oldest→newest) reconcile the RunBook.
 struct SquadReport {
     SquadPhase phase;
     bytes32 leagueId;
     bytes32 seasonId;
-    /// @dev Page slice on FETCH only; ignored on SORT.
+    /// @dev Page slice on FETCH only; ignored on SORT / SYNC.
     TransientReturn data;
+    /// @dev Registry snapshot for `SYNC_LEAGUE` (ignored otherwise).
+    bytes32[] syncSeasonIds;
+    uint16[] syncSeasonYears;
 }
 
 // --------------------------------------------
@@ -241,6 +247,10 @@ library SquadWorkflowEvents {
     /// @notice Entire `RunBook` is terminal (`IDLE`|`ARTIFACT`) and `pass == None`.
     /// @dev Optional wake; hourly cron remains the steady-state heartbeat.
     event LoopPending(uint16 runNumber);
+
+    /// @notice Historical backfill of all queued leagues finished (`pass` cleared).
+    /// @dev Wakes RoundManager (fixtures / matchweeks) — not the squads fetch path.
+    event HistoricalBackfillComplete(uint16 runNumber, uint16 leagueCount);
 }
 
 // --------------------------------------------

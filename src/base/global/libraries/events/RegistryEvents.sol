@@ -26,6 +26,9 @@ library RegistryEvents {
     event HubRegistered(bytes32 indexed leagueId, address indexed pbrFeeHub);
     event HubUpdated(bytes32 indexed leagueId, address indexed previous, address indexed pbrFeeHub);
     event TournamentCreated(bytes32 indexed tournamentId, TournamentType tournamentType, address indexed pbrTreasury);
+    /// @notice Domestic league tournament created — CRE squads Trigger 1 (historical bootstrap).
+    /// @dev `leagueId == tournamentId` for `DOMESTIC_LEAGUE`. CRE syncs seasons into EligibilityStore.
+    event DomesticLeagueCreated(bytes32 indexed leagueId, address indexed pbrTreasury);
     event HubAddedToTournament(bytes32 indexed tournamentId, bytes32 indexed leagueId, address pbrFeeHub);
     event HubRemovedFromTournament(bytes32 indexed tournamentId, bytes32 indexed leagueId);
     event PbrTreasuryUpdated(bytes32 indexed tournamentId, address indexed previous, address indexed pbrTreasury);

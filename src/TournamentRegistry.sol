@@ -147,6 +147,9 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
 
         _tournamentIds.push(tournamentId);
         emit Events.TournamentCreated(tournamentId, tournamentType, pbrTreasury);
+        if (tournamentType == TournamentType.DOMESTIC_LEAGUE) {
+            emit Events.DomesticLeagueCreated(tournamentId, pbrTreasury);
+        }
     }
 
     /**
@@ -328,6 +331,43 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
     }
 
     /**
+     * @notice Seasons under one tournament, oldest `seasonStartYear` first.
+     * @dev CRE `eligibility-store` uses this on `DomesticLeagueCreated` / `SeasonOpened` to
+     *      `SYNC_LEAGUE` into EligibilityStore's RunBook.
+     */
+    function getSeasonsOldestFirst(bytes32 tournamentId)
+        external
+        view
+        returns (bytes32[] memory seasonIds, uint16[] memory seasonStartYears)
+    {
+        Tournament storage t = _requireTournament(tournamentId);
+        uint256 sLen = t.seasons.length;
+        seasonIds = new bytes32[](sLen);
+        seasonStartYears = new uint16[](sLen);
+        uint256 count;
+        for (uint256 j; j < sLen; ++j) {
+            bytes32 seasonId = t.seasons[j].seasonId;
+            if (seasonId == bytes32(0)) continue;
+            seasonIds[count] = seasonId;
+            seasonStartYears[count] = t.seasons[j].seasonStartYear;
+            unchecked {
+                ++count;
+            }
+        }
+        if (count != sLen) {
+            bytes32[] memory trimmed = new bytes32[](count);
+            uint16[] memory trimmedYears = new uint16[](count);
+            for (uint256 i; i < count; ++i) {
+                trimmed[i] = seasonIds[i];
+                trimmedYears[i] = seasonStartYears[i];
+            }
+            seasonIds = trimmed;
+            seasonStartYears = trimmedYears;
+        }
+        _sortSeasonsOldestFirst(seasonIds, seasonStartYears, count);
+    }
+
+    /**
      * @notice All non-zero season calendar ids with start years, oldest `seasonStartYear` first.
      * @dev CRE squad-fill walks this list in order (historical catch-up before newer calendars).
      *      Oldest-first also supports later-season status checks (e.g. newTransfer / backFromLoan)
@@ -374,21 +414,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
             seasonStartYears = trimmedYears;
         }
 
-        // Insertion sort by seasonStartYear ascending (stable for equal years).
-        for (uint256 i = 1; i < count; ++i) {
-            bytes32 id = seasonIds[i];
-            uint16 startYear = seasonStartYears[i];
-            uint256 j = i;
-            while (j > 0 && seasonStartYears[j - 1] > startYear) {
-                seasonIds[j] = seasonIds[j - 1];
-                seasonStartYears[j] = seasonStartYears[j - 1];
-                unchecked {
-                    --j;
-                }
-            }
-            seasonIds[j] = id;
-            seasonStartYears[j] = startYear;
-        }
+        _sortSeasonsOldestFirst(seasonIds, seasonStartYears, count);
     }
 
     function getRound(
@@ -505,6 +531,28 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
         emit Events.VaultUnregistered(tournamentId, vault);
 
         IPbrTreasury(treasury).syncUnregisterVault(vault);
+    }
+
+    /// @dev In-place insertion sort by `seasonStartYear` ascending (stable for equal years).
+    function _sortSeasonsOldestFirst(
+        bytes32[] memory seasonIds,
+        uint16[] memory seasonStartYears,
+        uint256 count
+    ) private pure {
+        for (uint256 i = 1; i < count; ++i) {
+            bytes32 id = seasonIds[i];
+            uint16 startYear = seasonStartYears[i];
+            uint256 j = i;
+            while (j > 0 && seasonStartYears[j - 1] > startYear) {
+                seasonIds[j] = seasonIds[j - 1];
+                seasonStartYears[j] = seasonStartYears[j - 1];
+                unchecked {
+                    --j;
+                }
+            }
+            seasonIds[j] = id;
+            seasonStartYears[j] = startYear;
+        }
     }
 
     function _requireTournament(bytes32 tournamentId) internal view returns (Tournament storage t) {

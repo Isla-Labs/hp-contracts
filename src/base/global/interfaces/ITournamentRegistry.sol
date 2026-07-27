@@ -74,6 +74,12 @@ interface ITournamentRegistry {
 
     function getSeason(bytes32 tournamentId, uint16 seasonStartYear) external view returns (Season memory);
 
+    /// @notice Seasons under one tournament, oldest `seasonStartYear` first (CRE RunBook sync).
+    function getSeasonsOldestFirst(bytes32 tournamentId)
+        external
+        view
+        returns (bytes32[] memory seasonIds, uint16[] memory seasonStartYears);
+
     /// @notice All SP tournament calendar ids (`tmcl`) with start years, oldest `seasonStartYear` first.
     function getSeasonIdsOldestFirst()
         external

@@ -43,6 +43,12 @@ library EligibilityEvents {
     /// @notice Deployed player left the league (queued to TransferLocker after full sweep).
     event PlayerLeftLeague(bytes32 indexed playerId);
 
+    /// @notice SORT upsert detected a club move (MinutesStore membership change).
+    event PlayerClubChanged(bytes32 indexed playerId, bytes32 indexed previousClubId, bytes32 indexed newClubId);
+
+    /// @notice SORT upsert detected a league move (MinutesStore membership change).
+    event PlayerLeagueChanged(bytes32 indexed playerId, bytes32 previousLeagueId, bytes32 newLeagueId);
+
     /// @notice New `TransparentUpgradeableProxy` for a league EligibilityVerifier.
     event EligibilityVerifierProxyCreated(address indexed proxy, bytes32 indexed leagueId, address implementation);
 

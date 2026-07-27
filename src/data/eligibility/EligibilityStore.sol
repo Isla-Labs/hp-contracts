@@ -112,6 +112,11 @@ abstract contract EligibilityStore is CreReceiver {
     /// @dev True exits after the removal pass — drained by the verifier later.
     bytes32[] internal _pendingLeftLeague;
 
+    /// @dev Seasons appended while a pass was active — woken via `SeasonReady` as soon as
+    ///      the store returns to `_idleOrResume` (no cron wait). Parallel arrays.
+    bytes32[] internal _deferredWakeLeagueIds;
+    bytes32[] internal _deferredWakeSeasonIds;
+
     // --------------------------------------------
     //  Views — workflow
     // --------------------------------------------
@@ -163,15 +168,15 @@ abstract contract EligibilityStore is CreReceiver {
     }
 
     /**
-     * @notice CRE cron gate: next current-year season to fetch, if a current pass may start.
-     * @dev `ready == false` while any pass is active. Pair with `lastCurrentPassCompletedAt`
-     *      for the daily-resweep throttle in workflow config.
+     * @notice CRE cron gate: next non-`ARTIFACT` (`IDLE`) season to fetch, if a pass may start.
+     * @dev Registry divergence is reconciled via `SYNC_LEAGUE` before fetch. Pair with
+     *      `lastCurrentPassCompletedAt` for the daily-resweep throttle.
      */
     function nextCurrentSeason() external view returns (bool ready, bytes32 leagueId, bytes32 seasonId) {
         if (_control.pass != PassKind.None || _control.currentSeasonStartYear == 0) {
             return (false, bytes32(0), bytes32(0));
         }
-        (bool found, uint16 li, uint16 si) = _findCurrentSeason(0, 0);
+        (bool found, uint16 li, uint16 si) = _findIdleSeason(0, 0);
         if (!found) return (false, bytes32(0), bytes32(0));
         return (true, _runBook.leagueIds[li], _runBook.seasons[li][si].seasonId);
     }
@@ -219,6 +224,13 @@ abstract contract EligibilityStore is CreReceiver {
     /// @inheritdoc CreReceiver
     function _processReport(bytes calldata, bytes calldata report) internal override {
         SquadReport memory r = abi.decode(report, (SquadReport));
+
+        if (r.phase == SquadPhase.SYNC_LEAGUE) {
+            if (r.leagueId == bytes32(0)) revert Errors.ZeroId();
+            _syncLeague(r.leagueId, r.syncSeasonIds, r.syncSeasonYears);
+            return;
+        }
+
         if (r.leagueId == bytes32(0) || r.seasonId == bytes32(0)) revert Errors.ZeroId();
 
         if (r.phase == SquadPhase.FETCH_TRANSIENT) {
@@ -227,6 +239,40 @@ abstract contract EligibilityStore is CreReceiver {
             _sortTransient(r);
         } else {
             revert Errors.UnknownSquadPhase();
+        }
+    }
+
+    // --------------------------------------------
+    //  Phase 0 — SYNC_LEAGUE (RunBook ↔ TournamentRegistry)
+    // --------------------------------------------
+
+    /**
+     * @dev CRE Trigger 1 / SeasonOpened: reconcile registry seasons into the RunBook.
+     *      First sync queues the league (starts historical if idle); later syncs append
+     *      only seasons newer than the last queued year (monotonic).
+     */
+    function _syncLeague(bytes32 leagueId, bytes32[] memory seasonIds, uint16[] memory seasonStartYears) private {
+        if (!_leagueQueued[leagueId]) {
+            _queueLeague(leagueId, seasonIds, seasonStartYears);
+            return;
+        }
+
+        uint256 n = seasonIds.length;
+        if (n != seasonStartYears.length) revert Errors.LengthMismatch(n, seasonStartYears.length);
+
+        // Map existing seasons for idempotent re-sync.
+        uint256 leagueIndex = _leagueIndex(leagueId);
+        SeasonRun[] storage rows = _runBook.seasons[leagueIndex];
+        uint16 lastYear = rows.length == 0 ? 0 : rows[rows.length - 1].seasonStartYear;
+
+        for (uint256 i; i < n; ++i) {
+            bytes32 seasonId = seasonIds[i];
+            uint16 year = seasonStartYears[i];
+            if (seasonId == bytes32(0) || year == 0) revert Errors.ZeroId();
+            if (_seasonQueued(leagueIndex, seasonId)) continue;
+            if (year <= lastYear) revert Errors.SeasonsNotAscending();
+            _appendSeason(leagueIndex, seasonId, year);
+            lastYear = year;
         }
     }
 
@@ -431,7 +477,15 @@ abstract contract EligibilityStore is CreReceiver {
             emit Events.SquadPlayerMetadataSet(playerId, buf.playerNames[i], buf.playerSymbols[i]);
         }
 
-        // Membership write — prior values are the transfer signal for downstream consumers.
+        // Membership write — emit change records before overwrite (transfer signal).
+        bytes32 prevLeague = store.currentLeagueId;
+        bytes32 prevClub = store.currentClubId;
+        if (prevLeague != bytes32(0) && prevLeague != leagueId) {
+            emit Events.PlayerLeagueChanged(playerId, prevLeague, leagueId);
+        }
+        if (prevClub != bytes32(0) && prevClub != clubId) {
+            emit Events.PlayerClubChanged(playerId, prevClub, clubId);
+        }
         store.currentLeagueId = leagueId;
         store.currentClubId = clubId;
         _lastSeasonSeen[playerId] = seasonId;
@@ -534,9 +588,25 @@ abstract contract EligibilityStore is CreReceiver {
     /**
      * @dev Only place the buffer is cleared and `activeSeasonId` advances — guarantees
      *      no next-season FETCH until the previous season is fully upserted + removal-scanned.
+     *
+     *      Finalize rule (monotonic year tick):
+     *        - `seasonStartYear < currentSeasonStartYear` → `ARTIFACT`
+     *        - else → `IDLE`, and if `seasonStartYear > current` tick year forward and
+     *          demote any other `IDLE` seasons with a lower start year to `ARTIFACT`.
      */
     function _finalizeSeason(SeasonRun storage row) private {
-        row.status = row.seasonStartYear == _control.currentSeasonStartYear ? RunStatus.IDLE : RunStatus.ARTIFACT;
+        uint16 year = row.seasonStartYear;
+        uint16 current = _control.currentSeasonStartYear;
+
+        if (year < current) {
+            row.status = RunStatus.ARTIFACT;
+        } else {
+            row.status = RunStatus.IDLE;
+            if (year > current) {
+                _control.currentSeasonStartYear = year;
+                _artifactIdleSeasonsBefore(year);
+            }
+        }
 
         // Emit SquadListUpdated for clubs rebuilt this season (ops / indexers).
         bytes32 seasonId = _transient.seasonId;
@@ -554,6 +624,21 @@ abstract contract EligibilityStore is CreReceiver {
         delete _removalCandidates;
 
         _advanceAfterFinalize();
+    }
+
+    /// @dev After a forward year tick: any other IDLE season with a lower start year → ARTIFACT.
+    function _artifactIdleSeasonsBefore(uint16 year) private {
+        uint256 leagues = _runBook.leagueIds.length;
+        for (uint256 li; li < leagues; ++li) {
+            SeasonRun[] storage rows = _runBook.seasons[li];
+            uint256 n = rows.length;
+            for (uint256 si; si < n; ++si) {
+                SeasonRun storage other = rows[si];
+                if (other.status == RunStatus.IDLE && other.seasonStartYear < year) {
+                    other.status = RunStatus.ARTIFACT;
+                }
+            }
+        }
     }
 
     /// @dev Next work item or wind the pass down. All wakes are store-emitted events.
@@ -579,7 +664,7 @@ abstract contract EligibilityStore is CreReceiver {
             return;
         }
 
-        (bool found, uint16 li, uint16 si) = _findCurrentSeason(c.activeLeagueIndex, uint256(c.activeSeasonIndex) + 1);
+        (bool found, uint16 li, uint16 si) = _findIdleSeason(c.activeLeagueIndex, uint256(c.activeSeasonIndex) + 1);
         if (found) {
             c.activeLeagueIndex = li;
             c.activeSeasonIndex = si;
@@ -594,8 +679,12 @@ abstract contract EligibilityStore is CreReceiver {
     }
 
     /**
-     * @dev Start/resume historical backfill at the first non-backfilled league, else idle.
-     *      Handles leagues queued while another pass held the mutex.
+     * @dev Resume work without waiting for cron:
+     *      1) Historical — next non-backfilled league → `SeasonsQueued`
+     *      2) Deferred appends (`SeasonOpened` while a pass was busy) → Current + `SeasonReady`
+     *      3) Else truly idle → `LoopPending` (+ `HistoricalBackfillComplete` when leaving
+     *         a finished historical pass). Current-year IDLE left after historical wait for
+     *         cron resweep — they were already fetched in the historical pass.
      */
     function _idleOrResume() private {
         WorkflowControl storage c = _control;
@@ -615,6 +704,11 @@ abstract contract EligibilityStore is CreReceiver {
             return;
         }
 
+        if (_wakeDeferredAppend()) return;
+
+        bool finishedHistorical = c.pass == PassKind.Historical && _backfilledLeagues == _runBook.leagueIds.length
+            && _runBook.leagueIds.length != 0;
+
         c.pass = PassKind.None;
         c.historicalActive = false;
         c.activeLeagueId = bytes32(0);
@@ -622,6 +716,59 @@ abstract contract EligibilityStore is CreReceiver {
         c.activeSeasonId = bytes32(0);
         c.activeSeasonIndex = 0;
         emit WorkflowEvents.LoopPending(_runBook.runNumber);
+
+        // RoundManager wake — fixtures / matchweeks after squads historical bootstrap.
+        if (finishedHistorical) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            emit WorkflowEvents.HistoricalBackfillComplete(_runBook.runNumber, uint16(_runBook.leagueIds.length));
+        }
+    }
+
+    /**
+     * @dev Pop the oldest deferred append and start a Current pass + `SeasonReady`.
+     *      Skips entries that are no longer `IDLE` (already drained by an intervening pass).
+     */
+    function _wakeDeferredAppend() private returns (bool woken) {
+        while (_deferredWakeSeasonIds.length != 0) {
+            bytes32 leagueId = _deferredWakeLeagueIds[0];
+            bytes32 seasonId = _deferredWakeSeasonIds[0];
+            _dequeueDeferredWake();
+
+            uint256 li = _leagueIndex(leagueId);
+            SeasonRun[] storage rows = _runBook.seasons[li];
+            uint256 n = rows.length;
+            for (uint256 si; si < n; ++si) {
+                if (rows[si].seasonId != seasonId) continue;
+                if (rows[si].status != RunStatus.IDLE) break;
+                _startCurrentPassAt(li, si);
+                emit WorkflowEvents.SeasonReady(leagueId, seasonId);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _dequeueDeferredWake() private {
+        uint256 last = _deferredWakeSeasonIds.length - 1;
+        for (uint256 i; i < last; ++i) {
+            _deferredWakeLeagueIds[i] = _deferredWakeLeagueIds[i + 1];
+            _deferredWakeSeasonIds[i] = _deferredWakeSeasonIds[i + 1];
+        }
+        _deferredWakeLeagueIds.pop();
+        _deferredWakeSeasonIds.pop();
+    }
+
+    /// @dev Claim the mutex for a Current pass on a specific RunBook row + wake fetch.
+    function _startCurrentPassAt(uint256 leagueIndex, uint256 seasonIndex) private {
+        WorkflowControl storage c = _control;
+        c.pass = PassKind.Current;
+        c.historicalActive = false;
+        // forge-lint: disable-next-line(unsafe-typecast)
+        c.activeLeagueIndex = uint16(leagueIndex);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        c.activeSeasonIndex = uint16(seasonIndex);
+        c.activeLeagueId = _runBook.leagueIds[leagueIndex];
+        c.activeSeasonId = _runBook.seasons[leagueIndex][seasonIndex].seasonId;
     }
 
     /// @dev Cron entry: first FETCH report while idle claims the mutex for a current pass.
@@ -629,7 +776,7 @@ abstract contract EligibilityStore is CreReceiver {
         WorkflowControl storage c = _control;
         if (c.currentSeasonStartYear == 0) revert Errors.NoCurrentSeasonYear();
 
-        (bool found, uint16 li, uint16 si) = _findCurrentSeason(0, 0);
+        (bool found, uint16 li, uint16 si) = _findIdleSeason(0, 0);
         if (!found) revert Errors.NoQueuedWork();
 
         SeasonRun storage row = _runBook.seasons[li][si];
@@ -644,11 +791,11 @@ abstract contract EligibilityStore is CreReceiver {
         c.activeSeasonId = seasonId;
     }
 
-    function _findCurrentSeason(
+    /// @dev Next `IDLE` season (non-ARTIFACT). Cron / current-pass advance use this.
+    function _findIdleSeason(
         uint256 startLeague,
         uint256 startSeason
     ) private view returns (bool found, uint16 leagueIndex, uint16 seasonIndex) {
-        uint16 year = _control.currentSeasonStartYear;
         uint256 leagues = _runBook.leagueIds.length;
         uint256 si = startSeason;
 
@@ -656,8 +803,7 @@ abstract contract EligibilityStore is CreReceiver {
             SeasonRun[] storage rows = _runBook.seasons[li];
             uint256 n = rows.length;
             for (; si < n; ++si) {
-                SeasonRun storage row = rows[si];
-                if (row.seasonStartYear == year && row.status == RunStatus.IDLE) {
+                if (rows[si].status == RunStatus.IDLE) {
                     // forge-lint: disable-next-line(unsafe-typecast)
                     return (true, uint16(li), uint16(si));
                 }
@@ -706,6 +852,44 @@ abstract contract EligibilityStore is CreReceiver {
         if (_control.pass == PassKind.None) {
             _idleOrResume();
         }
+    }
+
+    /**
+     * @dev Append one newer season under an already-queued league (CRE registry divergence).
+     *      Idle → start Current pass + `SeasonReady` immediately (no cron wait).
+     *      Busy → defer wake; `_idleOrResume` emits `SeasonReady` as soon as the mutex frees.
+     */
+    function _appendSeason(uint256 leagueIndex, bytes32 seasonId, uint16 seasonStartYear) private {
+        SeasonRun[] storage rows = _runBook.seasons[leagueIndex];
+        rows.push(SeasonRun({ seasonId: seasonId, seasonStartYear: seasonStartYear, status: RunStatus.IDLE }));
+        uint256 seasonIndex = rows.length - 1;
+        ++_runBook.runNumber;
+
+        bytes32 leagueId = _runBook.leagueIds[leagueIndex];
+        if (_control.pass == PassKind.None) {
+            _startCurrentPassAt(leagueIndex, seasonIndex);
+            emit WorkflowEvents.SeasonReady(leagueId, seasonId);
+        } else {
+            _deferredWakeLeagueIds.push(leagueId);
+            _deferredWakeSeasonIds.push(seasonId);
+        }
+    }
+
+    function _leagueIndex(bytes32 leagueId) private view returns (uint256) {
+        uint256 n = _runBook.leagueIds.length;
+        for (uint256 i; i < n; ++i) {
+            if (_runBook.leagueIds[i] == leagueId) return i;
+        }
+        revert Errors.LeagueNotQueued(leagueId);
+    }
+
+    function _seasonQueued(uint256 leagueIndex, bytes32 seasonId) private view returns (bool) {
+        SeasonRun[] storage rows = _runBook.seasons[leagueIndex];
+        uint256 n = rows.length;
+        for (uint256 i; i < n; ++i) {
+            if (rows[i].seasonId == seasonId) return true;
+        }
+        return false;
     }
 
     /// @dev Blocked mid-pass: finalize classification must not shift under an active pass.

@@ -23,6 +23,8 @@ library EligibilityErrors {
     error NoCurrentSeasonYear();
     error NoQueuedWork();
     error LeagueAlreadyQueued(bytes32 leagueId);
+    error LeagueNotQueued(bytes32 leagueId);
+    error SeasonAlreadyQueued(bytes32 seasonId);
     error SeasonsNotAscending();
     error NotActiveSeason(bytes32 leagueId, bytes32 seasonId);
     error SeasonNotFetchable(bytes32 seasonId);

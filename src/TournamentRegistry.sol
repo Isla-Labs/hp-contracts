@@ -226,6 +226,9 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
                 })
             );
         emit Events.SeasonOpened(tournamentId, seasonId, seasonStartYear, finalRound);
+        if (t.tournamentType == TournamentType.DOMESTIC_LEAGUE) {
+            emit Events.DomesticSeasonOpened(tournamentId, seasonId, seasonStartYear, finalRound);
+        }
     }
 
     function upsertRound(
@@ -332,8 +335,8 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
 
     /**
      * @notice Seasons under one tournament, oldest `seasonStartYear` first.
-     * @dev CRE `eligibility-store` uses this on `DomesticLeagueCreated` / `SeasonOpened` to
-     *      `SYNC_LEAGUE` into EligibilityStore's RunBook.
+     * @dev CRE `eligibility-store` uses this on `DomesticLeagueCreated` / `DomesticSeasonOpened`
+     *      to `SYNC_LEAGUE` into EligibilityStore's RunBook (domestic leagues only).
      */
     function getSeasonsOldestFirst(bytes32 tournamentId)
         external

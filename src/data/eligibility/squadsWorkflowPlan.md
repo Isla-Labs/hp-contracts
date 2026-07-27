@@ -9,7 +9,7 @@ Single CRE workflow (`cre/hp-v1/workflows/eligibility-store`), multiple handlers
 | Source | Event | CRE handler | Effect |
 |---|---|---|---|
 | TournamentRegistry | `DomesticLeagueCreated` | `onSyncLeague` | `SYNC_LEAGUE` — queue all seasons |
-| TournamentRegistry | `SeasonOpened` | `onSyncLeague` | `SYNC_LEAGUE` — append new season if missing |
+| TournamentRegistry | `DomesticSeasonOpened` | `onSyncLeague` | `SYNC_LEAGUE` — append new season (DOMESTIC_LEAGUE only) |
 | EligibilityStore | `SeasonsQueued` / `SeasonReady` / `FetchContinue` | `onFetch` | `FETCH_TRANSIENT` |
 | EligibilityStore | `TransientComplete` / `SortPage` | `onSort` | `SORT_TRANSIENT` |
 | Cron | hourly | `onCurrentFetch` | gate + FETCH IDLE seasons |

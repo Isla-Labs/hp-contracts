@@ -10,6 +10,8 @@ import {
     PassKind,
     RunBook,
     RunStatus,
+    SORT_STEP_REMOVALS,
+    SORT_STEP_UPSERT,
     SQUAD_FETCH_PAGE_DONE,
     SeasonRun,
     SortCursor,
@@ -24,42 +26,35 @@ import {
 /**
  * @title EligibilityStore
  * @notice Squads-workflow state machine: full-season CRE ingest into `MinutesStore` / `SquadList`.
- * @dev One CRE workflow pushes `SquadReport`s through `CreReceiver.onReport` → `_processReport`,
- *      which dispatches on `SquadPhase`:
+ * @dev One CRE workflow pushes `SquadReport`s through `CreReceiver.onReport` → `_processReport`.
  *
- *        FETCH_TRANSIENT  append one SP page slice into the single `TransientReturn` slot.
- *                         Only the active `(leagueId, seasonId)` may append, and only while its
- *                         `SeasonRun.status == IDLE`. When `nextPage == SQUAD_FETCH_PAGE_DONE`
- *                         the season flips to `TRANSIENT` and `TransientComplete` fires.
- *        SORT_TRANSIENT   gas-chunked upsert of the **complete** buffer into `MinutesStore` /
- *                         `SquadList` (`SortPage` re-emits until drained). The final chunk
- *                         auto-finalizes: status → `IDLE` (current year) or `ARTIFACT`
- *                         (historical), buffer cleared, pointers advanced.
- *        FINALIZE         manual recovery only — sort auto-finalizes, so a season is never
- *                         observed in `POPULATED` between transactions.
+ *      FETCH_TRANSIENT
+ *        Append one SP page-slice into the single `TransientReturn` slot. SP `_pgNm` is
+ *        typically one club; CRE may **stay-on-page** and drain that club across ~5KB
+ *        reports. `personsOffset` is the within-page cursor: retries that re-send an
+ *        already-accepted slice revert (`FetchOffsetMismatch`) instead of duplicating.
+ *        `_pgNm` advances only when the report sets `nextPage != pageFetched` (club
+ *        fully drained) or `DONE`. Season flips to `TRANSIENT` only on `DONE`.
  *
- *      Hard sequencing guarantees (plan decisions #1/#2):
- *        - A season is never sorted partially: SORT requires `RunStatus.TRANSIENT` **and**
- *          `TransientReturn.nextPage == SQUAD_FETCH_PAGE_DONE`.
- *        - The next season can never start fetching before the previous one is upserted:
- *          `activeSeasonId` only advances inside `_finalizeSeason`, which is also the only
- *          place the buffer is cleared — and FETCH rejects any non-active season.
+ *      SORT_TRANSIENT
+ *        Gas-chunked over the **complete** buffer:
+ *          (1) Upsert → `MinutesStore` (club/league change detection) + rebuild each
+ *              club's `SquadList` from the buffer (first touch clears prior roster and
+ *              stages those players as removal candidates).
+ *          (2) Removals: candidates absent from the season membership set
+ *              (`_lastSeasonSeen != seasonId`) are true exits — clear club membership
+ *              and stage `_pendingLeftLeague` for the verifier / TransferLocker.
+ *        Last chunk auto-finalizes: `IDLE` (current year) or `ARTIFACT` (historical),
+ *        buffer cleared, pointers advanced onchain.
  *
- *      Pass orchestration (plan decisions #6/#7):
- *        - Historical: leagues in queue order, seasons oldest→newest, `PopulationComplete`
- *          per league, `SeasonsQueued` wakes the next league.
- *        - Current: started lazily by the cron-fed FETCH report when `pass == None`
- *          (`nextCurrentSeason()` is the CRE gate view); walks every `IDLE` season whose
- *          `seasonStartYear == currentSeasonStartYear`; finalize is always `IDLE`.
- *        - Mutual exclusion is structural: both passes share the one buffer slot and the one
- *          `(activeLeagueId, activeSeasonId)` pointer pair.
+ *      Automation (no human / no centralized server / no CRE bookkeeping handler):
+ *        - Next season in-league → `SeasonReady`
+ *        - Next league → `PopulationComplete` (info) + `SeasonsQueued` in the same tx
+ *        - Book terminal → `LoopPending`; cron starts the next current pass
+ *        There is **no** CRE `onLeagueAdvance` — advance is store-owned.
  *
- *      Abstract: the concrete `EligibilityVerifier` exposes role-gated wrappers around
- *      `_queueLeague` / `_setCurrentSeasonStartYear` and calls `__CreReceiver_init`.
- *
- *      Transfer-aware membership rules (soft-discontinue leavers, league moves) are the next
- *      implementation step; SORT currently rebuilds club squads and last-write-wins membership,
- *      which converges correctly because seasons process oldest→newest.
+ *      Abstract: `EligibilityVerifier` exposes role-gated `_queueLeague` /
+ *      `_setCurrentSeasonStartYear` and calls `__CreReceiver_init`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -69,27 +64,19 @@ abstract contract EligibilityStore is CreReceiver {
     //  Constants
     // --------------------------------------------
 
-    /// @dev Players upserted per SORT execution (gas paging only — plan decision #4).
+    /// @dev Players upserted / removal candidates processed per SORT execution.
     uint256 internal constant SORT_CHUNK = 50;
 
     // --------------------------------------------
     //  Storage — workflow
     // --------------------------------------------
 
-    /// @dev Pass mutex + active `(league, season)` pointers.
     WorkflowControl internal _control;
-
-    /// @dev All leagues/seasons the workflow tracks.
     RunBook internal _runBook;
-
-    /// @dev Single full-season staging slot (plan decision #2).
     TransientReturn internal _transient;
-
-    /// @dev Gas cursor over `_transient` during SORT.
     SortCursor internal _sortCursor;
 
-    /// @dev Leagues fully backfilled (`PopulationComplete` count). Historical passes resume here,
-    ///      so leagues queued while another pass was running are picked up automatically.
+    /// @dev Leagues fully backfilled. Historical resume pointer when a pass ends.
     uint16 internal _backfilledLeagues;
 
     /// @notice When the last current-season pass finished (CRE cron throttle input).
@@ -106,12 +93,24 @@ abstract contract EligibilityStore is CreReceiver {
     bytes32[] internal _playerIds;
     mapping(bytes32 playerId => bool) internal _tracked;
 
-    /// @dev Latest sorted squad per club (rebuilt once per season sort).
     mapping(bytes32 clubId => SquadList) internal _squadLists;
 
-    /// @dev Last `seasonId` that rebuilt a club's `SquadList` — first touch in a new season
-    ///      sort clears the previous roster so chunks can append across transactions.
+    /// @dev Last `seasonId` that rebuilt a club's `SquadList`.
     mapping(bytes32 clubId => bytes32 seasonId) internal _clubSquadSeason;
+
+    /// @dev Clubs ever observed under a league (untouched clubs → full-squad removals).
+    mapping(bytes32 leagueId => bytes32[] clubIds) internal _leagueClubs;
+    mapping(bytes32 leagueId => mapping(bytes32 clubId => bool)) internal _leagueClubKnown;
+
+    /// @dev Stamp: player appeared in the season buffer during the in-flight SORT upsert.
+    mapping(bytes32 playerId => bytes32 seasonId) internal _lastSeasonSeen;
+
+    /// @dev Prior-roster players staged during SquadList rebuilds + untouched clubs.
+    bytes32[] internal _removalCandidates;
+    mapping(bytes32 playerId => bool) internal _removalCandidateQueued;
+
+    /// @dev True exits after the removal pass — drained by the verifier later.
+    bytes32[] internal _pendingLeftLeague;
 
     // --------------------------------------------
     //  Views — workflow
@@ -133,30 +132,40 @@ abstract contract EligibilityStore is CreReceiver {
         return _runBook.leagueIds[leagueIndex];
     }
 
-    /// @notice All `SeasonRun` rows under `leagueIndex` (oldest → newest).
     function leagueSeasons(uint256 leagueIndex) external view returns (SeasonRun[] memory) {
         return _runBook.seasons[leagueIndex];
     }
 
-    /// @notice Compact staging-buffer status (avoids copying the parallel arrays).
+    /// @notice Compact staging-buffer status (avoids copying parallel arrays).
     function transientStatus()
         external
         view
-        returns (bytes32 leagueId, bytes32 seasonId, uint16 pageFetched, uint16 nextPage, uint256 stagedPlayers)
+        returns (
+            bytes32 leagueId,
+            bytes32 seasonId,
+            uint16 pageFetched,
+            uint16 nextPage,
+            uint16 personsOffset,
+            uint256 stagedPlayers
+        )
     {
         TransientReturn storage buf = _transient;
-        return (buf.leagueId, buf.seasonId, buf.pageFetched, buf.nextPage, buf.playerIds.length);
+        return (buf.leagueId, buf.seasonId, buf.pageFetched, buf.nextPage, buf.personsOffset, buf.playerIds.length);
     }
 
     function sortCursor() external view returns (SortCursor memory) {
         return _sortCursor;
     }
 
+    /// @notice Deployed league-leavers staged by SORT, not yet handed to TransferLocker.
+    function pendingLeftLeagueCount() external view returns (uint256) {
+        return _pendingLeftLeague.length;
+    }
+
     /**
      * @notice CRE cron gate: next current-year season to fetch, if a current pass may start.
-     * @dev `ready == false` while any pass is active (mutex) or nothing matches
-     *      `currentSeasonStartYear`. Pair with `lastCurrentPassCompletedAt` for the
-     *      daily-resweep throttle in workflow config.
+     * @dev `ready == false` while any pass is active. Pair with `lastCurrentPassCompletedAt`
+     *      for the daily-resweep throttle in workflow config.
      */
     function nextCurrentSeason() external view returns (bool ready, bytes32 leagueId, bytes32 seasonId) {
         if (_control.pass != PassKind.None || _control.currentSeasonStartYear == 0) {
@@ -191,12 +200,10 @@ abstract contract EligibilityStore is CreReceiver {
         }
     }
 
-    /// @notice Full per-player store (includes CRE `name` / `symbol` when set).
     function getMinutesStore(bytes32 playerId) external view returns (MinutesStore memory) {
         return _minutesStore[playerId];
     }
 
-    /// @notice Latest sorted squad for `clubId` (empty if never sorted).
     function getSquadList(bytes32 clubId) external view returns (SquadList memory) {
         return _squadLists[clubId];
     }
@@ -210,8 +217,6 @@ abstract contract EligibilityStore is CreReceiver {
     // --------------------------------------------
 
     /// @inheritdoc CreReceiver
-    /// @dev CRE payload is one ABI-encoded `SquadReport`; `report.data` is a page slice on
-    ///      FETCH and ignored on SORT / FINALIZE.
     function _processReport(bytes calldata, bytes calldata report) internal override {
         SquadReport memory r = abi.decode(report, (SquadReport));
         if (r.leagueId == bytes32(0) || r.seasonId == bytes32(0)) revert Errors.ZeroId();
@@ -221,18 +226,18 @@ abstract contract EligibilityStore is CreReceiver {
         } else if (r.phase == SquadPhase.SORT_TRANSIENT) {
             _sortTransient(r);
         } else {
-            _finalizeTransient(r);
+            revert Errors.UnknownSquadPhase();
         }
     }
 
     // --------------------------------------------
-    //  Phase 1 — FETCH_TRANSIENT (append page slice)
+    //  Phase 1 — FETCH_TRANSIENT
     // --------------------------------------------
 
     /**
-     * @dev Appends one SP page slice into the season buffer. First report while `pass == None`
-     *      starts a current pass (cron entry); otherwise the report must match the active
-     *      `(leagueId, seasonId)` exactly — this is the "one season at a time" gate.
+     * @dev Appends one SP page-slice. Stay-on-page drains a club across reports via
+     *      `personsOffset`; `_pgNm` only advances when CRE marks the club complete
+     *      (`nextPage != pageFetched`) or the season `DONE`.
      */
     function _fetchTransient(SquadReport memory r) private {
         WorkflowControl storage c = _control;
@@ -244,7 +249,6 @@ abstract contract EligibilityStore is CreReceiver {
         }
 
         SeasonRun storage row = _activeSeasonRow();
-        // TRANSIENT / POPULATED → buffer awaiting or in sort; ARTIFACT can never refetch.
         if (row.status != RunStatus.IDLE) revert Errors.SeasonNotFetchable(r.seasonId);
 
         TransientReturn memory page = r.data;
@@ -257,39 +261,61 @@ abstract contract EligibilityStore is CreReceiver {
         if (pageFetched == 0 || pageFetched >= SQUAD_FETCH_PAGE_DONE) {
             revert Errors.InvalidNextPage(pageFetched, nextPage);
         }
-        // Stay-on-page (one SP page split across ~5KB reports), advance, or DONE — never rewind.
+        // Stay-on-page, advance one SP page, or DONE — never rewind / skip ahead.
         if (!(nextPage == pageFetched || nextPage == pageFetched + 1 || nextPage == SQUAD_FETCH_PAGE_DONE)) {
             revert Errors.InvalidNextPage(pageFetched, nextPage);
         }
 
         TransientReturn storage buf = _transient;
         if (buf.seasonId != r.seasonId) {
-            // First page of the active season. `_finalizeSeason` is the only buffer clear, so a
-            // non-empty slot here means the previous season was never upserted — hard stop.
+            // First slice of the active season. Non-empty slot ⇒ prior season never sorted.
             if (buf.seasonId != bytes32(0)) revert Errors.TransientSeasonMismatch(buf.seasonId, r.seasonId);
             if (pageFetched != 1) revert Errors.FetchPageMismatch(r.seasonId, 1, pageFetched);
+            if (page.personsOffset != 0) revert Errors.FetchOffsetMismatch(r.seasonId, 0, page.personsOffset);
             buf.leagueId = r.leagueId;
             buf.seasonId = r.seasonId;
             buf.seasonStartYear = row.seasonStartYear;
-        } else if (pageFetched != buf.nextPage) {
-            revert Errors.FetchPageMismatch(r.seasonId, buf.nextPage, pageFetched);
+            buf.pageFetched = 1;
+            buf.nextPage = 1;
+            buf.personsOffset = 0;
+        } else {
+            // Resume: either stay on `pageFetched` or open the page advertised by `nextPage`.
+            uint16 expectedPage = buf.nextPage == buf.pageFetched ? buf.pageFetched : buf.nextPage;
+            if (pageFetched != expectedPage) {
+                revert Errors.FetchPageMismatch(r.seasonId, expectedPage, pageFetched);
+            }
+            if (page.personsOffset != buf.personsOffset) {
+                revert Errors.FetchOffsetMismatch(r.seasonId, buf.personsOffset, page.personsOffset);
+            }
         }
 
-        _appendPage(buf, page);
+        uint256 appended = _appendPage(buf, page);
+        // Stay-on-page with an empty slice cannot make progress and would loop forever.
+        if (nextPage == pageFetched && appended == 0) revert Errors.InvalidNextPage(pageFetched, nextPage);
+
+        uint256 newOffset = uint256(buf.personsOffset) + appended;
+        if (newOffset > type(uint16).max) revert Errors.InvalidNextPage(pageFetched, nextPage);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        buf.personsOffset = uint16(newOffset);
         buf.pageFetched = pageFetched;
         buf.nextPage = nextPage;
+
+        if (nextPage != pageFetched) {
+            // Club fully drained (advance) or season DONE — reset within-page cursor.
+            buf.personsOffset = 0;
+        }
 
         if (nextPage == SQUAD_FETCH_PAGE_DONE) {
             row.status = RunStatus.TRANSIENT;
             emit WorkflowEvents.TransientComplete(r.leagueId, r.seasonId);
         } else {
-            emit WorkflowEvents.FetchContinue(r.leagueId, r.seasonId, nextPage);
+            emit WorkflowEvents.FetchContinue(r.leagueId, r.seasonId, nextPage, buf.personsOffset);
         }
     }
 
-    /// @dev Validates and appends one page slice's parallel arrays into the buffer.
-    function _appendPage(TransientReturn storage buf, TransientReturn memory page) private {
-        uint256 n = page.playerIds.length;
+    /// @dev Validates and appends one page slice's parallel arrays. Returns row count.
+    function _appendPage(TransientReturn storage buf, TransientReturn memory page) private returns (uint256 n) {
+        n = page.playerIds.length;
         if (page.clubIds.length != n) revert Errors.LengthMismatch(n, page.clubIds.length);
         if (page.playerNames.length != n) revert Errors.LengthMismatch(n, page.playerNames.length);
         if (page.playerSymbols.length != n) revert Errors.LengthMismatch(n, page.playerSymbols.length);
@@ -309,13 +335,12 @@ abstract contract EligibilityStore is CreReceiver {
     }
 
     // --------------------------------------------
-    //  Phase 2 — SORT_TRANSIENT (full-season upsert, gas-chunked)
+    //  Phase 2 — SORT_TRANSIENT
     // --------------------------------------------
 
     /**
-     * @dev Drains `SORT_CHUNK` players from the **complete** buffer into `MinutesStore` /
-     *      `SquadList`. Re-emits `SortPage` while work remains; the final chunk auto-finalizes
-     *      (season status, buffer clear, pointer advance) in the same transaction.
+     * @dev Drains the complete buffer in two steps (gas-chunked): upsert/rebuild, then
+     *      removals. Auto-finalizes on the last removals chunk.
      */
     function _sortTransient(SquadReport memory r) private {
         WorkflowControl storage c = _control;
@@ -329,12 +354,38 @@ abstract contract EligibilityStore is CreReceiver {
 
         TransientReturn storage buf = _transient;
         if (buf.seasonId != r.seasonId) revert Errors.TransientSeasonMismatch(r.seasonId, buf.seasonId);
-        // Never sort a partial season (plan decision #1). Redundant with the status gate — cheap
-        // second lock on the load-bearing invariant.
         if (buf.nextPage != SQUAD_FETCH_PAGE_DONE) revert Errors.TransientIncomplete(r.seasonId, buf.nextPage);
 
         SortCursor storage cursor = _sortCursor;
-        uint256 offset = cursor.active ? cursor.offset : 0;
+        if (!cursor.active) {
+            cursor.active = true;
+            cursor.leagueId = r.leagueId;
+            cursor.seasonId = r.seasonId;
+            cursor.step = SORT_STEP_UPSERT;
+            cursor.offset = 0;
+        }
+
+        if (cursor.step == SORT_STEP_UPSERT) {
+            if (_sortUpsertChunk(buf, cursor)) return;
+            _prepareRemovalCandidates(buf);
+            cursor.step = SORT_STEP_REMOVALS;
+            cursor.offset = 0;
+            if (_removalCandidates.length != 0) {
+                emit WorkflowEvents.SortPage(r.leagueId, r.seasonId, SORT_STEP_REMOVALS, 0);
+                return;
+            }
+        }
+
+        if (_sortRemovalsChunk(buf, cursor)) return;
+
+        _finalizeSeason(row);
+    }
+
+    /**
+     * @dev Upsert `SORT_CHUNK` buffer rows. Returns true if more upsert work remains.
+     */
+    function _sortUpsertChunk(TransientReturn storage buf, SortCursor storage cursor) private returns (bool more) {
+        uint256 offset = cursor.offset;
         uint256 total = buf.playerIds.length;
         uint256 end = offset + SORT_CHUNK;
         if (end > total) end = total;
@@ -344,28 +395,24 @@ abstract contract EligibilityStore is CreReceiver {
         }
 
         if (end < total) {
-            cursor.active = true;
-            cursor.leagueId = r.leagueId;
-            cursor.seasonId = r.seasonId;
             // forge-lint: disable-next-line(unsafe-typecast)
             cursor.offset = uint32(end);
             // forge-lint: disable-next-line(unsafe-typecast)
-            emit WorkflowEvents.SortPage(r.leagueId, r.seasonId, uint32(end));
-            return;
+            emit WorkflowEvents.SortPage(buf.leagueId, buf.seasonId, SORT_STEP_UPSERT, uint32(end));
+            return true;
         }
-
-        row.status = RunStatus.POPULATED;
-        _finalizeSeason(row);
+        return false;
     }
 
     /**
-     * @dev Upsert one buffer row. New players get a `MinutesStore` shell (metadata + birth date);
-     *      tracked players only refresh membership. Seasons sort oldest→newest, so last-write-wins
-     *      on `currentLeagueId` / `currentClubId` converges to the latest real membership.
+     * @dev Upsert one buffer row into MinutesStore and append into this season's SquadList.
+     *      First club touch stages the prior roster as removal candidates, then rebuilds.
      */
     function _upsertPlayer(TransientReturn storage buf, uint256 i) private {
         bytes32 playerId = buf.playerIds[i];
         bytes32 clubId = buf.clubIds[i];
+        bytes32 leagueId = buf.leagueId;
+        bytes32 seasonId = buf.seasonId;
 
         MinutesStore storage store = _minutesStore[playerId];
 
@@ -378,64 +425,138 @@ abstract contract EligibilityStore is CreReceiver {
             store.birthDate = buf.birthDates[i];
         }
 
-        // First-fill metadata only — waiting-room / governance overrides stay intact.
         if (bytes(store.name).length == 0 && bytes(buf.playerNames[i]).length != 0) {
             store.name = buf.playerNames[i];
             store.symbol = buf.playerSymbols[i];
             emit Events.SquadPlayerMetadataSet(playerId, buf.playerNames[i], buf.playerSymbols[i]);
         }
 
-        store.currentLeagueId = buf.leagueId;
+        // Membership write — prior values are the transfer signal for downstream consumers.
+        store.currentLeagueId = leagueId;
         store.currentClubId = clubId;
+        _lastSeasonSeen[playerId] = seasonId;
 
-        // Rebuild the club roster once per season sort, then append across chunks.
+        _ensureLeagueClub(leagueId, clubId);
+
         SquadList storage list = _squadLists[clubId];
-        if (_clubSquadSeason[clubId] != buf.seasonId) {
-            _clubSquadSeason[clubId] = buf.seasonId;
+        if (_clubSquadSeason[clubId] != seasonId) {
+            _clubSquadSeason[clubId] = seasonId;
+            _stageSquadForRemoval(list);
             delete _squadLists[clubId];
             list.clubId = clubId;
         }
         list.playerIds.push(playerId);
     }
 
-    // --------------------------------------------
-    //  Phase 3 — FINALIZE
-    // --------------------------------------------
-
-    /// @dev Manual recovery path only: sort auto-finalizes, so `POPULATED` never persists
-    ///      between transactions under normal operation.
-    function _finalizeTransient(SquadReport memory r) private {
-        WorkflowControl storage c = _control;
-        if (c.pass == PassKind.None) revert Errors.NoActivePass();
-        if (r.leagueId != c.activeLeagueId || r.seasonId != c.activeSeasonId) {
-            revert Errors.NotActiveSeason(r.leagueId, r.seasonId);
+    /// @dev After upserts: stage full squads of league clubs never touched this season,
+    ///      then clear those rosters (missing from the season snapshot ⇒ empty club).
+    function _prepareRemovalCandidates(TransientReturn storage buf) private {
+        bytes32[] storage clubs = _leagueClubs[buf.leagueId];
+        uint256 n = clubs.length;
+        for (uint256 i; i < n; ++i) {
+            bytes32 clubId = clubs[i];
+            if (_clubSquadSeason[clubId] == buf.seasonId) continue;
+            _stageSquadForRemoval(_squadLists[clubId]);
+            delete _squadLists[clubId];
+            _squadLists[clubId].clubId = clubId;
+            _clubSquadSeason[clubId] = buf.seasonId;
         }
+    }
 
-        SeasonRun storage row = _activeSeasonRow();
-        if (row.status != RunStatus.POPULATED) revert Errors.SeasonNotPopulated(r.seasonId);
-        _finalizeSeason(row);
+    function _stageSquadForRemoval(SquadList storage list) private {
+        uint256 n = list.playerIds.length;
+        for (uint256 i; i < n; ++i) {
+            bytes32 playerId = list.playerIds[i];
+            if (_removalCandidateQueued[playerId]) continue;
+            _removalCandidateQueued[playerId] = true;
+            _removalCandidates.push(playerId);
+        }
     }
 
     /**
-     * @dev The only place the buffer is cleared and the active season advances — which is what
-     *      guarantees "no next-season fetch until the previous season is upserted".
-     *      Current-year seasons return to `IDLE` (recurring); historical ones freeze as
-     *      `ARTIFACT` (plan finalize rule).
+     * @dev Process `SORT_CHUNK` removal candidates. True exit = not in season membership
+     *      and still attributed to this league. Returns true if more removal work remains.
+     */
+    function _sortRemovalsChunk(TransientReturn storage buf, SortCursor storage cursor) private returns (bool more) {
+        uint256 offset = cursor.offset;
+        uint256 total = _removalCandidates.length;
+        uint256 end = offset + SORT_CHUNK;
+        if (end > total) end = total;
+
+        bytes32 seasonId = buf.seasonId;
+        bytes32 leagueId = buf.leagueId;
+
+        for (uint256 i = offset; i < end; ++i) {
+            bytes32 playerId = _removalCandidates[i];
+            _removalCandidateQueued[playerId] = false;
+
+            if (_lastSeasonSeen[playerId] == seasonId) continue;
+
+            MinutesStore storage store = _minutesStore[playerId];
+            // Only treat as a league exit when membership still points at this league.
+            if (store.currentLeagueId != leagueId) continue;
+
+            store.currentClubId = bytes32(0);
+            _pendingLeftLeague.push(playerId);
+            emit Events.PlayerLeftLeague(playerId);
+        }
+
+        if (end < total) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            cursor.offset = uint32(end);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            emit WorkflowEvents.SortPage(leagueId, seasonId, SORT_STEP_REMOVALS, uint32(end));
+            return true;
+        }
+        return false;
+    }
+
+    function _ensureLeagueClub(bytes32 leagueId, bytes32 clubId) private {
+        if (_leagueClubKnown[leagueId][clubId]) return;
+        _leagueClubKnown[leagueId][clubId] = true;
+        _leagueClubs[leagueId].push(clubId);
+    }
+
+    /**
+     * @dev Snapshot + clear staged league-leavers for the verifier's TransferLocker handoff.
+     */
+    function _takePendingLeftLeague() internal returns (bytes32[] memory ids) {
+        uint256 n = _pendingLeftLeague.length;
+        if (n == 0) return ids;
+        ids = _pendingLeftLeague;
+        delete _pendingLeftLeague;
+    }
+
+    // --------------------------------------------
+    //  Finalize + pass orchestration (onchain-automated)
+    // --------------------------------------------
+
+    /**
+     * @dev Only place the buffer is cleared and `activeSeasonId` advances — guarantees
+     *      no next-season FETCH until the previous season is fully upserted + removal-scanned.
      */
     function _finalizeSeason(SeasonRun storage row) private {
         row.status = row.seasonStartYear == _control.currentSeasonStartYear ? RunStatus.IDLE : RunStatus.ARTIFACT;
 
+        // Emit SquadListUpdated for clubs rebuilt this season (ops / indexers).
+        bytes32 seasonId = _transient.seasonId;
+        bytes32 leagueId = _transient.leagueId;
+        bytes32[] storage clubs = _leagueClubs[leagueId];
+        uint256 n = clubs.length;
+        for (uint256 i; i < n; ++i) {
+            bytes32 clubId = clubs[i];
+            if (_clubSquadSeason[clubId] != seasonId) continue;
+            emit Events.SquadListUpdated(clubId, _squadLists[clubId].playerIds.length);
+        }
+
         delete _transient;
         delete _sortCursor;
+        delete _removalCandidates;
 
         _advanceAfterFinalize();
     }
 
-    // --------------------------------------------
-    //  Pass orchestration
-    // --------------------------------------------
-
-    /// @dev Moves the active pointers to the next work item, or winds the pass down.
+    /// @dev Next work item or wind the pass down. All wakes are store-emitted events.
     function _advanceAfterFinalize() private {
         WorkflowControl storage c = _control;
 
@@ -447,24 +568,24 @@ abstract contract EligibilityStore is CreReceiver {
                 // forge-lint: disable-next-line(unsafe-typecast)
                 c.activeSeasonIndex = uint16(next);
                 c.activeSeasonId = rows[next].seasonId;
-                emit WorkflowEvents.FetchContinue(c.activeLeagueId, c.activeSeasonId, 1);
+                emit WorkflowEvents.SeasonReady(c.activeLeagueId, c.activeSeasonId);
                 return;
             }
 
+            // Informational only — next league is started below via SeasonsQueued.
             emit WorkflowEvents.PopulationComplete(c.activeLeagueId);
             ++_backfilledLeagues;
             _idleOrResume();
             return;
         }
 
-        // Current pass: next IDLE season matching `currentSeasonStartYear`, across all leagues.
         (bool found, uint16 li, uint16 si) = _findCurrentSeason(c.activeLeagueIndex, uint256(c.activeSeasonIndex) + 1);
         if (found) {
             c.activeLeagueIndex = li;
             c.activeSeasonIndex = si;
             c.activeLeagueId = _runBook.leagueIds[li];
             c.activeSeasonId = _runBook.seasons[li][si].seasonId;
-            emit WorkflowEvents.FetchContinue(c.activeLeagueId, c.activeSeasonId, 1);
+            emit WorkflowEvents.SeasonReady(c.activeLeagueId, c.activeSeasonId);
             return;
         }
 
@@ -473,8 +594,8 @@ abstract contract EligibilityStore is CreReceiver {
     }
 
     /**
-     * @dev Start (or resume) historical backfill at the first non-backfilled league, else go
-     *      fully idle. Handles leagues queued while another pass held the mutex.
+     * @dev Start/resume historical backfill at the first non-backfilled league, else idle.
+     *      Handles leagues queued while another pass held the mutex.
      */
     function _idleOrResume() private {
         WorkflowControl storage c = _control;
@@ -523,8 +644,6 @@ abstract contract EligibilityStore is CreReceiver {
         c.activeSeasonId = seasonId;
     }
 
-    /// @dev First `IDLE` season with `seasonStartYear == currentSeasonStartYear`, scanning
-    ///      forward from `(startLeague, startSeason)`.
     function _findCurrentSeason(
         uint256 startLeague,
         uint256 startSeason
@@ -548,7 +667,6 @@ abstract contract EligibilityStore is CreReceiver {
         return (false, 0, 0);
     }
 
-    /// @dev Active `SeasonRun` row for the in-flight `(leagueIndex, seasonIndex)` pointers.
     function _activeSeasonRow() private view returns (SeasonRun storage) {
         return _runBook.seasons[_control.activeLeagueIndex][_control.activeSeasonIndex];
     }
@@ -558,10 +676,8 @@ abstract contract EligibilityStore is CreReceiver {
     // --------------------------------------------
 
     /**
-     * @dev Append a league (seasons oldest→newest, strictly ascending years) to the `RunBook`.
-     *      Requires `currentSeasonStartYear` to be set so finalize can classify seasons.
-     *      If the workflow is idle this immediately starts the historical pass
-     *      (`SeasonsQueued`); otherwise the league waits its turn in queue order.
+     * @dev Append a league (seasons oldest→newest) to the `RunBook`. If idle, immediately
+     *      starts the historical pass (`SeasonsQueued`); otherwise waits its queue turn.
      */
     function _queueLeague(bytes32 leagueId, bytes32[] memory seasonIds, uint16[] memory seasonStartYears) internal {
         if (leagueId == bytes32(0)) revert Errors.ZeroId();
@@ -592,8 +708,7 @@ abstract contract EligibilityStore is CreReceiver {
         }
     }
 
-    /// @dev Set the current-season selection year. Blocked mid-pass: finalize classification
-    ///      and current-season scans must not shift under an active pass.
+    /// @dev Blocked mid-pass: finalize classification must not shift under an active pass.
     function _setCurrentSeasonStartYear(uint16 year) internal {
         if (year == 0) revert Errors.ZeroId();
         if (_control.pass != PassKind.None) revert Errors.PassActive();

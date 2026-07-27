@@ -6,17 +6,17 @@ import { Position } from "@types/PlayerSetTypes.sol";
 // =============================================================================
 //  EligibilityTypes (eligibility-3)
 //
-//  Ground-up shape for a single CRE squads workflow with multiple handlers:
-//    - EVM log: seasons queued / fetch continue / TransientComplete / SortPage /
-//               PopulationComplete
-//    - Cron:    gated current-season fetch (mutual exclusion vs historical)
+//  Single CRE squads workflow, multiple handlers:
+//    - EVM log: SeasonsQueued / SeasonReady / FetchContinue / TransientComplete /
+//               SortPage / PopulationComplete (info) / LoopPending
+//    - Cron:    gated current-season fetch (mutex vs historical)
 //
 //  Unit of work = one seasonId at a time:
-//    1) Append FETCH pages into TransientReturn until the season is complete
-//    2) SORT that full season snapshot into MinutesStore / SquadList
-//    3) Clear buffer; advance to the next seasonId (overwrite)
-//
-//  Compare against `eligibility-2/types/EligibilityTypes.sol` (preliminary).
+//    1) Append FETCH page-slices into TransientReturn until the season is complete
+//       (SP page ≈ one club; CRE may stay-on-page and drain that club in slices)
+//    2) SORT the full season snapshot: upsert MinutesStore → rebuild SquadList →
+//       removal pass (absent from TransientReturn membership)
+//    3) Clear buffer; auto-advance to the next seasonId (onchain — no CRE bookkeeping)
 // =============================================================================
 
 // --------------------------------------------
@@ -35,29 +35,33 @@ uint256 constant LAMBDA_WAD = 97e16;
 /// @dev Sentinel `nextPage` when the SP season sweep has no further pages.
 uint16 constant SQUAD_FETCH_PAGE_DONE = 1000;
 
+/// @dev `SortCursor.step` — upsert MinutesStore + rebuild SquadLists from buffer.
+uint8 constant SORT_STEP_UPSERT = 0;
+
+/// @dev `SortCursor.step` — removal pass over prior-roster candidates.
+uint8 constant SORT_STEP_REMOVALS = 1;
+
 // --------------------------------------------
 //  Squad workflow — status & phases
 // --------------------------------------------
 
 /// @notice Per-`seasonId` lifecycle for squad ingest.
 /// @dev Historical seasons end at `ARTIFACT`. Current seasons cycle
-///      `IDLE → TRANSIENT → POPULATED → IDLE`.
-///      `TRANSIENT` means the full-season `TransientReturn` buffer is ready
-///      (or being sorted) — not “one HTTP page landed”.
+///      `IDLE → TRANSIENT → IDLE`. `TRANSIENT` means the full-season buffer is
+///      ready (or being sorted) — not “one HTTP page landed”. Last SORT chunk
+///      auto-finalizes (`IDLE` / `ARTIFACT`); there is no separate finalize phase.
 enum RunStatus {
     IDLE,
     TRANSIENT,
-    POPULATED,
     ARTIFACT
 }
 
-/// @notice CRE → `_processReport` discriminator (prefer enum over bool).
-/// @dev `FETCH_TRANSIENT` carries a **page slice** that the store **appends**
-///      into the season buffer. `SORT_TRANSIENT` / `FINALIZE` are no-HTTP.
+/// @notice CRE → `_processReport` discriminator.
+/// @dev `FETCH_TRANSIENT` carries a **page slice** (store appends).
+///      `SORT_TRANSIENT` is report-only (no HTTP); gas-chunked via `SortPage`.
 enum SquadPhase {
     FETCH_TRANSIENT,
-    SORT_TRANSIENT,
-    FINALIZE
+    SORT_TRANSIENT
 }
 
 /// @notice Which pass owns the single-slot work buffers.
@@ -75,8 +79,7 @@ enum PassKind {
 
 /// @notice Global mutex / pass pointer for the squads workflow.
 /// @dev `historicalActive == (pass == Historical)`. Cron no-ops unless
-///      `pass == None` and every tracked season is `IDLE` or `ARTIFACT`.
-///      Exactly one `(activeLeagueId, activeSeasonId)` is in flight at a time.
+///      `pass == None`. Exactly one `(activeLeagueId, activeSeasonId)` in flight.
 struct WorkflowControl {
     PassKind pass;
     bool historicalActive;
@@ -100,10 +103,9 @@ struct SeasonRun {
 }
 
 /// @notice All leagues/seasons the squads workflow tracks.
-/// @dev Historical: process seasons oldest→newest under `activeLeagueIndex`,
-///      one season fully (fetch→sort→finalize) before the next. Then advance
-///      league. Current: same sequential season rule, but only rows whose
-///      `seasonStartYear == WorkflowControl.currentSeasonStartYear`.
+/// @dev Historical: seasons oldest→newest under `activeLeagueIndex`, each fully
+///      (fetch→sort→finalize) before the next. Current: same rule, but only rows
+///      with `seasonStartYear == WorkflowControl.currentSeasonStartYear`.
 struct RunBook {
     uint16 runNumber;
     bytes32[] leagueIds;
@@ -117,26 +119,31 @@ struct RunBook {
 
 /**
  * @notice Full-season staging object for one `seasonId` (single global slot).
- * @dev Built incrementally because CRE cannot return an entire SP squads
- *      endpoint in one report (~5KB) / one execution (HTTP caps).
+ * @dev Built incrementally: SP `_pgNm` ≈ one club; CRE may split that club across
+ *      multiple ~5KB reports (**stay-on-page**). `personsOffset` is the within-page
+ *      cursor that makes stay-on-page idempotent under CRE retries.
  *
  *      Append rules (`FETCH_TRANSIENT`):
- *        - If `data.seasonId == buffer.seasonId` (same active season):
- *          append parallel arrays; advance `pageFetched` / `nextPage`.
- *        - If `data.seasonId` differs (next season after prior sort+clear):
- *          replace/reset the buffer, then append the first page.
+ *        - Slice `personsOffset` must equal the buffer’s current offset.
+ *        - Append parallel arrays; `personsOffset += slice.length`.
+ *        - `nextPage == pageFetched`: club not fully drained — stay on SP page.
+ *        - `nextPage == pageFetched+1` or `DONE`: club drained — reset offset to 0.
  *        - Never SORT a partial season; never hold two seasons at once.
  *
  *      Sort rules (`SORT_TRANSIENT`):
- *        - Runs only when fetch hit `SQUAD_FETCH_PAGE_DONE` for this season
- *          (`RunStatus.TRANSIENT`). Upserts the **full** snapshot into
- *          `MinutesStore` / `SquadList` so club & league transfers can be
- *          detected coherently. May page via `SortCursor` + `SortPage` for gas.
- *        - After sort completes: clear buffer; season → `POPULATED` → finalize.
+ *        - Only when `nextPage == DONE` (`RunStatus.TRANSIENT`).
+ *        - (1) Upsert → MinutesStore (club/league change detection).
+ *        - (2) Rebuild SquadList per club from the buffer.
+ *        - (3) Removals: prior roster ∩ ∉ buffer membership.
+ *        - Auto-finalize: clear buffer; season → `IDLE` or `ARTIFACT`.
  */
 struct TransientReturn {
+    /// @dev SP `_pgNm` currently being drained (0 if buffer empty).
     uint16 pageFetched;
+    /// @dev Next SP page CRE should request, or `SQUAD_FETCH_PAGE_DONE`.
     uint16 nextPage;
+    /// @dev Persons already accepted on `pageFetched` (buffer) / slice start (report).
+    uint16 personsOffset;
     bytes32 leagueId;
     bytes32 seasonId;
     uint16 seasonStartYear;
@@ -148,26 +155,25 @@ struct TransientReturn {
 }
 
 /// @notice Onchain sort pagination cursor over the **full-season** buffer.
-/// @dev SORT is still season-scoped; paging is only for gas, not for HTTP.
-///      After each SORT chunk, if work remains, emit `SortPage` so CRE
-///      re-enters with `SquadPhase.SORT_TRANSIENT` (no HTTP).
+/// @dev `step` is `SORT_STEP_UPSERT` then `SORT_STEP_REMOVALS`. Paging is gas-only.
 struct SortCursor {
     bool active;
     bytes32 leagueId;
     bytes32 seasonId;
-    /// @dev Offset into `TransientReturn` parallel arrays (or club walk).
+    /// @dev `SORT_STEP_UPSERT` | `SORT_STEP_REMOVALS`.
+    uint8 step;
+    /// @dev Offset into buffer arrays (upsert) or removal-candidate array.
     uint32 offset;
 }
 
 /// @notice Unified CRE report decode target for all squad handlers.
-/// @dev `FETCH_TRANSIENT`: `data` is one **page slice** (store appends).
-///      `SORT_TRANSIENT` / `FINALIZE`: `data` empty; `leagueId` + `seasonId`
-///      select the active buffer / book row.
+/// @dev `FETCH_TRANSIENT`: `data` is one page slice (store appends).
+///      `SORT_TRANSIENT`: `data` empty; `leagueId` + `seasonId` select active work.
 struct SquadReport {
     SquadPhase phase;
     bytes32 leagueId;
     bytes32 seasonId;
-    /// @dev Page slice on FETCH only; ignored on SORT / FINALIZE.
+    /// @dev Page slice on FETCH only; ignored on SORT.
     TransientReturn data;
 }
 
@@ -182,6 +188,9 @@ struct SquadList {
 }
 
 /// @notice Per-player eligibility / minutes store.
+/// @dev `currentLeagueId` / `currentClubId` detect transfers on SORT upsert.
+///      Removals (absent from season TransientReturn) clear club membership and
+///      stage the player for downstream TransferLocker handling.
 struct MinutesStore {
     bytes32 currentLeagueId;
     bytes32 currentClubId;
@@ -204,26 +213,29 @@ struct LeagueMinutes {
 // --------------------------------------------
 
 /// @dev Emitted by EligibilityStore. Topic0 drives CRE handlers.
+///      League/season advance is **onchain-automated**: no CRE bookkeeping handler.
 library SquadWorkflowEvents {
-    /// @notice League seasons queued for historical squad backfill.
-    /// @dev Prefer store-owned queue event over raw `TournamentCreated`.
+    /// @notice League seasons queued — start/resume historical fetch for `leagueId`.
     event SeasonsQueued(bytes32 indexed leagueId, uint16 seasonCount);
 
-    /// @notice More SP pages remain for the active season (CRE HTTP budget).
-    /// @dev Wake `onHistoricalFetch` / `onCurrentFetch` to append the next page
-    ///      into the same `TransientReturn` (do not SORT yet).
-    event FetchContinue(bytes32 indexed leagueId, bytes32 indexed seasonId, uint16 nextPage);
+    /// @notice Next `seasonId` is ready to fetch (same or cross-league current pass).
+    /// @dev Separation from `FetchContinue`: new season always starts at page 1 / offset 0.
+    event SeasonReady(bytes32 indexed leagueId, bytes32 indexed seasonId);
 
-    /// @notice Full-season `TransientReturn` is complete for `seasonId` → start SORT.
-    /// @dev Season-scoped (not league-scoped). Emitted when `nextPage == DONE`
-    ///      after the last append; sets `RunStatus.TRANSIENT`.
+    /// @notice More FETCH work remains for the **same** season (HTTP / report budget).
+    /// @dev `nextPage` = SP `_pgNm` to request (or current page when staying).
+    ///      `personsOffset` = within-page resume cursor (0 after a page advances).
+    event FetchContinue(bytes32 indexed leagueId, bytes32 indexed seasonId, uint16 nextPage, uint16 personsOffset);
+
+    /// @notice Full-season `TransientReturn` complete for `seasonId` → start SORT.
     event TransientComplete(bytes32 indexed leagueId, bytes32 indexed seasonId);
 
-    /// @notice More SORT gas-chunks remain for this season’s full buffer.
-    event SortPage(bytes32 indexed leagueId, bytes32 indexed seasonId, uint32 offset);
+    /// @notice More SORT gas-chunks remain (`step` = upsert or removals).
+    event SortPage(bytes32 indexed leagueId, bytes32 indexed seasonId, uint8 step, uint32 offset);
 
-    /// @notice All seasons under `leagueId` for the active pass are finalized
-    ///         (`IDLE` or `ARTIFACT`). Advance to next league or clear pass.
+    /// @notice All seasons under `leagueId` for the active pass are finalized.
+    /// @dev Informational. Next league is woken by `SeasonsQueued` in the same tx
+    ///      (or `LoopPending` if the book is terminal) — no CRE `onLeagueAdvance`.
     event PopulationComplete(bytes32 indexed leagueId);
 
     /// @notice Entire `RunBook` is terminal (`IDLE`|`ARTIFACT`) and `pass == None`.

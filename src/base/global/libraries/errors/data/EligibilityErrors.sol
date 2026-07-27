@@ -13,4 +13,23 @@ library EligibilityErrors {
     error SquadFillPageMismatch(bytes32 seasonId, uint16 expected, uint16 received);
     error InvalidSquadFillNextPage(uint16 pageFetched, uint16 nextPage);
     error InvalidThreshold();
+
+    // --------------------------------------------
+    //  Squads workflow (eligibility-3)
+    // --------------------------------------------
+
+    error NoActivePass();
+    error PassActive();
+    error NoCurrentSeasonYear();
+    error NoQueuedWork();
+    error LeagueAlreadyQueued(bytes32 leagueId);
+    error SeasonsNotAscending();
+    error NotActiveSeason(bytes32 leagueId, bytes32 seasonId);
+    error SeasonNotFetchable(bytes32 seasonId);
+    error SeasonNotSortable(bytes32 seasonId);
+    error SeasonNotPopulated(bytes32 seasonId);
+    error TransientSeasonMismatch(bytes32 expected, bytes32 received);
+    error TransientIncomplete(bytes32 seasonId, uint16 nextPage);
+    error FetchPageMismatch(bytes32 seasonId, uint16 expected, uint16 received);
+    error InvalidNextPage(uint16 pageFetched, uint16 nextPage);
 }

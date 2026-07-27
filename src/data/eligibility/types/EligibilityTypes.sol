@@ -134,10 +134,10 @@ struct RunBook {
  *
  *      Sort rules (`SORT_TRANSIENT`):
  *        - Only when `nextPage == DONE` (`RunStatus.TRANSIENT`).
- *        - (1) Upsert → MinutesStore (club/league change detection).
+ *        - (1) Upsert → MinutesStore (club/league change → pending buckets).
  *        - (2) Rebuild SquadList per club from the buffer.
- *        - (3) Removals: prior roster ∩ ∉ buffer membership.
- *        - Auto-finalize: clear buffer; season → `IDLE` or `ARTIFACT`.
+ *        - (3) Removals: prior roster ∩ ∉ buffer membership → `_pendingLeftLeague`.
+ *        - Auto-finalize: clear buffer; season → `IDLE` or `ARTIFACT`; demote older IDLE.
  */
 struct TransientReturn {
     /// @dev SP `_pgNm` currently being drained (0 if buffer empty).

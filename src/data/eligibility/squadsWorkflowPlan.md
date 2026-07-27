@@ -18,10 +18,10 @@ Single CRE workflow (`cre/hp-v1/workflows/eligibility-store`), multiple handlers
 ## Per-season pipeline
 
 1. Populate full `TransientReturn` (stay-on-page + `personsOffset`)
-2. SORT upsert → `MinutesStore` (emit club/league changes)
+2. SORT upsert → `MinutesStore` (bucket + emit club/league changes)
 3. SORT rebuild → `SquadList`
 4. SORT removals → prior roster ∉ buffer → `_pendingLeftLeague`
-5. Finalize: `year < current` → `ARTIFACT`; else `IDLE` + monotonic year tick (demote older IDLE)
+5. Finalize: `year < current` → `ARTIFACT`; else `IDLE` + monotonic year tick; always demote older IDLE
 
 ## Decisions (locked)
 
@@ -29,8 +29,8 @@ Single CRE workflow (`cre/hp-v1/workflows/eligibility-store`), multiple handlers
 |---|---|---|
 | 1 | Work unit | Per `seasonId`. Never SORT partial. One `TransientReturn` slot. |
 | 2 | Registry sync | CRE `SYNC_LEAGUE` reconciles TournamentRegistry → RunBook (queue or append). Append while idle → Current pass + `SeasonReady` immediately (no cron wait). |
-| 3 | Year tick | On IDLE finalize with `year > current`: set `currentSeasonStartYear`, artifact older IDLE. |
-| 4 | Cron candidates | All `IDLE` (non-ARTIFACT), not year-equality. |
+| 3 | Year tick | On IDLE finalize with `year > current`: set `currentSeasonStartYear`. Every finalize demotes IDLE with `year < current` → `ARTIFACT`. |
+| 4 | Cron candidates | `IDLE` **and** `seasonStartYear == currentSeasonStartYear`. |
 | 5 | Stay-on-page | `personsOffset` cursor; advance `_pgNm` only when club drained. |
 | 6 | Finalize | Auto on last SORT chunk. No `POPULATED` / `FINALIZE` phase. |
 | 7 | RoundManager | `HistoricalBackfillComplete` after historical pass clears. |

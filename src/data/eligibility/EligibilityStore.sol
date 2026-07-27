@@ -44,8 +44,10 @@ import {
  *          (2) Removals: candidates absent from the season membership set
  *              (`_lastSeasonSeen != seasonId`) are true exits — clear club membership
  *              and stage `_pendingLeftLeague` for the verifier / TransferLocker.
+ *          Change buckets (parallel to events): `_pendingClubChanged` /
+ *          `_pendingLeagueChanged` on upsert; `_pendingLeftLeague` on removals.
  *        Last chunk auto-finalizes: `IDLE` (current year) or `ARTIFACT` (historical),
- *        buffer cleared, pointers advanced onchain.
+ *        demotes any other IDLE with a lower start year, buffer cleared, advance.
  *
  *      Automation (no human / no centralized server / no CRE bookkeeping handler):
  *        - Next season in-league → `SeasonReady`
@@ -109,8 +111,10 @@ abstract contract EligibilityStore is CreReceiver {
     bytes32[] internal _removalCandidates;
     mapping(bytes32 playerId => bool) internal _removalCandidateQueued;
 
-    /// @dev True exits after the removal pass — drained by the verifier later.
+    /// @dev SORT change buckets — drained by the verifier later (events still emitted).
     bytes32[] internal _pendingLeftLeague;
+    bytes32[] internal _pendingClubChanged;
+    bytes32[] internal _pendingLeagueChanged;
 
     /// @dev Seasons appended while a pass was active — woken via `SeasonReady` as soon as
     ///      the store returns to `_idleOrResume` (no cron wait). Parallel arrays.
@@ -162,15 +166,25 @@ abstract contract EligibilityStore is CreReceiver {
         return _sortCursor;
     }
 
-    /// @notice Deployed league-leavers staged by SORT, not yet handed to TransferLocker.
+    /// @notice League-leavers staged by SORT, not yet handed to TransferLocker.
     function pendingLeftLeagueCount() external view returns (uint256) {
         return _pendingLeftLeague.length;
     }
 
+    /// @notice Intra-league club movers staged by SORT upsert.
+    function pendingClubChangedCount() external view returns (uint256) {
+        return _pendingClubChanged.length;
+    }
+
+    /// @notice Cross-league movers staged by SORT upsert.
+    function pendingLeagueChangedCount() external view returns (uint256) {
+        return _pendingLeagueChanged.length;
+    }
+
     /**
-     * @notice CRE cron gate: next non-`ARTIFACT` (`IDLE`) season to fetch, if a pass may start.
-     * @dev Registry divergence is reconciled via `SYNC_LEAGUE` before fetch. Pair with
-     *      `lastCurrentPassCompletedAt` for the daily-resweep throttle.
+     * @notice CRE cron gate: next `IDLE` season for `currentSeasonStartYear`, if a pass may start.
+     * @dev Year equality is required — historical leftovers must be `ARTIFACT`, not cron fodder.
+     *      Pair with `lastCurrentPassCompletedAt` for the daily-resweep throttle.
      */
     function nextCurrentSeason() external view returns (bool ready, bytes32 leagueId, bytes32 seasonId) {
         if (_control.pass != PassKind.None || _control.currentSeasonStartYear == 0) {
@@ -477,13 +491,15 @@ abstract contract EligibilityStore is CreReceiver {
             emit Events.SquadPlayerMetadataSet(playerId, buf.playerNames[i], buf.playerSymbols[i]);
         }
 
-        // Membership write — emit change records before overwrite (transfer signal).
+        // Membership write — stage change buckets + emit before overwrite (transfer signal).
         bytes32 prevLeague = store.currentLeagueId;
         bytes32 prevClub = store.currentClubId;
         if (prevLeague != bytes32(0) && prevLeague != leagueId) {
+            _pendingLeagueChanged.push(playerId);
             emit Events.PlayerLeagueChanged(playerId, prevLeague, leagueId);
         }
         if (prevClub != bytes32(0) && prevClub != clubId) {
+            _pendingClubChanged.push(playerId);
             emit Events.PlayerClubChanged(playerId, prevClub, clubId);
         }
         store.currentLeagueId = leagueId;
@@ -581,6 +597,22 @@ abstract contract EligibilityStore is CreReceiver {
         delete _pendingLeftLeague;
     }
 
+    /// @dev Snapshot + clear staged club movers (MinutesStore already holds the new club).
+    function _takePendingClubChanged() internal returns (bytes32[] memory ids) {
+        uint256 n = _pendingClubChanged.length;
+        if (n == 0) return ids;
+        ids = _pendingClubChanged;
+        delete _pendingClubChanged;
+    }
+
+    /// @dev Snapshot + clear staged league movers (MinutesStore already holds the new league).
+    function _takePendingLeagueChanged() internal returns (bytes32[] memory ids) {
+        uint256 n = _pendingLeagueChanged.length;
+        if (n == 0) return ids;
+        ids = _pendingLeagueChanged;
+        delete _pendingLeagueChanged;
+    }
+
     // --------------------------------------------
     //  Finalize + pass orchestration (onchain-automated)
     // --------------------------------------------
@@ -591,8 +623,8 @@ abstract contract EligibilityStore is CreReceiver {
      *
      *      Finalize rule (monotonic year tick):
      *        - `seasonStartYear < currentSeasonStartYear` → `ARTIFACT`
-     *        - else → `IDLE`, and if `seasonStartYear > current` tick year forward and
-     *          demote any other `IDLE` seasons with a lower start year to `ARTIFACT`.
+     *        - else → `IDLE`, and if `seasonStartYear > current` tick year forward
+     *        - every finalize: demote any other `IDLE` with `seasonStartYear < current` → `ARTIFACT`
      */
     function _finalizeSeason(SeasonRun storage row) private {
         uint16 year = row.seasonStartYear;
@@ -604,9 +636,11 @@ abstract contract EligibilityStore is CreReceiver {
             row.status = RunStatus.IDLE;
             if (year > current) {
                 _control.currentSeasonStartYear = year;
-                _artifactIdleSeasonsBefore(year);
             }
         }
+
+        // Seal invariant: no historical IDLE leftovers after any finalize.
+        _artifactIdleSeasonsBefore(_control.currentSeasonStartYear);
 
         // Emit SquadListUpdated for clubs rebuilt this season (ops / indexers).
         bytes32 seasonId = _transient.seasonId;
@@ -626,7 +660,7 @@ abstract contract EligibilityStore is CreReceiver {
         _advanceAfterFinalize();
     }
 
-    /// @dev After a forward year tick: any other IDLE season with a lower start year → ARTIFACT.
+    /// @dev Any IDLE season with a lower start year than `year` → ARTIFACT.
     function _artifactIdleSeasonsBefore(uint16 year) private {
         uint256 leagues = _runBook.leagueIds.length;
         for (uint256 li; li < leagues; ++li) {
@@ -791,19 +825,20 @@ abstract contract EligibilityStore is CreReceiver {
         c.activeSeasonId = seasonId;
     }
 
-    /// @dev Next `IDLE` season (non-ARTIFACT). Cron / current-pass advance use this.
+    /// @dev Next `IDLE` season for `currentSeasonStartYear`. Cron / current-pass advance use this.
     function _findIdleSeason(
         uint256 startLeague,
         uint256 startSeason
     ) private view returns (bool found, uint16 leagueIndex, uint16 seasonIndex) {
         uint256 leagues = _runBook.leagueIds.length;
         uint256 si = startSeason;
+        uint16 currentYear = _control.currentSeasonStartYear;
 
         for (uint256 li = startLeague; li < leagues; ++li) {
             SeasonRun[] storage rows = _runBook.seasons[li];
             uint256 n = rows.length;
             for (; si < n; ++si) {
-                if (rows[si].status == RunStatus.IDLE) {
+                if (rows[si].status == RunStatus.IDLE && rows[si].seasonStartYear == currentYear) {
                     // forge-lint: disable-next-line(unsafe-typecast)
                     return (true, uint16(li), uint16(si));
                 }

@@ -743,6 +743,22 @@ abstract contract EligibilityStore is CreReceiver {
         delete _pendingLeagueChanged;
     }
 
+    /**
+     * @dev Drop a tracked player from `_playerIds` / `_minutesStore` (swap-and-pop).
+     *      Caller must ensure index is in range. Used by verify staleness GC.
+     */
+    function _purgePlayerAt(uint256 index) internal {
+        bytes32 playerId = _playerIds[index];
+        delete _minutesStore[playerId];
+        delete _tracked[playerId];
+
+        uint256 last = _playerIds.length - 1;
+        if (index != last) {
+            _playerIds[index] = _playerIds[last];
+        }
+        _playerIds.pop();
+    }
+
     // --------------------------------------------
     //  Finalize + pass orchestration (onchain-automated)
     // --------------------------------------------

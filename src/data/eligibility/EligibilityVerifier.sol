@@ -59,6 +59,9 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         Reactivate
     }
 
+    /// @dev Drop `MinutesStore` rows with `deactivatedAt` at least this old (page-local GC).
+    uint256 internal constant STALE_AFTER = 5 * 365 days;
+
     /// @param addressProvider_ Canonical `AddressProvider`.
     /// @param cooldown_ Min seconds between `verifyEligibility` pages.
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -123,10 +126,11 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     /**
      * @notice Decay page scores to each player's league `G_now`; enqueue deploy / lifecycle sets.
      * @dev Public (rate-limited). Score mass comes from `recordAppearances`.
-     *      1) Idle-decay `LeagueMinutes` for `currentLeagueId` → `G_now`
-     *      2) Classify → deploy cohorts / continuity deactivate|reactivate
-     *      3) Drain SORT `_pendingLeftLeague` → TransferLocker (`LeftLeague`)
-     *      4) Automator → DopplerLocker / TransferLocker
+     *      1) Page-local GC: drop `MinutesStore` when `deactivatedAt` ≥ 5 years ago
+     *      2) Idle-decay `LeagueMinutes` for `currentLeagueId` → `G_now`
+     *      3) Classify → deploy cohorts / continuity deactivate|reactivate
+     *      4) Drain SORT change buckets (`_drainChangers`)
+     *      5) Automator → DopplerLocker / TransferLocker
      *      Continuity ignores the newTransfer ≥ 1 shortcut.
      */
     function verifyEligibility(
@@ -135,25 +139,23 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     ) external rateLimited returns (EligibilityGroups memory groups) {
         uint256 total = _playerIds.length;
         if (offset >= total || limit == 0) {
-            _drainLeftLeague();
+            _drainChangers();
             return groups;
         }
 
         uint256 end = offset + limit;
         if (end > total) end = total;
 
-        FinalRoundCache memory frCache;
-        _syncPageScores(offset, end, limit, frCache);
-
-        uint256 page = end - offset;
-        bytes32[] memory gk = new bytes32[](page);
-        bytes32[] memory u21 = new bytes32[](page);
-        bytes32[] memory outf = new bytes32[](page);
-        bytes32[] memory nt = new bytes32[](page);
-        bytes32[] memory deact = new bytes32[](page);
-        bytes32[] memory react = new bytes32[](page);
-        uint32[] memory deactMinsBuf = new uint32[](page);
-        uint32[] memory reactMinsBuf = new uint32[](page);
+        // Bound buffers to the initial page window (GC can only shrink `end`).
+        uint256 pageCap = end - offset;
+        bytes32[] memory gk = new bytes32[](pageCap);
+        bytes32[] memory u21 = new bytes32[](pageCap);
+        bytes32[] memory outf = new bytes32[](pageCap);
+        bytes32[] memory nt = new bytes32[](pageCap);
+        bytes32[] memory deact = new bytes32[](pageCap);
+        bytes32[] memory react = new bytes32[](pageCap);
+        uint32[] memory deactMinsBuf = new uint32[](pageCap);
+        uint32[] memory reactMinsBuf = new uint32[](pageCap);
 
         uint256 gkN;
         uint256 u21N;
@@ -163,9 +165,17 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         uint256 reactN;
 
         IPlayerSetRegistry registry = _playerSetRegistry();
+        FinalRoundCache memory frCache;
 
-        for (uint256 i = offset; i < end; ++i) {
+        for (uint256 i = offset; i < end;) {
+            if (_purgeIfStale(i)) {
+                if (end > _playerIds.length) end = _playerIds.length;
+                continue;
+            }
+
             bytes32 playerId = _playerIds[i];
+            _syncPlayerScore(playerId, frCache);
+
             (VerifyAction action, uint32 effectiveMins) = _classify(playerId, registry);
 
             if (action == VerifyAction.DeployGoalkeeper) {
@@ -203,6 +213,10 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
                 }
                 emit Events.PlayerReactivateQueued(playerId, effectiveMins);
             }
+
+            unchecked {
+                ++i;
+            }
         }
 
         groups.goalkeepers = _compactIds(gk, gkN);
@@ -224,7 +238,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
             _enqueueLifecycle(groups.toReactivate, LifecycleReason.Reactivate, _compactMins(reactMinsBuf, reactN));
         }
 
-        _drainLeftLeague();
+        _drainChangers();
     }
 
     // --------------------------------------------
@@ -261,35 +275,40 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     }
 
     // --------------------------------------------
-    //  Internal — score sync
+    //  Internal — staleness GC / score sync
     // --------------------------------------------
 
-    /// @dev Idle-decay each page player's `currentLeagueId` score to that league's `G_now`.
-    function _syncPageScores(uint256 offset, uint256 end, uint256 limit, FinalRoundCache memory frCache) private {
-        uint256 synced;
-        for (uint256 i = offset; i < end; ++i) {
-            bytes32 playerId = _playerIds[i];
-            MinutesStore storage store = _minutesStore[playerId];
-            bytes32 leagueId = store.currentLeagueId;
-            if (leagueId == bytes32(0)) continue;
+    /**
+     * @dev If `deactivatedAt` is set and at least `STALE_AFTER` old, purge the row.
+     *      Returns true when the slot was purged (caller must not advance `i`).
+     */
+    function _purgeIfStale(uint256 index) private returns (bool purged) {
+        MinutesStore storage store = _minutesStore[_playerIds[index]];
+        uint64 deactivatedAt = store.deactivatedAt;
+        if (deactivatedAt == 0) return false;
+        if (block.timestamp < uint256(deactivatedAt) + STALE_AFTER) return false;
+        _purgePlayerAt(index);
+        return true;
+    }
 
-            uint256 lmIndex = _leagueMinutesIndex(store, leagueId);
-            if (lmIndex == type(uint256).max) continue;
+    /// @dev Idle-decay one player's `currentLeagueId` score to that league's `G_now`.
+    function _syncPlayerScore(bytes32 playerId, FinalRoundCache memory frCache) private {
+        MinutesStore storage store = _minutesStore[playerId];
+        bytes32 leagueId = store.currentLeagueId;
+        if (leagueId == bytes32(0)) return;
 
-            LeagueMinutes storage lm = store.leagueMinutes[lmIndex];
-            uint32 last = lm.lastScoreGlobalRound;
-            if (last == 0 || lm.weightedScoreWad == 0) continue;
+        uint256 lmIndex = _leagueMinutesIndex(store, leagueId);
+        if (lmIndex == type(uint256).max) return;
 
-            uint32 gNow = _globalRoundNow(leagueId, frCache);
-            if (gNow <= last) continue;
+        LeagueMinutes storage lm = store.leagueMinutes[lmIndex];
+        uint32 last = lm.lastScoreGlobalRound;
+        if (last == 0 || lm.weightedScoreWad == 0) return;
 
-            _syncLeagueScoreToNow(lm, gNow);
-            unchecked {
-                ++synced;
-            }
-            emit Events.WeightedScoreUpdated(playerId, leagueId, lm.weightedScoreWad);
-        }
-        emit Events.WeightedScoresSynced(offset, limit, synced, 0);
+        uint32 gNow = _globalRoundNow(leagueId, frCache);
+        if (gNow <= last) return;
+
+        _syncLeagueScoreToNow(lm, gNow);
+        emit Events.WeightedScoreUpdated(playerId, leagueId, lm.weightedScoreWad);
     }
 
     // --------------------------------------------
@@ -413,21 +432,37 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     }
 
     // --------------------------------------------
-    //  Internal — waiting-room handoff (via Automator)
+    //  Internal — SORT change buckets → TransferLocker
     // --------------------------------------------
 
-    function _drainLeftLeague() private {
-        bytes32[] memory leavers = _takePendingLeftLeague();
-        uint256 n = leavers.length;
+    /**
+     * @dev Drain SORT pending arrays:
+     *      - `_pendingLeftLeague` → TransferLocker `LeftLeague` (deployed only)
+     *      - `_pendingLeagueChanged` → TransferLocker `ChangedLeague` (deployed only)
+     *      - `_pendingClubChanged` → clear only (events already emitted on SORT)
+     */
+    function _drainChangers() private {
+        IPlayerSetRegistry registry = _playerSetRegistry();
+
+        _enqueueDeployedPending(_takePendingLeftLeague(), LifecycleReason.LeftLeague, registry);
+        _enqueueDeployedPending(_takePendingLeagueChanged(), LifecycleReason.ChangedLeague, registry);
+        // Club moves: membership already updated on SORT; drop the staging array.
+        _takePendingClubChanged();
+    }
+
+    function _enqueueDeployedPending(
+        bytes32[] memory pending,
+        LifecycleReason reason,
+        IPlayerSetRegistry registry
+    ) private {
+        uint256 n = pending.length;
         if (n == 0) return;
 
-        // Only deployed markets need TransferLocker; undeployed leavers are a no-op.
-        IPlayerSetRegistry registry = _playerSetRegistry();
         bytes32[] memory deployed = new bytes32[](n);
         uint256 count;
         for (uint256 i; i < n; ++i) {
-            if (!registry.playerExists(leavers[i])) continue;
-            deployed[count] = leavers[i];
+            if (!registry.playerExists(pending[i])) continue;
+            deployed[count] = pending[i];
             unchecked {
                 ++count;
             }
@@ -436,7 +471,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
 
         bytes32[] memory ids = _compactIds(deployed, count);
         uint32[] memory zeros = new uint32[](count);
-        _enqueueLifecycle(ids, LifecycleReason.LeftLeague, zeros);
+        _enqueueLifecycle(ids, reason, zeros);
     }
 
     function _enqueueEligible(EligibilityGroups memory groups) private {

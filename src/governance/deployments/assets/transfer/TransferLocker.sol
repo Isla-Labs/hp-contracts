@@ -18,7 +18,8 @@ interface IFeeRouterHub {
  * @title TransferLocker
  * @notice Waiting room for soft-inactivity / reactivation candidates (mirrors DopplerLocker).
  * @dev Flow:
- *      0) EligibilityVerifier (via Automator) enqueues continuity failures, league-leavers, or reactivations.
+ *      0) EligibilityVerifier (via Automator) enqueues continuity failures, league-leavers,
+ *         cross-league moves (`ChangedLeague`), or reactivations.
  *      1) Offchain / manual review (webhook + email — TBD) confirms or rejects.
  *      2) Confirmed deactivate → Automator → `setStatus(INACTIVE)` (not wired yet).
  *      3) Confirmed reactivate → Automator → restore prior active status (not wired yet).
@@ -45,7 +46,7 @@ contract TransferLocker is ITransferLocker {
     address public automator;
 
     PendingLifecycle[] private _pending;
-    /// @dev ContinuityUnderThreshold / LeftLeague — pending soft-inactive review.
+    /// @dev ContinuityUnderThreshold / LeftLeague / ChangedLeague — pending review.
     mapping(bytes32 playerId => bool) private _queuedDeactivate;
     /// @dev Reactivate — pending restore-from-INACTIVE review.
     mapping(bytes32 playerId => bool) private _queuedReactivate;

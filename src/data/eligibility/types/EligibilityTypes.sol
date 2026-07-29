@@ -207,8 +207,9 @@ struct MinutesStore {
     string name;
     string symbol;
     uint32 birthDate;
-    /// @dev Season start year at first SORT create — NewTransfer / backFromLoan deploy flag.
-    uint16 earliestSeasonStartYear;
+    /// @dev Season start year for the player's current league tenure.
+    ///      Set on first SORT create; refreshed on cross-league upsert (NewTransfer / 1-min continuity).
+    uint16 startYearCurrentLeague;
     /// @dev Unix time club membership was cleared (0 = active / never left). Staleness GC input.
     uint64 deactivatedAt;
     Position expectedPosition;

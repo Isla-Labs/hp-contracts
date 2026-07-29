@@ -584,7 +584,7 @@ abstract contract EligibilityStore is CreReceiver {
             _tracked[playerId] = true;
             _playerIds.push(playerId);
             store.birthDate = buf.birthDates[i];
-            store.earliestSeasonStartYear = buf.seasonStartYear;
+            store.startYearCurrentLeague = buf.seasonStartYear;
             emit Events.SquadPlayerCreated(playerId, buf.birthDates[i]);
         } else if (store.birthDate == 0) {
             store.birthDate = buf.birthDates[i];
@@ -602,6 +602,8 @@ abstract contract EligibilityStore is CreReceiver {
         if (prevLeague != bytes32(0) && prevLeague != leagueId) {
             _pendingLeagueChanged.push(playerId);
             emit Events.PlayerLeagueChanged(playerId, prevLeague, leagueId);
+            // New league tenure — NewTransfer / 1-min continuity for this season.
+            store.startYearCurrentLeague = buf.seasonStartYear;
         }
         if (prevClub != bytes32(0) && prevClub != clubId) {
             _pendingClubChanged.push(playerId);

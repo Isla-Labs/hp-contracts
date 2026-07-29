@@ -26,7 +26,7 @@ struct MinutesStore {
     /// @dev Core metadata updated by cre/hp-v1/workflows/squad-fill
     string name;
     string symbol;
-    uint16 earliestSeasonStartYear;
+    uint16 startYearCurrentLeague;
     uint256 birthDate;
     /// @dev Career minutes by position (DOMESTIC_LEAGUE only)
     Position expectedPosition;
@@ -95,7 +95,7 @@ uint256 constant LAMBDA_WAD = 97e16;
 
 /// @notice Eligibility cohort a candidate falls into.
 /// @dev Priority: newTransfer/backFromLoan → GK → under-21 → outfield.
-///      newTransfer / backFromLoan: `earliestSeasonStartYear == currentSeasonYear` (DeployDoppler flag).
+///      newTransfer / backFromLoan: `startYearCurrentLeague == currentSeasonYear` (DeployDoppler flag).
 enum EligibilityBucket {
     None,
     Goalkeeper,

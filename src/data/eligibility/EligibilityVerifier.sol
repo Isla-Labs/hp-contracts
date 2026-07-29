@@ -131,7 +131,8 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
      *      3) Classify → deploy cohorts / continuity deactivate|reactivate
      *      4) Drain SORT change buckets (`_drainChangers`)
      *      5) Automator → DopplerLocker / TransferLocker
-     *      Continuity ignores the newTransfer ≥ 1 shortcut.
+     *      Continuity uses `thresholdNewTransfer` when `startYearCurrentLeague` matches
+     *      the live season (cross-league tenure / first-year in league).
      */
     function verifyEligibility(
         uint256 offset,
@@ -317,7 +318,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
 
     /**
      * @dev Deployed → continuity lifecycle; undeployed → deploy cohort (or none).
-     *      Continuity ignores the newTransfer shortcut. Score = `currentLeagueId` row.
+     *      Score = `currentLeagueId` row. New-to-league tenure uses `thresholdNewTransfer`.
      */
     function _classify(
         bytes32 playerId,
@@ -350,7 +351,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     /**
      * @dev Deploy path. Uses stored `LeagueMinutes` for `currentLeagueId` (fresh after sync).
      *      missing DOB / no club → false;
-     *      newTransfer/backFromLoan (earliestSeasonStartYear == current) → `thresholdNewTransfer`;
+     *      `startYearCurrentLeague ==` current league season → `thresholdNewTransfer`;
      *      else continuity gates.
      */
     function _evaluateForDeploy(bytes32 playerId)
@@ -365,8 +366,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
 
         effectiveMins = _effectiveMins(store);
 
-        uint16 currentYear = _currentSeasonYear(store.currentLeagueId);
-        if (store.earliestSeasonStartYear != 0 && store.earliestSeasonStartYear == currentYear) {
+        if (_isNewToCurrentLeague(store)) {
             bucket = EligibilityBucket.NewTransfer;
             eligible = effectiveMins >= thresholdNewTransfer;
             return (eligible, bucket, effectiveMins);
@@ -375,7 +375,12 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         (eligible, bucket) = _continuityGate(store, effectiveMins);
     }
 
-    /// @dev Continuity path for already-deployed markets (no newTransfer shortcut).
+    /**
+     * @dev Continuity for deployed markets.
+     *      Post cross-league move (`startYearCurrentLeague ==` current season): 1-min bar
+     *      (`thresholdNewTransfer`) so e.g. Haaland→Madrid reactivates after first appearance.
+     *      Otherwise GK / u21 / outfield thresholds.
+     */
     function _evaluateContinuity(bytes32 playerId) private view returns (bool stillActive, uint32 effectiveMins) {
         MinutesStore storage store = _minutesStore[playerId];
         if (store.birthDate == 0) {
@@ -383,7 +388,20 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         }
 
         effectiveMins = _effectiveMins(store);
+
+        if (_isNewToCurrentLeague(store)) {
+            stillActive = effectiveMins >= thresholdNewTransfer;
+            return (stillActive, effectiveMins);
+        }
+
         (stillActive,) = _continuityGate(store, effectiveMins);
+    }
+
+    /// @dev True when this league tenure started in the league's live season year.
+    function _isNewToCurrentLeague(MinutesStore storage store) private view returns (bool) {
+        uint16 startYear = store.startYearCurrentLeague;
+        if (startYear == 0 || store.currentLeagueId == bytes32(0)) return false;
+        return startYear == _currentSeasonYear(store.currentLeagueId);
     }
 
     /// @dev Shared GK / u21 / outfield threshold gate (live `EligibilityCriteria` storage).

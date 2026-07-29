@@ -19,6 +19,8 @@ library AddressKeys {
     // Lockers / data
     string internal constant DOPPLER_LOCKER = "DOPPLER_LOCKER";
     string internal constant TRANSFER_LOCKER = "TRANSFER_LOCKER";
+    string internal constant ELIGIBILITY_STORE = "ELIGIBILITY_STORE";
+    string internal constant ELIGIBILITY_VERIFIER = "ELIGIBILITY_VERIFIER";
     string internal constant PPM_VERIFIER = "PPM_VERIFIER";
     string internal constant CRE_FORWARDER = "CRE_FORWARDER";
 }

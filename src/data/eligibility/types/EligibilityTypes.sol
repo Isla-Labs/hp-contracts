@@ -225,6 +225,17 @@ struct LeagueMinutes {
     uint32 lastScoreGlobalRound;
 }
 
+/// @notice Lean classify payload for `EligibilityVerifier` (no name/symbol/career arrays).
+/// @dev `currentLeague` is the `LeagueMinutes` row for `currentLeagueId` only (zeroed if absent).
+struct VerifySnapshot {
+    bytes32 currentLeagueId;
+    bytes32 currentClubId;
+    uint32 birthDate;
+    uint16 startYearCurrentLeague;
+    Position expectedPosition;
+    LeagueMinutes currentLeague;
+}
+
 // --------------------------------------------
 //  Squad workflow — events (CRE log triggers)
 // --------------------------------------------

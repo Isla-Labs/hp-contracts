@@ -33,7 +33,7 @@ import { ProxyUtils } from "./ProxyUtils.sol";
  *
  *      Non-AddressBook contracts (timelocks, lockers, Automator, DeployTournament) still take
  *      explicit ctor args. EligibilityVerifier proxy is created here so Automator can seed EV
- *      as a verified caller; DeployData upgrades that proxy.
+ *      as a verified caller; DeployData upgrades that proxy and deploys EligibilityStore.
  */
 abstract contract DeployCore is ProxyUtils {
     struct CoreDeployment {

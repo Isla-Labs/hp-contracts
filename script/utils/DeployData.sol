@@ -11,6 +11,7 @@ import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { DopplerLocker } from "@governance/deployments/assets/deploy/DopplerLocker.sol";
 
 import { AddressProvider } from "@src/AddressProvider.sol";
+import { EligibilityStore } from "@data/eligibility/EligibilityStore.sol";
 import { EligibilityVerifier } from "@data/eligibility/EligibilityVerifier.sol";
 import { FixtureCommitment } from "@data/matchweeks/FixtureCommitment.sol";
 import { RoundManager } from "@data/matchweeks/RoundManager.sol";
@@ -19,24 +20,28 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployData
- * @notice CRE data plane: EligibilityVerifier, FixtureCommitment, RoundManager.
- * @dev AddressBook upgradeables (EV) follow the same order as DeployCore:
+ * @notice CRE data plane: EligibilityStore, EligibilityVerifier, FixtureCommitment, RoundManager.
+ * @dev AddressBook upgradeables follow the same order as DeployCore:
  *        1) AddressProvider already live from Core
  *        2) Deploy proxies + AddressBook implementation
- *        3) Register names (`CRE_FORWARDER`, `PPM_VERIFIER`)
+ *        3) Register names (`CRE_FORWARDER`, `PPM_VERIFIER`, `ELIGIBILITY_STORE`, …)
  *        4) Initialize (resolve once into storage)
  *
  *      FixtureCommitment / RoundManager are not AddressBook yet — still take explicit init args.
  *      `PPM_VERIFIER` is a sticky InitGuard placeholder until PBR ships.
+ *
+ *      EV proxy is created in DeployCore (Automator verified caller). Store proxy is created here.
  */
 abstract contract DeployData is ProxyUtils {
     struct DataDeployment {
         address fixtureCommitment;
         address roundManager;
+        address eligibilityStore;
         address eligibilityVerifier;
         address ppmVerifierPlaceholder;
         address fixtureCommitmentImpl;
         address roundManagerImpl;
+        address eligibilityStoreImpl;
         address eligibilityVerifierImpl;
     }
 
@@ -88,14 +93,16 @@ abstract contract DeployData is ProxyUtils {
         AddressProvider ap = AddressProvider(c.addressProvider);
 
         // --------------------------------------------
-        //  2) Deploy proxies + AddressBook implementation
+        //  2) Deploy proxies + AddressBook implementations
         // --------------------------------------------
 
         d.eligibilityVerifier = c.eligibilityVerifier;
+        d.eligibilityStore = _deployInitGuardProxy(guard, deployer);
         d.fixtureCommitment = _deployInitGuardProxy(guard, deployer);
         d.roundManager = _deployInitGuardProxy(guard, deployer);
         d.ppmVerifierPlaceholder = _deployInitGuardProxy(guard, deployer);
 
+        d.eligibilityStoreImpl = address(new EligibilityStore(c.addressProvider));
         d.eligibilityVerifierImpl = address(new EligibilityVerifier(c.addressProvider, c.cooldown));
         d.fixtureCommitmentImpl = address(new FixtureCommitment());
         d.roundManagerImpl = address(new RoundManager(c.tournamentRegistry, d.fixtureCommitment));
@@ -106,15 +113,20 @@ abstract contract DeployData is ProxyUtils {
 
         ap.setName(Keys.CRE_FORWARDER, c.forwarder);
         ap.setName(Keys.PPM_VERIFIER, d.ppmVerifierPlaceholder);
+        ap.setName(Keys.ELIGIBILITY_STORE, d.eligibilityStore);
+        ap.setName(Keys.ELIGIBILITY_VERIFIER, d.eligibilityVerifier);
 
         // --------------------------------------------
-        //  4) Initialize
+        //  4) Initialize (Store before Verifier — Verifier resolves ELIGIBILITY_STORE)
         // --------------------------------------------
 
         _upgradeAndCall(
-            d.eligibilityVerifier,
-            d.eligibilityVerifierImpl,
-            abi.encodeCall(EligibilityVerifier.initialize, (c.workflowId, c.baseYear))
+            d.eligibilityStore,
+            d.eligibilityStoreImpl,
+            abi.encodeCall(EligibilityStore.initialize, (c.workflowId, c.baseYear, d.eligibilityVerifier))
+        );
+        _upgradeAndCall(
+            d.eligibilityVerifier, d.eligibilityVerifierImpl, abi.encodeCall(EligibilityVerifier.initialize, ())
         );
         _upgradeAndCall(
             d.fixtureCommitment,
@@ -136,6 +148,7 @@ abstract contract DeployData is ProxyUtils {
 
         _transferProxyAdmin(d.fixtureCommitment, c.constitutionalTimelock);
         _transferProxyAdmin(d.roundManager, c.constitutionalTimelock);
+        _transferProxyAdmin(d.eligibilityStore, c.constitutionalTimelock);
         _transferProxyAdmin(d.eligibilityVerifier, c.constitutionalTimelock);
         _transferProxyAdmin(d.ppmVerifierPlaceholder, c.constitutionalTimelock);
 
@@ -145,6 +158,7 @@ abstract contract DeployData is ProxyUtils {
     function _logData(DataDeployment memory d) internal pure {
         console.log("FixtureCommitment (proxy)", d.fixtureCommitment);
         console.log("RoundManager (proxy)", d.roundManager);
+        console.log("EligibilityStore (proxy)", d.eligibilityStore);
         console.log("EligibilityVerifier (proxy)", d.eligibilityVerifier);
         console.log("PpmVerifier placeholder (proxy)", d.ppmVerifierPlaceholder);
     }

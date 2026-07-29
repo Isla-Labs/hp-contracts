@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
-import { IReceiver } from "@cre/v1/interfaces/IReceiver.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
-import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { IEligibilityStore } from "@interfaces/data/IEligibilityStore.sol";
 import { IAutomator } from "@interfaces/governance/IAutomator.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
@@ -17,37 +15,35 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { LifecycleReason } from "@types/governance/LifecycleTypes.sol";
 import { PlayerStatus, Position } from "@types/PlayerSetTypes.sol";
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
-import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol";
 
 import { EligibilityCriteria } from "./base/EligibilityCriteria.sol";
-import { EligibilityStore } from "./EligibilityStore.sol";
 import {
     EligibilityBucket,
     EligibilityGroups,
-    LeagueMinutes,
     MinutesStore,
-    SCORE_WAD
-} from "./types/EligibilityTypes.sol";
+    SCORE_WAD,
+    SquadList,
+    VerifySnapshot
+} from "@data/eligibility/types/EligibilityTypes.sol";
 
 /**
  * @title EligibilityVerifier
- * @notice Top layer: AddressBook wiring, ops roles, criteria, rate-limited verify scan.
+ * @notice Criteria + rate-limited verify scan; Automator → DopplerLocker / TransferLocker.
  * @dev Proxy-initialized. Separation:
- *        - `EligibilityStore` — CRE squads + `recordAppearances` / score math
+ *        - `EligibilityStore` — CRE squads + `recordAppearances` / score math (own proxy)
  *        - `EligibilityCriteria` — governance thresholds only
- *        - this contract — scan, classify, Automator → DopplerLocker / TransferLocker
+ *        - this contract — scan, classify, Automator handoff
  *
- *      Squads CRE reports → `onReport` → store `_processReport`.
- *      PpmVerifier → store `recordAppearances`.
- *      `verifyEligibility` decays `LeagueMinutes` for each player's `currentLeagueId`
- *      to that league's `G_now`, then classifies deploy / continuity cohorts.
+ *      Squads CRE reports → Store `onReport`.
+ *      PpmVerifier → Store `recordAppearances`.
+ *      `verifyEligibility` syncs + reads a lean `VerifySnapshot` (current-league
+ *      `LeagueMinutes` only), then classifies deploy / continuity cohorts.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, EligibilityCriteria, RateLimit {
+contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria, RateLimit {
     /// @dev Per-player outcome after score sync (page classify).
     enum VerifyAction {
         None,
@@ -59,8 +55,8 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         Reactivate
     }
 
-    /// @dev Drop `MinutesStore` rows with `deactivatedAt` at least this old (page-local GC).
-    uint256 internal constant STALE_AFTER = 5 * 365 days;
+    /// @notice Minutes / CRE data plane (set once in `initialize`).
+    IEligibilityStore public store;
 
     /// @param addressProvider_ Canonical `AddressProvider`.
     /// @param cooldown_ Min seconds between `verifyEligibility` pages.
@@ -70,53 +66,16 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     }
 
     /**
-     * @notice Proxy init: roles, criteria defaults, CRE forwarder + workflow id, year clocks.
-     * @param workflowId_ Expected CRE workflow id (squads `eligibility-store`).
-     * @param baseYear_ Sets `scoreBaseYear` (G-index origin) and initial `currentSeasonStartYear`.
+     * @notice Proxy init: roles, criteria defaults, wire to `EligibilityStore`.
+     * @dev Resolves `ELIGIBILITY_STORE` from AddressProvider (must be registered first).
      */
-    function initialize(bytes32 workflowId_, uint16 baseYear_) external initializer {
-        if (workflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
-        if (baseYear_ == 0) revert Errors.ZeroId();
-
+    function initialize() external initializer {
         address dao_ = _getAddress(_addressKey(Addresses.DAO));
         address constitutionalTimelock_ = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
-        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
-        address forwarder_ = _getAddress(_addressKey(Addresses.CRE_FORWARDER));
+        address store_ = _getAddress(_addressKey(Addresses.ELIGIBILITY_STORE));
 
         __EligibilityCriteria_init(constitutionalTimelock_, dao_);
-        _grantRole(Roles.CATEGORY_THREE, automator_);
-
-        __CreReceiver_init(forwarder_);
-        _setExpectedWorkflowId(workflowId_);
-        _setScoreBaseYear(baseYear_);
-        _setCurrentSeasonStartYear(baseYear_);
-    }
-
-    // --------------------------------------------
-    //  Ops — CATEGORY_THREE (Automator) / CATEGORY_ONE
-    // --------------------------------------------
-
-    /// @notice Manually queue a league's seasons (oldest→newest). Prefer CRE `SYNC_LEAGUE`.
-    function queueLeague(
-        bytes32 leagueId,
-        bytes32[] calldata seasonIds,
-        uint16[] calldata seasonStartYears
-    ) external onlyRole(Roles.CATEGORY_THREE) {
-        _queueLeague(leagueId, seasonIds, seasonStartYears);
-    }
-
-    /// @notice Set / retune `currentSeasonStartYear` while idle (monotonic tick usually via finalize).
-    function setCurrentSeasonStartYear(uint16 year) external onlyRole(Roles.CATEGORY_ONE) {
-        _setCurrentSeasonStartYear(year);
-    }
-
-    function setExpectedWorkflowId(bytes32 workflowId_) external onlyRole(Roles.CATEGORY_ONE) {
-        if (workflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
-        _setExpectedWorkflowId(workflowId_);
-    }
-
-    function setForwarderAddress(address forwarder_) external onlyRole(Roles.CATEGORY_ONE) {
-        _setForwarderAddress(forwarder_);
+        store = IEligibilityStore(store_);
     }
 
     // --------------------------------------------
@@ -125,10 +84,10 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
 
     /**
      * @notice Decay page scores to each player's league `G_now`; enqueue deploy / lifecycle sets.
-     * @dev Public (rate-limited). Score mass comes from `recordAppearances`.
+     * @dev Public (rate-limited). Score mass comes from Store `recordAppearances`.
      *      1) Page-local GC: drop `MinutesStore` when `deactivatedAt` ≥ 5 years ago
-     *      2) Idle-decay `LeagueMinutes` for `currentLeagueId` → `G_now`
-     *      3) Classify → deploy cohorts / continuity deactivate|reactivate
+     *      2) Idle-decay `LeagueMinutes` for `currentLeagueId` → `G_now` (`syncAndSnapshot`)
+     *      3) Classify from lean snapshot (current-league score only)
      *      4) Drain SORT change buckets (`_drainChangers`)
      *      5) Automator → DopplerLocker / TransferLocker
      *      Continuity uses `thresholdNewTransfer` when `startYearCurrentLeague` matches
@@ -138,7 +97,8 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         uint256 offset,
         uint256 limit
     ) external rateLimited returns (EligibilityGroups memory groups) {
-        uint256 total = _playerIds.length;
+        IEligibilityStore s = store;
+        uint256 total = s.playerCount();
         if (offset >= total || limit == 0) {
             _drainChangers();
             return groups;
@@ -166,18 +126,17 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         uint256 reactN;
 
         IPlayerSetRegistry registry = _playerSetRegistry();
-        FinalRoundCache memory frCache;
 
         for (uint256 i = offset; i < end;) {
-            if (_purgeIfStale(i)) {
-                if (end > _playerIds.length) end = _playerIds.length;
+            if (s.purgeIfStale(i)) {
+                total = s.playerCount();
+                if (end > total) end = total;
                 continue;
             }
 
-            bytes32 playerId = _playerIds[i];
-            _syncPlayerScore(playerId, frCache);
-
-            (VerifyAction action, uint32 effectiveMins) = _classify(playerId, registry);
+            bytes32 playerId = s.playerIdAt(i);
+            VerifySnapshot memory snap = s.syncAndSnapshot(playerId);
+            (VerifyAction action, uint32 effectiveMins) = _classify(snap, playerId, registry);
 
             if (action == VerifyAction.DeployGoalkeeper) {
                 gk[gkN] = playerId;
@@ -243,19 +202,48 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     }
 
     // --------------------------------------------
-    //  AddressBook → store / scanner hooks
+    //  Views — DopplerLocker metadata oracle (+ thin Store forwards)
     // --------------------------------------------
 
-    function _ppmVerifier() internal view override returns (address) {
-        return _getAddress(_addressKey(Addresses.PPM_VERIFIER));
+    /// @notice Name/symbol from Store (DopplerLocker enqueue oracle).
+    function getPlayerMetadata(bytes32 playerId)
+        external
+        view
+        returns (string memory name, string memory symbol, bool metadataSet)
+    {
+        return store.getPlayerMetadata(playerId);
     }
 
-    function _tournamentRegistry() internal view override returns (ITournamentRegistry) {
-        return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+    function playerCount() external view returns (uint256) {
+        return store.playerCount();
     }
+
+    function playerIds(uint256 offset, uint256 limit) external view returns (bytes32[] memory) {
+        return store.playerIds(offset, limit);
+    }
+
+    function getMinutesStore(bytes32 playerId) external view returns (MinutesStore memory) {
+        return store.getMinutesStore(playerId);
+    }
+
+    function getVerifySnapshot(bytes32 playerId) external view returns (VerifySnapshot memory) {
+        return store.getVerifySnapshot(playerId);
+    }
+
+    function getSquadList(bytes32 clubId) external view returns (SquadList memory) {
+        return store.getSquadList(clubId);
+    }
+
+    // --------------------------------------------
+    //  AddressBook hooks
+    // --------------------------------------------
 
     function _playerSetRegistry() internal view returns (IPlayerSetRegistry) {
         return IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+    }
+
+    function _tournamentRegistry() internal view returns (ITournamentRegistry) {
+        return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
     }
 
     function _automator() internal view returns (IAutomator) {
@@ -270,64 +258,23 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         return ITransferLocker(_getAddress(_addressKey(Addresses.TRANSFER_LOCKER)));
     }
 
-    function supportsInterface(bytes4 interfaceId) public view override(AccessControl, CreReceiver) returns (bool) {
-        return interfaceId == type(IReceiver).interfaceId || AccessControl.supportsInterface(interfaceId)
-            || CreReceiver.supportsInterface(interfaceId);
-    }
-
-    // --------------------------------------------
-    //  Internal — staleness GC / score sync
-    // --------------------------------------------
-
-    /**
-     * @dev If `deactivatedAt` is set and at least `STALE_AFTER` old, purge the row.
-     *      Returns true when the slot was purged (caller must not advance `i`).
-     */
-    function _purgeIfStale(uint256 index) private returns (bool purged) {
-        MinutesStore storage store = _minutesStore[_playerIds[index]];
-        uint64 deactivatedAt = store.deactivatedAt;
-        if (deactivatedAt == 0) return false;
-        if (block.timestamp < uint256(deactivatedAt) + STALE_AFTER) return false;
-        _purgePlayerAt(index);
-        return true;
-    }
-
-    /// @dev Idle-decay one player's `currentLeagueId` score to that league's `G_now`.
-    function _syncPlayerScore(bytes32 playerId, FinalRoundCache memory frCache) private {
-        MinutesStore storage store = _minutesStore[playerId];
-        bytes32 leagueId = store.currentLeagueId;
-        if (leagueId == bytes32(0)) return;
-
-        uint256 lmIndex = _leagueMinutesIndex(store, leagueId);
-        if (lmIndex == type(uint256).max) return;
-
-        LeagueMinutes storage lm = store.leagueMinutes[lmIndex];
-        uint32 last = lm.lastScoreGlobalRound;
-        if (last == 0 || lm.weightedScoreWad == 0) return;
-
-        uint32 gNow = _globalRoundNow(leagueId, frCache);
-        if (gNow <= last) return;
-
-        _syncLeagueScoreToNow(lm, gNow);
-        emit Events.WeightedScoreUpdated(playerId, leagueId, lm.weightedScoreWad);
-    }
-
     // --------------------------------------------
     //  Internal — classify
     // --------------------------------------------
 
     /**
      * @dev Deployed → continuity lifecycle; undeployed → deploy cohort (or none).
-     *      Score = `currentLeagueId` row. New-to-league tenure uses `thresholdNewTransfer`.
+     *      Score = `currentLeague` row only. New-to-league tenure uses `thresholdNewTransfer`.
      */
     function _classify(
+        VerifySnapshot memory snap,
         bytes32 playerId,
         IPlayerSetRegistry registry
     ) private view returns (VerifyAction action, uint32 effectiveMins) {
         if (registry.playerExists(playerId)) {
             PlayerStatus status = registry.getPlayerSet(playerId).status;
             bool stillActive;
-            (stillActive, effectiveMins) = _evaluateContinuity(playerId);
+            (stillActive, effectiveMins) = _evaluateContinuity(snap);
 
             if (status == PlayerStatus.INACTIVE) {
                 if (stillActive) return (VerifyAction.Reactivate, effectiveMins);
@@ -337,7 +284,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
             return (VerifyAction.None, 0);
         }
 
-        (bool eligible, EligibilityBucket bucket, uint32 mins) = _evaluateForDeploy(playerId);
+        (bool eligible, EligibilityBucket bucket, uint32 mins) = _evaluateForDeploy(snap);
         if (!eligible) return (VerifyAction.None, 0);
         effectiveMins = mins;
 
@@ -349,30 +296,29 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     }
 
     /**
-     * @dev Deploy path. Uses stored `LeagueMinutes` for `currentLeagueId` (fresh after sync).
+     * @dev Deploy path. Uses `currentLeague` score (fresh after sync).
      *      missing DOB / no club → false;
      *      `startYearCurrentLeague ==` current league season → `thresholdNewTransfer`;
      *      else continuity gates.
      */
-    function _evaluateForDeploy(bytes32 playerId)
+    function _evaluateForDeploy(VerifySnapshot memory snap)
         private
         view
         returns (bool eligible, EligibilityBucket bucket, uint32 effectiveMins)
     {
-        MinutesStore storage store = _minutesStore[playerId];
-        if (store.birthDate == 0 || store.currentClubId == bytes32(0) || store.currentLeagueId == bytes32(0)) {
+        if (snap.birthDate == 0 || snap.currentClubId == bytes32(0) || snap.currentLeagueId == bytes32(0)) {
             return (false, EligibilityBucket.None, 0);
         }
 
-        effectiveMins = _effectiveMins(store);
+        effectiveMins = _effectiveMins(snap);
 
-        if (_isNewToCurrentLeague(store)) {
+        if (_isNewToCurrentLeague(snap)) {
             bucket = EligibilityBucket.NewTransfer;
             eligible = effectiveMins >= thresholdNewTransfer;
             return (eligible, bucket, effectiveMins);
         }
 
-        (eligible, bucket) = _continuityGate(store, effectiveMins);
+        (eligible, bucket) = _continuityGate(snap, effectiveMins);
     }
 
     /**
@@ -381,41 +327,44 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
      *      (`thresholdNewTransfer`) so e.g. Haaland→Madrid reactivates after first appearance.
      *      Otherwise GK / u21 / outfield thresholds.
      */
-    function _evaluateContinuity(bytes32 playerId) private view returns (bool stillActive, uint32 effectiveMins) {
-        MinutesStore storage store = _minutesStore[playerId];
-        if (store.birthDate == 0) {
+    function _evaluateContinuity(VerifySnapshot memory snap)
+        private
+        view
+        returns (bool stillActive, uint32 effectiveMins)
+    {
+        if (snap.birthDate == 0) {
             return (false, 0);
         }
 
-        effectiveMins = _effectiveMins(store);
+        effectiveMins = _effectiveMins(snap);
 
-        if (_isNewToCurrentLeague(store)) {
+        if (_isNewToCurrentLeague(snap)) {
             stillActive = effectiveMins >= thresholdNewTransfer;
             return (stillActive, effectiveMins);
         }
 
-        (stillActive,) = _continuityGate(store, effectiveMins);
+        (stillActive,) = _continuityGate(snap, effectiveMins);
     }
 
     /// @dev True when this league tenure started in the league's live season year.
-    function _isNewToCurrentLeague(MinutesStore storage store) private view returns (bool) {
-        uint16 startYear = store.startYearCurrentLeague;
-        if (startYear == 0 || store.currentLeagueId == bytes32(0)) return false;
-        return startYear == _currentSeasonYear(store.currentLeagueId);
+    function _isNewToCurrentLeague(VerifySnapshot memory snap) private view returns (bool) {
+        uint16 startYear = snap.startYearCurrentLeague;
+        if (startYear == 0 || snap.currentLeagueId == bytes32(0)) return false;
+        return startYear == _currentSeasonYear(snap.currentLeagueId);
     }
 
     /// @dev Shared GK / u21 / outfield threshold gate (live `EligibilityCriteria` storage).
     function _continuityGate(
-        MinutesStore storage store,
+        VerifySnapshot memory snap,
         uint32 effectiveMins
     ) private view returns (bool ok, EligibilityBucket bucket) {
-        if (store.expectedPosition == Position.GK) {
+        if (snap.expectedPosition == Position.GK) {
             bucket = EligibilityBucket.Goalkeeper;
             ok = effectiveMins >= thresholdGk;
             return (ok, bucket);
         }
 
-        if (_ageYears(store.birthDate) < under21Age) {
+        if (_ageYears(snap.birthDate) < under21Age) {
             bucket = EligibilityBucket.Under21;
             ok = effectiveMins >= thresholdUnder21;
             return (ok, bucket);
@@ -425,22 +374,19 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
         ok = effectiveMins >= thresholdOutfield;
     }
 
-    /// @dev Effective minutes from `currentLeagueId` score (0 if no row / no league).
-    function _effectiveMins(MinutesStore storage store) private view returns (uint32) {
-        bytes32 leagueId = store.currentLeagueId;
-        if (leagueId == bytes32(0)) return 0;
-        uint256 lmIndex = _leagueMinutesIndex(store, leagueId);
-        if (lmIndex == type(uint256).max) return 0;
+    /// @dev Effective minutes from `currentLeague` score only (0 if no row / no league).
+    function _effectiveMins(VerifySnapshot memory snap) private pure returns (uint32) {
+        if (snap.currentLeagueId == bytes32(0) || snap.currentLeague.leagueId == bytes32(0)) return 0;
         // forge-lint: disable-next-line(unsafe-typecast)
-        return uint32(store.leagueMinutes[lmIndex].weightedScoreWad / SCORE_WAD);
+        return uint32(snap.currentLeague.weightedScoreWad / SCORE_WAD);
     }
 
-    /// @dev Live season year for `leagueId` (treasury cursors; fallback to workflow year).
+    /// @dev Live season year for `leagueId` (treasury cursors; fallback to Store workflow year).
     function _currentSeasonYear(bytes32 leagueId) private view returns (uint16) {
         address treasury = _tournamentRegistry().getPbrTreasury(leagueId);
-        if (treasury == address(0)) return _control.currentSeasonStartYear;
+        if (treasury == address(0)) return store.workflowControl().currentSeasonStartYear;
         (uint16 season,,) = IPbrTreasury(treasury).getCursors();
-        return season == 0 ? _control.currentSeasonStartYear : season;
+        return season == 0 ? store.workflowControl().currentSeasonStartYear : season;
     }
 
     /// @dev Whole years since unix DOB; leap years ignored.
@@ -454,18 +400,19 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     // --------------------------------------------
 
     /**
-     * @dev Drain SORT pending arrays:
-     *      - `_pendingLeftLeague` → TransferLocker `LeftLeague` (deployed only)
-     *      - `_pendingLeagueChanged` → TransferLocker `ChangedLeague` (deployed only)
-     *      - `_pendingClubChanged` → clear only (events already emitted on SORT)
+     * @dev Drain SORT pending arrays from Store:
+     *      - left league → TransferLocker `LeftLeague` (deployed only)
+     *      - league changed → TransferLocker `ChangedLeague` (deployed only)
+     *      - club changed → clear only (events already emitted on SORT)
      */
     function _drainChangers() private {
+        IEligibilityStore s = store;
         IPlayerSetRegistry registry = _playerSetRegistry();
 
-        _enqueueDeployedPending(_takePendingLeftLeague(), LifecycleReason.LeftLeague, registry);
-        _enqueueDeployedPending(_takePendingLeagueChanged(), LifecycleReason.ChangedLeague, registry);
+        _enqueueDeployedPending(s.takePendingLeftLeague(), LifecycleReason.LeftLeague, registry);
+        _enqueueDeployedPending(s.takePendingLeagueChanged(), LifecycleReason.ChangedLeague, registry);
         // Club moves: membership already updated on SORT; drop the staging array.
-        _takePendingClubChanged();
+        s.takePendingClubChanged();
     }
 
     function _enqueueDeployedPending(

@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+import { IReceiver } from "@cre/v1/interfaces/IReceiver.sol";
+
+import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { Position } from "@types/PlayerSetTypes.sol";
+import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 
 import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol";
@@ -14,6 +21,7 @@ import {
     LeagueMinutes,
     MinutesStore,
     POSITION_COUNT,
+    VerifySnapshot,
     PassKind,
     RunBook,
     RunStatus,
@@ -33,51 +41,20 @@ import {
 
 /**
  * @title EligibilityStore
- * @notice Data plane: CRE squads workflow + PpmVerifier appearance ingest into `MinutesStore`.
- * @dev Two write paths (no eligibility thresholds / cohort routing — those live on the verifier):
+ * @notice Standalone data plane: CRE squads workflow + PpmVerifier appearance ingest.
+ * @dev Deployed behind its own proxy (EIP-170). Two write paths (no eligibility thresholds /
+ *      cohort routing — those live on `EligibilityVerifier`):
  *
  *      1) CRE `SquadReport` → `_processReport` (FETCH / SORT / SYNC)
  *      2) PpmVerifier → `recordAppearances` (career `positionMinutes` + per-league score)
  *
- *      FETCH_TRANSIENT
- *        Append one SP page-slice into the single `TransientReturn` slot. SP `_pgNm` is
- *        typically one club; CRE may **stay-on-page** and drain that club across ~5KB
- *        reports. `personsOffset` is the within-page cursor: retries that re-send an
- *        already-accepted slice revert (`FetchOffsetMismatch`) instead of duplicating.
- *        `_pgNm` advances only when the report sets `nextPage != pageFetched` (club
- *        fully drained) or `DONE`. Season flips to `TRANSIENT` only on `DONE`.
- *
- *      SORT_TRANSIENT
- *        Gas-chunked over the **complete** buffer:
- *          (1) Upsert → `MinutesStore` (club/league change detection) + rebuild each
- *              club's `SquadList` from the buffer (first touch clears prior roster and
- *              stages those players as removal candidates).
- *          (2) Removals: candidates absent from the season membership set
- *              (`_lastSeasonSeen != seasonId`) are true exits — clear club membership
- *              and stage `_pendingLeftLeague` for the verifier / TransferLocker.
- *          Change buckets (parallel to events): `_pendingClubChanged` /
- *          `_pendingLeagueChanged` on upsert; `_pendingLeftLeague` on removals.
- *        Last chunk auto-finalizes: `IDLE` (current year) or `ARTIFACT` (historical),
- *        demotes any other IDLE with a lower start year, buffer cleared, advance.
- *
- *      Automation (no human / no centralized server / no CRE bookkeeping handler):
- *        - Next season in-league → `SeasonReady`
- *        - Next league → `PopulationComplete` (info) + `SeasonsQueued` in the same tx
- *        - Book terminal → `LoopPending`; cron starts the next current pass
- *        There is **no** CRE `onLeagueAdvance` — advance is store-owned.
- *
- *      `recordAppearances` (PpmVerifier only):
- *        - All comps → career `positionMinutes` / `expectedPosition`
- *        - Queued domestic-league calendars → incremental `LeagueMinutes` score
- *        - Per-match rows are not stored; verify later decays aggregates to `G_now`
- *
- *      Abstract: concrete verifier resolves AddressBook refs (`_ppmVerifier` /
- *      `_tournamentRegistry`), exposes role-gated queue ops, and owns criteria / scan.
+ *      Privileged verify helpers (`purgeIfStale` / `syncPlayerScore` / `takePending*`) are
+ *      callable only by `eligibilityVerifier`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-abstract contract EligibilityStore is CreReceiver {
+contract EligibilityStore is Initializable, AddressBook, AccessControl, CreReceiver {
     // --------------------------------------------
     //  Constants
     // --------------------------------------------
@@ -87,6 +64,16 @@ abstract contract EligibilityStore is CreReceiver {
 
     /// @dev Max `(leagueId, year)` final-round entries cached in one appearance batch.
     uint256 internal constant _FINAL_ROUND_CACHE_CAP = 16;
+
+    /// @dev Drop `MinutesStore` rows with `deactivatedAt` at least this old (verify GC).
+    uint256 internal constant STALE_AFTER = 5 * 365 days;
+
+    // --------------------------------------------
+    //  Wiring
+    // --------------------------------------------
+
+    /// @notice Sole caller for verify-page mutations (`purgeIfStale` / score sync / pending drains).
+    address public eligibilityVerifier;
 
     // --------------------------------------------
     //  Storage — workflow
@@ -154,6 +141,128 @@ abstract contract EligibilityStore is CreReceiver {
         uint16[_FINAL_ROUND_CACHE_CAP] seasonYears;
         uint32[_FINAL_ROUND_CACHE_CAP] finals;
         uint8 len;
+    }
+
+    // --------------------------------------------
+    //  Construction / init
+    // --------------------------------------------
+
+    /// @param addressProvider_ Canonical `AddressProvider`.
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
+        _disableInitializers();
+    }
+
+    /**
+     * @notice Proxy init: roles, CRE forwarder + workflow id, year clocks, verifier wire.
+     * @param workflowId_ Expected CRE workflow id (squads `eligibility-store`).
+     * @param baseYear_ Sets `scoreBaseYear` (G-index origin) and initial `currentSeasonStartYear`.
+     * @param eligibilityVerifier_ `EligibilityVerifier` proxy (verify-page privileged caller).
+     */
+    function initialize(bytes32 workflowId_, uint16 baseYear_, address eligibilityVerifier_) external initializer {
+        if (workflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
+        if (baseYear_ == 0) revert Errors.ZeroId();
+        if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
+
+        address dao_ = _getAddress(_addressKey(Addresses.DAO));
+        address constitutionalTimelock_ = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
+        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
+        address forwarder_ = _getAddress(_addressKey(Addresses.CRE_FORWARDER));
+
+        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
+        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
+        _grantRole(Roles.CATEGORY_THREE, automator_);
+
+        eligibilityVerifier = eligibilityVerifier_;
+
+        __CreReceiver_init(forwarder_);
+        _setExpectedWorkflowId(workflowId_);
+        _setScoreBaseYear(baseYear_);
+        _setCurrentSeasonStartYear(baseYear_);
+    }
+
+    modifier onlyVerifier() {
+        if (msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
+        _;
+    }
+
+    // --------------------------------------------
+    //  Ops — CATEGORY_THREE (Automator) / CATEGORY_ONE
+    // --------------------------------------------
+
+    /// @notice Manually queue a league's seasons (oldest→newest). Prefer CRE `SYNC_LEAGUE`.
+    function queueLeague(
+        bytes32 leagueId,
+        bytes32[] calldata seasonIds,
+        uint16[] calldata seasonStartYears
+    ) external onlyRole(Roles.CATEGORY_THREE) {
+        _queueLeague(leagueId, seasonIds, seasonStartYears);
+    }
+
+    /// @notice Set / retune `currentSeasonStartYear` while idle (monotonic tick usually via finalize).
+    function setCurrentSeasonStartYear(uint16 year) external onlyRole(Roles.CATEGORY_ONE) {
+        _setCurrentSeasonStartYear(year);
+    }
+
+    function setExpectedWorkflowId(bytes32 workflowId_) external onlyRole(Roles.CATEGORY_ONE) {
+        if (workflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
+        _setExpectedWorkflowId(workflowId_);
+    }
+
+    function setForwarderAddress(address forwarder_) external onlyRole(Roles.CATEGORY_ONE) {
+        _setForwarderAddress(forwarder_);
+    }
+
+    // --------------------------------------------
+    //  Privileged — EligibilityVerifier verify page
+    // --------------------------------------------
+
+    /**
+     * @notice If `deactivatedAt` is set and at least `STALE_AFTER` old, purge the row.
+     * @dev Returns true when the slot was purged (caller must not advance page index).
+     */
+    function purgeIfStale(uint256 index) external onlyVerifier returns (bool purged) {
+        if (index >= _playerIds.length) return false;
+        MinutesStore storage store = _minutesStore[_playerIds[index]];
+        uint64 deactivatedAt = store.deactivatedAt;
+        if (deactivatedAt == 0) return false;
+        if (block.timestamp < uint256(deactivatedAt) + STALE_AFTER) return false;
+        _purgePlayerAt(index);
+        return true;
+    }
+
+    /// @notice Idle-decay one player's `currentLeagueId` score to that league's `G_now`.
+    function syncPlayerScore(bytes32 playerId) external onlyVerifier {
+        _syncPlayerScore(playerId);
+    }
+
+    /**
+     * @notice Sync `currentLeagueId` score to `G_now`, then return a lean classify snapshot.
+     * @dev Single external call for the verify page — avoids copying full `MinutesStore`.
+     */
+    function syncAndSnapshot(bytes32 playerId) external onlyVerifier returns (VerifySnapshot memory snap) {
+        _syncPlayerScore(playerId);
+        return _verifySnapshot(playerId);
+    }
+
+    /// @notice Lean classify view: scalars + `LeagueMinutes` for `currentLeagueId` only.
+    function getVerifySnapshot(bytes32 playerId) external view returns (VerifySnapshot memory) {
+        return _verifySnapshot(playerId);
+    }
+
+    /// @notice Snapshot + clear staged league-leavers for TransferLocker handoff.
+    function takePendingLeftLeague() external onlyVerifier returns (bytes32[] memory ids) {
+        return _takePendingLeftLeague();
+    }
+
+    /// @notice Snapshot + clear staged club movers.
+    function takePendingClubChanged() external onlyVerifier returns (bytes32[] memory ids) {
+        return _takePendingClubChanged();
+    }
+
+    /// @notice Snapshot + clear staged league movers.
+    function takePendingLeagueChanged() external onlyVerifier returns (bytes32[] memory ids) {
+        return _takePendingLeagueChanged();
     }
 
     // --------------------------------------------
@@ -238,6 +347,10 @@ abstract contract EligibilityStore is CreReceiver {
         return _playerIds.length;
     }
 
+    function playerIdAt(uint256 index) external view returns (bytes32) {
+        return _playerIds[index];
+    }
+
     function playerIds(uint256 offset, uint256 limit) external view returns (bytes32[] memory out) {
         uint256 total = _playerIds.length;
         if (offset >= total || limit == 0) {
@@ -256,6 +369,42 @@ abstract contract EligibilityStore is CreReceiver {
 
     function getMinutesStore(bytes32 playerId) external view returns (MinutesStore memory) {
         return _minutesStore[playerId];
+    }
+
+    /// @dev Build verify snapshot; `currentLeague` zeroed when no row for `currentLeagueId`.
+    function _verifySnapshot(bytes32 playerId) private view returns (VerifySnapshot memory snap) {
+        MinutesStore storage store = _minutesStore[playerId];
+        snap.currentLeagueId = store.currentLeagueId;
+        snap.currentClubId = store.currentClubId;
+        snap.birthDate = store.birthDate;
+        snap.startYearCurrentLeague = store.startYearCurrentLeague;
+        snap.expectedPosition = store.expectedPosition;
+
+        if (snap.currentLeagueId == bytes32(0)) return snap;
+        uint256 lmIndex = _leagueMinutesIndex(store, snap.currentLeagueId);
+        if (lmIndex == type(uint256).max) return snap;
+        snap.currentLeague = store.leagueMinutes[lmIndex];
+    }
+
+    /// @dev Idle-decay `currentLeagueId` score to `G_now` (no-op when nothing to sync).
+    function _syncPlayerScore(bytes32 playerId) private {
+        MinutesStore storage store = _minutesStore[playerId];
+        bytes32 leagueId = store.currentLeagueId;
+        if (leagueId == bytes32(0)) return;
+
+        uint256 lmIndex = _leagueMinutesIndex(store, leagueId);
+        if (lmIndex == type(uint256).max) return;
+
+        LeagueMinutes storage lm = store.leagueMinutes[lmIndex];
+        uint32 last = lm.lastScoreGlobalRound;
+        if (last == 0 || lm.weightedScoreWad == 0) return;
+
+        FinalRoundCache memory frCache;
+        uint32 gNow = _globalRoundNow(leagueId, frCache);
+        if (gNow <= last) return;
+
+        _syncLeagueScoreToNow(lm, gNow);
+        emit Events.WeightedScoreUpdated(playerId, leagueId, lm.weightedScoreWad);
     }
 
     /// @notice Name/symbol only — avoids copying `positionMinutes` / `leagueMinutes`.
@@ -999,7 +1148,7 @@ abstract contract EligibilityStore is CreReceiver {
     }
 
     // --------------------------------------------
-    //  Admin (internal — verifier exposes role-gated wrappers)
+    //  Admin (internal — role-gated wrappers above)
     // --------------------------------------------
 
     /**
@@ -1087,14 +1236,23 @@ abstract contract EligibilityStore is CreReceiver {
     }
 
     // --------------------------------------------
-    //  Internal — AddressBook hooks (concrete verifier)
+    //  Internal — AddressBook hooks
     // --------------------------------------------
 
     /// @dev Sole authorized `recordAppearances` caller (PpmVerifier).
-    function _ppmVerifier() internal view virtual returns (address);
+    function _ppmVerifier() internal view returns (address) {
+        return _getAddress(_addressKey(Addresses.PPM_VERIFIER));
+    }
 
     /// @dev Season calendars + final rounds for the G-index.
-    function _tournamentRegistry() internal view virtual returns (ITournamentRegistry);
+    function _tournamentRegistry() internal view returns (ITournamentRegistry) {
+        return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view override(AccessControl, CreReceiver) returns (bool) {
+        return interfaceId == type(IReceiver).interfaceId || AccessControl.supportsInterface(interfaceId)
+            || CreReceiver.supportsInterface(interfaceId);
+    }
 
     // --------------------------------------------
     //  Internal — position aggregate

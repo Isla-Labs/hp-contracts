@@ -195,8 +195,9 @@ struct SquadList {
 
 /// @notice Per-player eligibility / minutes store.
 /// @dev `currentLeagueId` / `currentClubId` detect transfers on SORT upsert.
-///      Removals (absent from season TransientReturn) clear club membership and
-///      stage the player for downstream TransferLocker handling.
+///      Removals (absent from season TransientReturn) clear club membership,
+///      stamp `deactivatedAt`, and stage `_pendingLeftLeague`.
+///      Reappearance on upsert clears `deactivatedAt` (return / cross-league move).
 ///      `positionMinutes` is a career aggregate (all comps) for `expectedPosition`.
 ///      Per-league rolling scores live in `leagueMinutes` (incremental in
 ///      `recordAppearances`; idle-decay to `G_now` in `verifyEligibility`).
@@ -208,6 +209,8 @@ struct MinutesStore {
     uint32 birthDate;
     /// @dev Season start year at first SORT create — NewTransfer / backFromLoan deploy flag.
     uint16 earliestSeasonStartYear;
+    /// @dev Unix time club membership was cleared (0 = active / never left). Staleness GC input.
+    uint64 deactivatedAt;
     Position expectedPosition;
     uint32[POSITION_COUNT] positionMinutes;
     LeagueMinutes[] leagueMinutes;

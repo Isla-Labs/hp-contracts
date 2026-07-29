@@ -119,7 +119,7 @@ abstract contract EligibilityStore is CreReceiver {
     /// @dev Last `seasonId` that rebuilt a club's `SquadList`.
     mapping(bytes32 clubId => bytes32 seasonId) internal _clubSquadSeason;
 
-    /// @dev Clubs ever observed under a league (untouched clubs → full-squad removals).
+    /// @dev Clubs present in the latest fully-sorted season for a league (pruned each SORT).
     mapping(bytes32 leagueId => bytes32[] clubIds) internal _leagueClubs;
     mapping(bytes32 leagueId => mapping(bytes32 clubId => bool)) internal _leagueClubKnown;
 
@@ -609,6 +609,10 @@ abstract contract EligibilityStore is CreReceiver {
         }
         store.currentLeagueId = leagueId;
         store.currentClubId = clubId;
+        // Return from leave / cross-league reappear — keep minutes, clear staleness stamp.
+        if (store.deactivatedAt != 0) {
+            store.deactivatedAt = 0;
+        }
         _lastSeasonSeen[playerId] = seasonId;
 
         _ensureLeagueClub(leagueId, clubId);
@@ -623,18 +627,37 @@ abstract contract EligibilityStore is CreReceiver {
         list.playerIds.push(playerId);
     }
 
-    /// @dev After upserts: stage full squads of league clubs never touched this season,
-    ///      then clear those rosters (missing from the season snapshot ⇒ empty club).
+    /**
+     * @dev After upserts: clubs never stamped this season are absent from the snapshot
+     *      (relegation / dissolved / unsupported). Stage their prior rosters as removal
+     *      candidates, then drop the club from `_leagueClubs` / SquadList entirely —
+     *      it is re-added via `_ensureLeagueClub` if it returns in a later season.
+     */
     function _prepareRemovalCandidates(TransientReturn storage buf) private {
-        bytes32[] storage clubs = _leagueClubs[buf.leagueId];
+        bytes32 leagueId = buf.leagueId;
+        bytes32 seasonId = buf.seasonId;
+        bytes32[] storage clubs = _leagueClubs[leagueId];
         uint256 n = clubs.length;
+        uint256 keep;
+
         for (uint256 i; i < n; ++i) {
             bytes32 clubId = clubs[i];
-            if (_clubSquadSeason[clubId] == buf.seasonId) continue;
+            if (_clubSquadSeason[clubId] == seasonId) {
+                clubs[keep] = clubId;
+                unchecked {
+                    ++keep;
+                }
+                continue;
+            }
+
             _stageSquadForRemoval(_squadLists[clubId]);
             delete _squadLists[clubId];
-            _squadLists[clubId].clubId = clubId;
-            _clubSquadSeason[clubId] = buf.seasonId;
+            delete _clubSquadSeason[clubId];
+            delete _leagueClubKnown[leagueId][clubId];
+        }
+
+        while (clubs.length > keep) {
+            clubs.pop();
         }
     }
 
@@ -672,6 +695,8 @@ abstract contract EligibilityStore is CreReceiver {
             if (store.currentLeagueId != leagueId) continue;
 
             store.currentClubId = bytes32(0);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            store.deactivatedAt = uint64(block.timestamp);
             _pendingLeftLeague.push(playerId);
             emit Events.PlayerLeftLeague(playerId);
         }
@@ -747,14 +772,12 @@ abstract contract EligibilityStore is CreReceiver {
         // Seal invariant: no historical IDLE leftovers after any finalize.
         _artifactIdleSeasonsBefore(_control.currentSeasonStartYear);
 
-        // Emit SquadListUpdated for clubs rebuilt this season (ops / indexers).
-        bytes32 seasonId = _transient.seasonId;
+        // Emit SquadListUpdated for clubs retained this season (absent clubs already pruned).
         bytes32 leagueId = _transient.leagueId;
         bytes32[] storage clubs = _leagueClubs[leagueId];
         uint256 n = clubs.length;
         for (uint256 i; i < n; ++i) {
             bytes32 clubId = clubs[i];
-            if (_clubSquadSeason[clubId] != seasonId) continue;
             emit Events.SquadListUpdated(clubId, _squadLists[clubId].playerIds.length);
         }
 

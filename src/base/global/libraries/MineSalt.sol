@@ -38,7 +38,7 @@ library MineSalt {
     uint8 internal constant PLAYER_TOKEN_PREFIX = 0x22;
 
     /// @notice Default search cap (~expected 256 hits/prefix; headroom for collisions).
-    uint256 internal constant DEFAULT_MAX_ATTEMPTS = 4_096;
+    uint256 internal constant DEFAULT_MAX_ATTEMPTS = 4096;
 
     /**
      * @notice Constructor args for `DopplerDN404` as deployed by `DN404Factory` via Airlock.
@@ -59,9 +59,7 @@ library MineSalt {
      *      block. `playerId` separates markets; `nonce` separates same-block deploys if needed.
      */
     function entropy(bytes32 playerId, uint256 nonce) internal view returns (bytes32) {
-        return keccak256(
-            abi.encode(block.prevrandao, block.number, block.timestamp, playerId, nonce, address(this))
-        );
+        return keccak256(abi.encode(block.prevrandao, block.number, block.timestamp, playerId, nonce, address(this)));
     }
 
     /**
@@ -115,9 +113,7 @@ library MineSalt {
         bytes32 salt,
         bytes32 initCodeHash_
     ) internal pure returns (address) {
-        return address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), tokenFactory, salt, initCodeHash_))))
-        );
+        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), tokenFactory, salt, initCodeHash_)))));
     }
 
     /**
@@ -162,9 +158,7 @@ library MineSalt {
         Dn404DeployParams memory deployParams,
         bytes32 playerId
     ) internal view returns (bytes32 salt, address predicted, bytes memory seed) {
-        return minePlayerTokenSalt(
-            tokenFactory, deployParams, playerId, 0, PLAYER_TOKEN_PREFIX, DEFAULT_MAX_ATTEMPTS
-        );
+        return minePlayerTokenSalt(tokenFactory, deployParams, playerId, 0, PLAYER_TOKEN_PREFIX, DEFAULT_MAX_ATTEMPTS);
     }
 
     /// @notice Convenience: mine `0x22…` with `DEFAULT_MAX_ATTEMPTS` and an explicit `nonce`.

@@ -26,7 +26,7 @@ abstract contract AddressBook {
     function _getAddresses(bytes32[] memory keys) internal view returns (address[] memory addrs) {
         addrs = addressProvider.getMany(keys);
         uint256 len = addrs.length;
-        for (uint256 i; i < len; ) {
+        for (uint256 i; i < len;) {
             if (addrs[i] == address(0)) revert Errors.AddressNotFound();
             unchecked {
                 ++i;
@@ -47,7 +47,7 @@ abstract contract AddressBook {
     function _addressKeys(string[] memory names) internal pure returns (bytes32[] memory keys) {
         uint256 len = names.length;
         keys = new bytes32[](len);
-        for (uint256 i; i < len; ) {
+        for (uint256 i; i < len;) {
             keys[i] = keccak256(bytes(names[i]));
             unchecked {
                 ++i;

@@ -87,8 +87,7 @@ abstract contract DeployCore is ProxyUtils {
         evDestinations[0] = d.dopplerLocker;
         evDestinations[1] = d.transferLocker;
         VerifiedCallerConfig[] memory callerConfigs = new VerifiedCallerConfig[](1);
-        callerConfigs[0] =
-            VerifiedCallerConfig({ caller: d.eligibilityVerifier, destinations: evDestinations });
+        callerConfigs[0] = VerifiedCallerConfig({ caller: d.eligibilityVerifier, destinations: evDestinations });
         d.automator = address(new Automator(dao, d.constitutionalTimelock, callerConfigs));
 
         TransferLocker(d.transferLocker).setAutomator(d.automator);

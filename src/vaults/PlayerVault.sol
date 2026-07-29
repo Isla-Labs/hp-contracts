@@ -418,8 +418,7 @@ contract PlayerVault is Initializable, AddressBook, AccessControl, Pausable, Ree
         if (newBps == oldBps) return;
 
         uint256 bal = IStakedToken(stToken).balanceOf(user);
-        totalEffectiveStaked =
-            totalEffectiveStaked - _effectiveStake(bal, oldBps) + _effectiveStake(bal, newBps);
+        totalEffectiveStaked = totalEffectiveStaked - _effectiveStake(bal, oldBps) + _effectiveStake(bal, newBps);
 
         // Applies from the next snapshot onward (stToken ids start at 1).
         _boostBpsTrace[user].push(uint96(latestSnapId + 1), uint160(newBps));
@@ -428,8 +427,7 @@ contract PlayerVault is Initializable, AddressBook, AccessControl, Pausable, Ree
 
     function _applyBalanceDelta(address user, uint256 oldBal, uint256 newBal) internal {
         uint16 bps = _latestBoostBps(user);
-        totalEffectiveStaked =
-            totalEffectiveStaked - _effectiveStake(oldBal, bps) + _effectiveStake(newBal, bps);
+        totalEffectiveStaked = totalEffectiveStaked - _effectiveStake(oldBal, bps) + _effectiveStake(newBal, bps);
     }
 
     function _latestBoostBps(address user) internal view returns (uint16) {

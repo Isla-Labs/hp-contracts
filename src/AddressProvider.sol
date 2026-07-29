@@ -23,10 +23,7 @@ contract AddressProvider is AccessControl {
     // --------------------------------------------
 
     constructor(address dao_, address constitutionalTimelock_) {
-        if (
-            dao_ == address(0) || 
-            constitutionalTimelock_ == address(0)
-        ) revert Errors.ZeroAddress();
+        if (dao_ == address(0) || constitutionalTimelock_ == address(0)) revert Errors.ZeroAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
         _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
@@ -137,7 +134,7 @@ contract AddressProvider is AccessControl {
     function getMany(bytes32[] calldata keyList) external view returns (address[] memory addrs) {
         uint256 len = keyList.length;
         addrs = new address[](len);
-        for (uint256 i; i < len; ) {
+        for (uint256 i; i < len;) {
             addrs[i] = _addr[keyList[i]];
             unchecked {
                 ++i;
@@ -149,7 +146,7 @@ contract AddressProvider is AccessControl {
     function getManyByName(string[] calldata names) external view returns (address[] memory addrs) {
         uint256 len = names.length;
         addrs = new address[](len);
-        for (uint256 i; i < len; ) {
+        for (uint256 i; i < len;) {
             if (bytes(names[i]).length == 0) revert Errors.EmptyName();
             addrs[i] = _addr[keccak256(bytes(names[i]))];
             unchecked {

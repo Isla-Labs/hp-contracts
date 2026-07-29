@@ -8,6 +8,7 @@ import { IReceiver } from "@cre/v1/interfaces/IReceiver.sol";
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
 
@@ -16,11 +17,15 @@ import { EligibilityStore } from "./EligibilityStore.sol";
 
 /**
  * @title EligibilityVerifier
- * @notice Concrete CRE consumer: squads workflow store + eligibility criteria.
- * @dev Proxy-initialized. Keystone forwarder resolved from `AddressProvider` (`CRE_FORWARDER`).
- *      Squads CRE reports land on `onReport` → `EligibilityStore._processReport`.
- *      Ops / Automator may also `queueLeague` / `setCurrentSeasonStartYear` via roles;
- *      steady-state sync is CRE `SYNC_LEAGUE` from TournamentRegistry events.
+ * @notice Top layer: AddressBook wiring, ops roles, criteria, and (later) verify scan.
+ * @dev Proxy-initialized. Separation:
+ *        - `EligibilityStore` — CRE squads + `recordAppearances` / score math
+ *        - `EligibilityCriteria` — governance thresholds only
+ *        - this contract — AddressProvider resolution, role-gated ops, scan/handoff
+ *
+ *      Squads CRE reports → `onReport` → store `_processReport`.
+ *      PpmVerifier → store `recordAppearances`.
+ *      Steady-state league sync is CRE `SYNC_LEAGUE` (Automator may `queueLeague`).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -39,10 +44,10 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
     }
 
     /**
-     * @notice Proxy init: roles, criteria defaults, CRE forwarder + workflow id, current year.
+     * @notice Proxy init: roles, criteria defaults, CRE forwarder + workflow id, year clocks.
      * @param workflowId_ Expected CRE workflow id (squads `eligibility-store`).
      * @param leagueId_ Reserved (multi-league RunBook; ignored — kept for DeployData ABI).
-     * @param baseYear_ Initial `currentSeasonStartYear` (finalize classification / cron gate).
+     * @param baseYear_ Sets `scoreBaseYear` (G-index origin) and initial `currentSeasonStartYear`.
      */
     function initialize(bytes32 workflowId_, bytes32 leagueId_, uint16 baseYear_) external initializer {
         leagueId_; // silence — RunBook is multi-league; sync via CRE / queueLeague
@@ -59,6 +64,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
 
         __CreReceiver_init(forwarder_);
         _setExpectedWorkflowId(workflowId_);
+        _setScoreBaseYear(baseYear_);
         _setCurrentSeasonStartYear(baseYear_);
     }
 
@@ -87,6 +93,18 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityStore, El
 
     function setForwarderAddress(address forwarder_) external onlyRole(Roles.CATEGORY_ONE) {
         _setForwarderAddress(forwarder_);
+    }
+
+    // --------------------------------------------
+    //  AddressBook → store hooks
+    // --------------------------------------------
+
+    function _ppmVerifier() internal view override returns (address) {
+        return _getAddress(_addressKey(Addresses.PPM_VERIFIER));
+    }
+
+    function _tournamentRegistry() internal view override returns (ITournamentRegistry) {
+        return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
     }
 
     function supportsInterface(bytes4 interfaceId) public view override(AccessControl, CreReceiver) returns (bool) {

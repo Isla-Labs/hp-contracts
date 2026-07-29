@@ -38,7 +38,7 @@ library HP8453 {
 
     //  Doppler
     address internal constant DOPPLER_AIRLOCK = 0x660eAaEdEBc968f8f3694354FA8EC0b4c5Ba8D12;
-    address internal constant DN404_FACTORY = 0x0000000000000000000000000000000000000000; // missing
+    address internal constant DN404_FACTORY = 0x37A9Fa204a4d3A429FDED7e3469ab076C854Bc9d;
     address internal constant NO_OP_GOVERNANCE_FACTORY = 0xe7dfbd5b0A2C3B4464653A9beCdc489229eF090E;
     address internal constant DOPPLER_HOOK_INITIALIZER = 0xBDF938149ac6a781F94FAa0ed45E6A0e984c6544;
     address internal constant REHYPE_DOPPLER_HOOK_INITIALIZER = 0x9982538F41f2ae29ddb9d3D9307010052984FDbB;

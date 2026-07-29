@@ -16,7 +16,7 @@ library EligibilityEvents {
         Position expectedPosition
     );
 
-    event WeightedScoreUpdated(bytes32 indexed playerId, uint256 weightedScoreWad);
+    event WeightedScoreUpdated(bytes32 indexed playerId, bytes32 indexed leagueId, uint256 weightedScoreWad);
 
     /// @notice Paged score sync completed for `[offset, offset+updated)`.
     event WeightedScoresSynced(uint256 offset, uint256 limit, uint256 updated, uint32 globalRound);

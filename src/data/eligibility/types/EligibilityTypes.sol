@@ -23,8 +23,8 @@ import { Position } from "@types/PlayerSetTypes.sol";
 //  Constants
 // --------------------------------------------
 
-/// @dev `Position` has 14 variants (GK … ST); index = `uint8(Position)`.
-uint256 constant POSITION_COUNT = 14;
+/// @dev `Position` has 12 variants (GK … ST; RAM/LAM folded into RM/LM); index = `uint8(Position)`.
+uint256 constant POSITION_COUNT = 12;
 
 /// @dev Fixed-point scale for `weightedScoreWad` / `LAMBDA_WAD`.
 uint256 constant SCORE_WAD = 1e18;
@@ -197,6 +197,9 @@ struct SquadList {
 /// @dev `currentLeagueId` / `currentClubId` detect transfers on SORT upsert.
 ///      Removals (absent from season TransientReturn) clear club membership and
 ///      stage the player for downstream TransferLocker handling.
+///      `positionMinutes` is a career aggregate (all comps) for `expectedPosition`.
+///      Per-league rolling scores live in `leagueMinutes` (incremental in
+///      `recordAppearances`; idle-decay to `G_now` in `verifyEligibility`).
 struct MinutesStore {
     bytes32 currentLeagueId;
     bytes32 currentClubId;
@@ -208,6 +211,8 @@ struct MinutesStore {
     LeagueMinutes[] leagueMinutes;
 }
 
+/// @notice Recency-weighted minutes score for one domestic league.
+/// @dev `weightedScoreWad` is normalized to `lastScoreGlobalRound` (0 = never scored).
 struct LeagueMinutes {
     bytes32 leagueId;
     uint256 weightedScoreWad;
@@ -254,12 +259,17 @@ library SquadWorkflowEvents {
 }
 
 // --------------------------------------------
-//  PPM-Verify Workflow
+//  PPM appearance ingest (not persisted onchain)
 // --------------------------------------------
 
+/// @notice Single-match appearance delta for `recordAppearances`.
+/// @dev Batch carries `seasonId` / `seasonStartYear`. All rows update career
+///      `positionMinutes`; only RunBook domestic-league calendars update that
+///      league's `LeagueMinutes` score.
 struct Appearance {
     bytes32 leagueId;
     bytes32 playerId;
+    uint32 roundNumber;
     Position position;
     uint32 minsPlayed;
 }

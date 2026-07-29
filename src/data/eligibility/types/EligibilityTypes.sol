@@ -206,6 +206,8 @@ struct MinutesStore {
     string name;
     string symbol;
     uint32 birthDate;
+    /// @dev Season start year at first SORT create — NewTransfer / backFromLoan deploy flag.
+    uint16 earliestSeasonStartYear;
     Position expectedPosition;
     uint32[POSITION_COUNT] positionMinutes;
     LeagueMinutes[] leagueMinutes;

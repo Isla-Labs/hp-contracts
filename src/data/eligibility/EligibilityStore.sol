@@ -3,6 +3,7 @@ pragma solidity ^0.8.34;
 
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { Position } from "@types/PlayerSetTypes.sol";
 
 import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
@@ -583,6 +584,7 @@ abstract contract EligibilityStore is CreReceiver {
             _tracked[playerId] = true;
             _playerIds.push(playerId);
             store.birthDate = buf.birthDates[i];
+            store.earliestSeasonStartYear = buf.seasonStartYear;
             emit Events.SquadPlayerCreated(playerId, buf.birthDates[i]);
         } else if (store.birthDate == 0) {
             store.birthDate = buf.birthDates[i];
@@ -1148,6 +1150,24 @@ abstract contract EligibilityStore is CreReceiver {
         if (last == 0 || lm.weightedScoreWad == 0 || gNow <= last) return;
         lm.weightedScoreWad = _decay(lm.weightedScoreWad, gNow - last);
         lm.lastScoreGlobalRound = gNow;
+    }
+
+    /// @dev Index of `leagueId` in `store.leagueMinutes`, or `type(uint256).max` if absent.
+    function _leagueMinutesIndex(MinutesStore storage store, bytes32 leagueId) internal view returns (uint256) {
+        uint256 n = store.leagueMinutes.length;
+        for (uint256 i; i < n; ++i) {
+            if (store.leagueMinutes[i].leagueId == leagueId) return i;
+        }
+        return type(uint256).max;
+    }
+
+    /// @dev Live domestic-league clock → global round (`PbrTreasury` cursors).
+    function _globalRoundNow(bytes32 leagueId, FinalRoundCache memory frCache) internal view returns (uint32) {
+        address treasury = _tournamentRegistry().getPbrTreasury(leagueId);
+        if (treasury == address(0)) revert Errors.ZeroAddress();
+        (uint16 season, uint32 active,) = IPbrTreasury(treasury).getCursors();
+        if (season == 0 || active == 0) revert Errors.ZeroId();
+        return _toGlobalRound(leagueId, season, active, frCache);
     }
 
     /// @dev `G(year, round) = Σ finalRound(y) for y ∈ [scoreBaseYear, year) + round`.

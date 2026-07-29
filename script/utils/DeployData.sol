@@ -54,7 +54,6 @@ abstract contract DeployData is ProxyUtils {
         address initGuard;
         address forwarder;
         bytes32 workflowId;
-        bytes32 leagueId;
         uint16 baseYear;
         uint256 cooldown;
     }
@@ -73,7 +72,6 @@ abstract contract DeployData is ProxyUtils {
         c.initGuard = vm.envAddress("INIT_GUARD");
         c.forwarder = vm.envAddress("KEYSTONE_FORWARDER");
         c.workflowId = vm.envBytes32("SQUAD_FILL_WORKFLOW_ID");
-        c.leagueId = vm.envBytes32("LEAGUE_ID");
         c.baseYear = uint16(vm.envUint("BASE_YEAR"));
         c.cooldown = vm.envOr("ELIGIBILITY_COOLDOWN", uint256(1 hours));
     }
@@ -81,7 +79,6 @@ abstract contract DeployData is ProxyUtils {
     function _deployData(address deployer) internal returns (DataDeployment memory d) {
         DataConfig memory c = _loadDataConfig(deployer);
         if (c.workflowId == bytes32(0)) revert("SQUAD_FILL_WORKFLOW_ID required");
-        if (c.leagueId == bytes32(0)) revert("LEAGUE_ID required");
         if (c.baseYear == 0) revert("BASE_YEAR required");
         if (c.forwarder == address(0)) revert("KEYSTONE_FORWARDER required");
         if (c.eligibilityVerifier == address(0)) revert("ELIGIBILITY_VERIFIER required");
@@ -117,7 +114,7 @@ abstract contract DeployData is ProxyUtils {
         _upgradeAndCall(
             d.eligibilityVerifier,
             d.eligibilityVerifierImpl,
-            abi.encodeCall(EligibilityVerifier.initialize, (c.workflowId, c.leagueId, c.baseYear))
+            abi.encodeCall(EligibilityVerifier.initialize, (c.workflowId, c.baseYear))
         );
         _upgradeAndCall(
             d.fixtureCommitment,

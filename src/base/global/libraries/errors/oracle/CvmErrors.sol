@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: AGPL-3.0
+pragma solidity ^0.8.34;
+
+import { CvmJob } from "@types/oracle/CvmTypes.sol";
+
+library CvmErrors {
+    error ZeroAddress();
+    error ZeroDeviceId();
+    error ZeroComposeHash();
+    error InvalidJob(CvmJob job);
+    error InvalidConfig();
+    error OnlyOracle(address caller);
+    error OnlyRouter(address caller);
+    error OnlyRequester(address caller);
+    error UnknownRequest(bytes32 requestId);
+    error RequestTimedOut(bytes32 requestId);
+    error RequestNotTimedOut(bytes32 requestId);
+    error DuplicateRequestId(bytes32 requestId);
+    error CallbackGasLimitTooHigh(uint32 limit, uint32 max);
+    error AlreadyOracle(address transmitter);
+    error NotOracle(address transmitter);
+    error DstackAppNotSet();
+    error DstackAppAlreadySet();
+    error AttestationVerifierNotSet();
+    error ComposeNotAllowed(bytes32 composeHash);
+    error RegistrationExpired(address transmitter);
+    error ZeroRegistrationTtl();
+    error AttestationFailed();
+}

@@ -7,3 +7,10 @@
 [submodule "lib/chainlink-evm"]
 	path = lib/chainlink-evm
 	url = https://github.com/smartcontractkit/chainlink-evm
+[submodule "lib/solidity-contracts"]
+	path = lib/solidity-contracts
+	url = https://github.com/Phala-Network/solidity-contracts
+[submodule "lib/openzeppelin-contracts-4.9"]
+	path = lib/openzeppelin-contracts-4.9
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+	branch = v4.9.6

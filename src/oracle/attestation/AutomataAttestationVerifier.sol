@@ -30,9 +30,11 @@ contract AutomataAttestationVerifier is IAttestationVerifier {
     uint64 public immutable maxQuoteAge;
     IAutomataDcapAttestation public immutable dcap;
 
-    /// @dev Intel TDX Quote V4: 48-byte header, then TD report; REPORTDATA at +128 in report.
+    /// @dev Intel TDX Quote V4 (Phala/dstack): 48-byte header, then TD report body.
+    ///      Custom 64-byte REPORTDATA (commitment || nonce) starts at header+520 (=568).
+    ///      Validated against live Phala GetQuote output (not the SGX-style +128 offset).
     uint256 public constant QUOTE_V4_HEADER_SIZE = 48;
-    uint256 public constant TDX_REPORT_DATA_OFFSET = 128;
+    uint256 public constant TDX_REPORT_DATA_OFFSET = 520;
 
     mapping(bytes32 nonce => bool used) private _usedNonces;
 

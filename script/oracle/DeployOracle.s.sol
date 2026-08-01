@@ -14,7 +14,14 @@ import { MockDstackApp } from "../../test/oracle/mocks/MockDstackApp.sol";
 /**
  * @title DeployOracle
  * @notice Base Sepolia bootstrap for CVM oracle bus + registry.
- * @dev Env:
+ * @dev Hybrid phase: Phala may deploy a real DstackApp on Base mainnet for KMS boot;
+ *      this script deploys a Sepolia MockDstackApp owned by CvmCoordinator for local
+ *      compose policy only (not the Phala KMS contract).
+ *
+ *      Makefile: `make deploy-base-sepolia-oracle`
+ *               `make oracle-sepolia-add-compose COMPOSE_HASH=0x…`
+ *
+ *      Env:
  *        PRIVATE_KEY            — deployer (defaults to DAO / CATEGORY_ONE)
  *        DAO_ADDRESS            — optional admin
  *        CONSTITUTIONAL_ADDRESS — optional cat-1

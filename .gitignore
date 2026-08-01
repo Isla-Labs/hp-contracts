@@ -15,7 +15,7 @@ docs/
 
 # Dotenv file
 .env
-.env*
+.env.sp
 
 # Temp
 .temp/

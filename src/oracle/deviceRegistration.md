@@ -1,6 +1,6 @@
 # Open CVM Oracle Registration (Option C)
 
-**Status:** Onchain core + CVM worker scaffold (`/oracle`) — Sepolia mock path ready; Automata quote offsets still TBD on live Phala quotes  
+**Status:** Onchain core + CVM worker — **hybrid phase**: Phala Base-mainnet KMS/DstackApp + Sepolia mock oracle bus (`make deploy-base-sepolia-oracle`)  
 **Depends on:** `CvmCoordinator`, `CvmRouter`, Phala Onchain KMS / `DstackApp`, `IAttestationVerifier` (Mock / Automata), CDP paymaster for UserOps
 
 ---
@@ -101,7 +101,7 @@ Deploy helper: `contracts/script/oracle/DeployOracle.s.sol` → `deployments/bas
 
 ## Still open / follow-ups
 
-- Confirm TDX Quote V4 REPORTDATA offset against live Phala quotes (`AutomataAttestationVerifier` constants).  
+- ~~Confirm TDX Quote V4 REPORTDATA offset against live Phala quotes~~ — validated: header 48 + body offset 520 (=568).  
 - Optional ZK-DCAP path + full RTMR3 compose replay in-guest.  
 - Sybil bond / stake.  
 - Registration prune helper for expired set members (view already denies them).

@@ -1,0 +1,10 @@
+{
+  "chainId": 84532,
+  "dstackApp": "0xa2b3112aE4054D5e33aBeac6bf5A70002138E4F5",
+  "attestationVerifier": "0xcA6AD7614f81C0803014cDddD2a1C13149996834",
+  "cvmCoordinator": "0x182Bc7CeD6377946d9C8d765ECec63Ac88b69a3C",
+  "cvmRouter": "0x14Ae548c866DF0700a022822765571d2F2d4aaAe",
+  "useMockVerifier": false,
+  "registrationTtl": 604800,
+  "reportDataOffsetNote": "QUOTE_V4_HEADER_SIZE=48 TDX_REPORT_DATA_OFFSET=520 (Phala-validated)"
+}

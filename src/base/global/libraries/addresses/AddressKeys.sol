@@ -23,4 +23,13 @@ library AddressKeys {
     string internal constant ELIGIBILITY_VERIFIER = "ELIGIBILITY_VERIFIER";
     string internal constant PPM_VERIFIER = "PPM_VERIFIER";
     string internal constant CRE_FORWARDER = "CRE_FORWARDER";
+    string internal constant PBR_SETTLE = "PBR_SETTLE";
+
+    // Automata DCAP (TEE quote verification)
+    string internal constant AUTOMATA_DCAP_ATTESTATION = "AUTOMATA_DCAP_ATTESTATION";
+    string internal constant AUTOMATA_PCCS_ROUTER = "AUTOMATA_PCCS_ROUTER";
+
+    // CVM oracle bus
+    string internal constant CVM_COORDINATOR = "CVM_COORDINATOR";
+    string internal constant CVM_ROUTER = "CVM_ROUTER";
 }

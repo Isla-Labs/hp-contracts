@@ -49,11 +49,7 @@ abstract contract CvmClient is ICvmClient {
      * @param callbackGasLimit Gas available for `_fulfillRequest` on callback.
      * @return requestId Correlator for the pending request.
      */
-    function _sendRequest(
-        CvmJob job,
-        bytes memory args,
-        uint32 callbackGasLimit
-    ) internal returns (bytes32 requestId) {
+    function _sendRequest(CvmJob job, bytes memory args, uint32 callbackGasLimit) internal returns (bytes32 requestId) {
         requestId = i_router.sendRequest(job, args, callbackGasLimit);
         emit RequestSent(requestId);
     }
@@ -65,11 +61,7 @@ abstract contract CvmClient is ICvmClient {
     function _fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal virtual;
 
     /// @inheritdoc ICvmClient
-    function handleOracleFulfillment(
-        bytes32 requestId,
-        bytes memory response,
-        bytes memory err
-    ) external override {
+    function handleOracleFulfillment(bytes32 requestId, bytes memory response, bytes memory err) external override {
         if (msg.sender != address(i_router)) revert Errors.OnlyRouter(msg.sender);
         _fulfillRequest(requestId, response, err);
         emit RequestFulfilled(requestId);

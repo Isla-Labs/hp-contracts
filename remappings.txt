@@ -5,6 +5,7 @@ forge-std/=lib/forge-std/src/
 @roles/=src/base/global/libraries/roles/
 @types/=src/base/global/types/
 @interfaces/=src/base/global/interfaces/
+@addresses/=src/base/global/libraries/addresses/
 
 @src/=src/
 @base/=src/base/

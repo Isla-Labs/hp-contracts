@@ -65,7 +65,9 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
         address attestationVerifier_,
         uint64 registrationTtl_
     ) {
-        if (dao_ == address(0) || constitutional_ == address(0)) revert Errors.ZeroAddress();
+        if (dao_ == address(0) || constitutional_ == address(0)) {
+            revert Errors.ZeroAddress();
+        }
         if (registrationTtl_ == 0) revert Errors.ZeroRegistrationTtl();
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
@@ -153,9 +155,7 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
         uint64 expiresAt = uint64(block.timestamp) + _registrationTtl;
         _upsertRegistration(claim.deviceId, claim.transmitter, claim.composeHash, expiresAt);
 
-        emit Events.OracleRegisteredWithAttestation(
-            claim.transmitter, claim.deviceId, claim.composeHash, expiresAt
-        );
+        emit Events.OracleRegisteredWithAttestation(claim.transmitter, claim.deviceId, claim.composeHash, expiresAt);
     }
 
     // --------------------------------------------
@@ -176,10 +176,7 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
     }
 
     /// @inheritdoc ICvmCoordinator
-    function registerOracleBreakglass(
-        bytes32 deviceId,
-        address transmitter
-    ) external onlyRole(Roles.CATEGORY_ONE) {
+    function registerOracleBreakglass(bytes32 deviceId, address transmitter) external onlyRole(Roles.CATEGORY_ONE) {
         _upsertRegistration(deviceId, transmitter, bytes32(0), type(uint64).max);
         emit Events.OracleRegistered(transmitter, deviceId);
     }
@@ -222,10 +219,7 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
     }
 
     /// @inheritdoc ICvmCoordinator
-    function setAttestationComposeAllowed(
-        bytes32 composeHash,
-        bool allowed
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setAttestationComposeAllowed(bytes32 composeHash, bool allowed) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (composeHash == bytes32(0)) revert Errors.ZeroComposeHash();
         _composeAllowed[composeHash] = allowed;
         emit Events.AttestationComposeAllowed(composeHash, allowed);

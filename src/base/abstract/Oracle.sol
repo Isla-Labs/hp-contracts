@@ -80,10 +80,7 @@ abstract contract Oracle is CvmClient {
     }
 
     /// @notice Open a request with the preconfigured `job` and an explicit callback gas limit.
-    function _sendOracleRequest(
-        bytes memory args,
-        uint32 callbackGasLimit
-    ) internal returns (bytes32 requestId) {
+    function _sendOracleRequest(bytes memory args, uint32 callbackGasLimit) internal returns (bytes32 requestId) {
         _requireOracleConfig();
         if (callbackGasLimit == 0) revert OracleNotConfigured();
         return _storeLast(_sendRequest(job, args, callbackGasLimit));

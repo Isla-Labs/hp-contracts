@@ -120,6 +120,12 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
         _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
         _grantRole(Roles.CATEGORY_THREE, automator_);
 
+        // Optional: Phala/Succinct settle pipeline may push `settle` directly when registered.
+        address pbrSettle_ = addressProvider.get(_addressKey(Addresses.PBR_SETTLE));
+        if (pbrSettle_ != address(0)) {
+            _grantRole(Roles.CATEGORY_THREE, pbrSettle_);
+        }
+
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
     }

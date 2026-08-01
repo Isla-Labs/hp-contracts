@@ -55,12 +55,7 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
      * @param coordinator_ `CvmCoordinator` used for `isOracle` checks.
      * @param config_ Initial router config.
      */
-    constructor(
-        address dao_,
-        address constitutional_,
-        address coordinator_,
-        CvmRouterConfig memory config_
-    ) {
+    constructor(address dao_, address constitutional_, address coordinator_, CvmRouterConfig memory config_) {
         if (dao_ == address(0) || constitutional_ == address(0) || coordinator_ == address(0)) {
             revert Errors.ZeroAddress();
         }
@@ -118,9 +113,7 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
             nonce = ++_requestCount;
         }
 
-        requestId = keccak256(
-            abi.encode(block.chainid, address(this), msg.sender, nonce, job, keccak256(args))
-        );
+        requestId = keccak256(abi.encode(block.chainid, address(this), msg.sender, nonce, job, keccak256(args)));
         if (_commitments[requestId].requester != address(0)) {
             revert Errors.DuplicateRequestId(requestId);
         }
@@ -150,11 +143,7 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
     // --------------------------------------------
 
     /// @inheritdoc ICvmRouter
-    function fulfill(
-        bytes32 requestId,
-        bytes calldata response,
-        bytes calldata err
-    ) external whenNotPaused {
+    function fulfill(bytes32 requestId, bytes calldata response, bytes calldata err) external whenNotPaused {
         if (!_coordinator.isOracle(msg.sender)) revert Errors.OnlyOracle(msg.sender);
 
         CvmCommitment memory commitment = _commitments[requestId];
@@ -209,10 +198,7 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
     // --------------------------------------------
 
     function _setConfig(CvmRouterConfig memory config_) internal {
-        if (
-            config_.maxCallbackGasLimit == 0 || config_.requestTimeout == 0
-                || config_.gasForCallExactCheck == 0
-        ) {
+        if (config_.maxCallbackGasLimit == 0 || config_.requestTimeout == 0 || config_.gasForCallExactCheck == 0) {
             revert Errors.InvalidConfig();
         }
         _config = config_;
@@ -252,8 +238,7 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
             if iszero(gt(sub(g, div(g, 64)), callbackGasLimit)) { revert(0, 0) }
 
             let gasBefore := gas()
-            success :=
-                call(callbackGasLimit, client, 0, add(payload, 0x20), mload(payload), 0, 0)
+            success := call(callbackGasLimit, client, 0, add(payload, 0x20), mload(payload), 0, 0)
             gasUsed := sub(gasBefore, gas())
 
             let toCopy := returndatasize()

@@ -4,21 +4,26 @@ pragma solidity ^0.8.34;
 import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
-import { IEligibilityVerifier } from "@interfaces/data/IEligibilityVerifier.sol";
-import { EligibilityBucket, EligibilityGroups } from "@types/data/EligibilityTypes.sol";
+import { EligibilityBucket, EligibilityGroups, DopplerTypes } from "@types/governance/DopplerTypes.sol";
 
 import { DopplerConfig } from "@governance/deployments/assets/deploy/config/DopplerConfig.sol";
-import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
+
+/// @dev Optional metadata oracle (legacy EligibilityVerifier shape). `address(0)` → empty name/symbol.
+interface IPlayerMetadataOracle {
+    function getPlayerMetadata(bytes32 playerId)
+        external
+        view
+        returns (string memory name, string memory symbol, bool metadataSet);
+}
 
 /**
  * Two completely different flows live in this contract:
  *
- * 0) Eligibility waiting room (from EligibilityVerifier via Automator)
+ * 0) Eligibility waiting room (from data plane via Automator)
  *    - `enqueueEligible` stores cohort-tagged playerIds for later deploy formatting.
- *    - Only the configured `automator` may write; EV is the minutes/metadata oracle.
+ *    - Only the configured `automator` may write; optional metadata oracle for name/symbol.
  *    - Consumes deploy cohorts only; lifecycle arrays go to `TransferLocker`.
- *    - Name/symbol copied from `EligibilityVerifier` when CRE has filled them; else empty
- *      until waiting-room manual override (`DopplerTypes.PendingEligible`).
+ *    - Name/symbol copied from metadata oracle when set; else empty until waiting-room override.
  *
  * 1) Initial market deployment (gated)
  *    - Requires zk proof of eligibility (trustlessEligibility).
@@ -52,7 +57,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
     /// @notice Sole writer for `enqueueEligible` (Automator; set once after Automator deploy).
     address public automator;
 
-    /// @notice Minutes/metadata oracle for enqueue (EligibilityVerifier; set once after EV deploy).
+    /// @notice Optional metadata oracle for enqueue (`IPlayerMetadataOracle`; set once).
     address public eligibilityVerifier;
 
     DopplerTypes.PendingEligible[] private _pending;
@@ -83,7 +88,6 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
     /// @inheritdoc IDopplerLocker
     function enqueueEligible(EligibilityGroups calldata groups) external {
         if (msg.sender != automator) revert Errors.Unauthorized();
-        if (eligibilityVerifier == address(0)) revert Errors.NotConfigured();
 
         uint256 added;
         added += _enqueueCohort(groups.goalkeepers, EligibilityBucket.Goalkeeper);
@@ -128,8 +132,12 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
             bytes32 playerId = playerIds[i];
             if (playerId == bytes32(0) || _queued[playerId]) continue;
 
-            (string memory name, string memory symbol, bool metadataSet) =
-                IEligibilityVerifier(eligibilityVerifier).getPlayerMetadata(playerId);
+            string memory name;
+            string memory symbol;
+            bool metadataSet;
+            if (eligibilityVerifier != address(0)) {
+                (name, symbol, metadataSet) = IPlayerMetadataOracle(eligibilityVerifier).getPlayerMetadata(playerId);
+            }
 
             _queued[playerId] = true;
             _pending.push(

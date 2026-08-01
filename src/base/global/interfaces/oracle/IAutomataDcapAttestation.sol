@@ -14,9 +14,7 @@ interface IAutomataDcapAttestation {
         Pico
     }
 
-    function verifyAndAttestOnChain(bytes calldata rawQuote)
-        external
-        returns (bool success, bytes memory output);
+    function verifyAndAttestOnChain(bytes calldata rawQuote) external returns (bool success, bytes memory output);
 
     function verifyAndAttestWithZKProof(
         bytes calldata output,

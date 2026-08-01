@@ -3,7 +3,6 @@ pragma solidity ^0.8.34;
 
 import { DeployCore } from "../utils/DeployCore.sol";
 import { DeployFactories } from "../utils/DeployFactories.sol";
-import { DeployData } from "../utils/DeployData.sol";
 
 /// @notice Base mainnet — core stack (access, lockers, DeployTournament, registries).
 contract DeployCoreStack is DeployCore {
@@ -30,14 +29,4 @@ contract DeployFactoriesStack is DeployFactories {
     }
 }
 
-/// @notice Base mainnet — eligibility + matchweeks (+ ppm placeholder).
-contract DeployDataStack is DeployData {
-    function run() external returns (DataDeployment memory d) {
-        uint256 privateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(privateKey);
-
-        vm.startBroadcast(privateKey);
-        d = _deployData(deployer);
-        vm.stopBroadcast();
-    }
-}
+// DeployDataStack archived with CRE eligibility/matchweeks under `.junk/data-legacy`.

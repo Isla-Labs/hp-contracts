@@ -9,9 +9,6 @@ optimizer_runs = 0
 bytecode_hash = "none"
 gas_limit = "8000000000"
 create2_deployer = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
-# Archived monolith; paths diverge from the Store/Verifier split.
-skip = ["src/data/eligibility/.original/**"]
-
 fs_permissions = [
   { access = "read", path = "./lib" },
   { access = "read", path = "./script" },

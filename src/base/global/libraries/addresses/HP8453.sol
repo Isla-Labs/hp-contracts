@@ -32,10 +32,15 @@ library HP8453 {
     address internal constant ELIGIBILITY_STORE = 0x0000000000000000000000000000000000000000;
     address internal constant ELIGIBILITY_VERIFIER = 0x0000000000000000000000000000000000000000;
     address internal constant PPM_VERIFIER = 0x0000000000000000000000000000000000000000;
+    address internal constant PBR_SETTLE = 0x0000000000000000000000000000000000000000;
     address internal constant ROUND_MANAGER = 0x0000000000000000000000000000000000000000;
 
     // Chainlink Runtime Environment
     address internal constant CRE_FORWARDER = 0xF8344CFd5c43616a4366C34E3EEE75af79a74482;
+
+    // Automata DCAP (TEE quote verification)
+    address internal constant AUTOMATA_DCAP_ATTESTATION = 0xaDdeC7e85c2182202b66E331f2a4A0bBB2cEEa1F;
+    address internal constant AUTOMATA_PCCS_ROUTER = 0xaf2a0D5473062b36E2dE986DA09d945EB26d492B;
 
     //  Doppler
     address internal constant DOPPLER_AIRLOCK = 0x660eAaEdEBc968f8f3694354FA8EC0b4c5Ba8D12;

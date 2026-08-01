@@ -41,10 +41,7 @@ library CvmEvents {
     event OracleRegistered(address indexed transmitter, bytes32 indexed deviceId);
 
     event OracleRegisteredWithAttestation(
-        address indexed transmitter,
-        bytes32 indexed deviceId,
-        bytes32 indexed composeHash,
-        uint64 expiresAt
+        address indexed transmitter, bytes32 indexed deviceId, bytes32 indexed composeHash, uint64 expiresAt
     );
 
     event OracleRevoked(address indexed transmitter, bytes32 indexed deviceId);

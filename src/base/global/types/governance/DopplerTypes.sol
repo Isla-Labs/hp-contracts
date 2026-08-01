@@ -10,13 +10,38 @@ import {
 } from "@doppler/src/types/RehypeTypes.sol";
 import { WAD } from "@doppler/src/types/Wad.sol";
 
-import { EligibilityBucket } from "@types/data/EligibilityTypes.sol";
-
 /**
  * @title DopplerTypes
  * @notice Shared types + encoders for `Airlock.create` (Rehype multicurve path).
  * @dev Mutable launch parameters live on `DopplerConfig` (governance-updatable). This library
  *      holds ABI shapes, default constants, and pure encoders.
+ *
+ *      Waiting-room cohort shapes used to live in `EligibilityTypes` (archived under
+ *      `.junk/data-legacy`). Kept here so `DopplerLocker` stays compilable during the
+ *      Phala data-plane redesign.
+ */
+
+/// @notice Eligibility cohort a candidate falls into (waiting-room tag).
+enum EligibilityBucket {
+    None,
+    Goalkeeper,
+    Under21,
+    Outfield,
+    NewTransfer
+}
+
+/// @notice Deploy cohorts for `DopplerLocker.enqueueEligible` (lifecycle arrays ignored there).
+struct EligibilityGroups {
+    bytes32[] goalkeepers;
+    bytes32[] under21;
+    bytes32[] outfield;
+    bytes32[] newTransfers;
+    bytes32[] toDeactivate;
+    bytes32[] toReactivate;
+}
+
+/**
+ * @dev Airlock / Rehype encoders follow.
  *
  *      Default economic recipe (ETH FDV, asset-as-token0 tick orientation):
  *        - Supply: 22M total / 20M to sell

@@ -69,7 +69,10 @@ contract CvmCoordinatorTest is Test {
         assertEq(reg.composeHash, COMPOSE_V1);
         assertEq(reg.expiresAt, uint64(block.timestamp) + TTL);
         assertTrue(reg.active);
-        assertEq(AttestationLib.reportDataCommitment(claim), keccak256(abi.encode(transmitter, DEVICE, COMPOSE_V1, claim.nonce)));
+        assertEq(
+            AttestationLib.reportDataCommitment(claim),
+            keccak256(abi.encode(transmitter, DEVICE, COMPOSE_V1, claim.nonce))
+        );
     }
 
     function test_isOracle_falseAfterTtl() public {

@@ -44,12 +44,10 @@ contract DeployOracle is Script {
         if (useMock) {
             verifier = address(new MockAttestationVerifier(maxQuoteAge));
         } else {
-            verifier =
-                address(new AutomataAttestationVerifier(HP85432.AUTOMATA_DCAP_ATTESTATION, maxQuoteAge));
+            verifier = address(new AutomataAttestationVerifier(HP85432.AUTOMATA_DCAP_ATTESTATION, maxQuoteAge));
         }
 
-        CvmCoordinator coordinator =
-            new CvmCoordinator(dao, constitutional, address(0), verifier, ttl);
+        CvmCoordinator coordinator = new CvmCoordinator(dao, constitutional, address(0), verifier, ttl);
 
         dstack.transferOwnership(address(coordinator));
 
@@ -63,9 +61,7 @@ contract DeployOracle is Script {
         }
 
         CvmRouterConfig memory routerConfig = CvmRouterConfig({
-            maxCallbackGasLimit: 500_000,
-            requestTimeout: uint32(1 days),
-            gasForCallExactCheck: 5_000
+            maxCallbackGasLimit: 500_000, requestTimeout: uint32(1 days), gasForCallExactCheck: 5000
         });
         CvmRouter router = new CvmRouter(dao, constitutional, address(coordinator), routerConfig);
 

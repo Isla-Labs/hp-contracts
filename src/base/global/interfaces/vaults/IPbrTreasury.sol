@@ -19,6 +19,12 @@ interface IPbrTreasury {
     function syncUnregisterVault(address vault) external;
 
     // --------------------------------------------
+    //  Settlement — CATEGORY_THREE (Automator / PbrSettle)
+    // --------------------------------------------
+
+    function settle(address[] calldata vaults, uint256[] calldata mwPoints, uint256 adjTotalPoints) external;
+
+    // --------------------------------------------
     //  Claims (called by PlayerVault)
     // --------------------------------------------
 

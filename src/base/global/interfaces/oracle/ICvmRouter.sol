@@ -17,11 +17,7 @@ interface ICvmRouter {
     function isPending(bytes32 requestId) external view returns (bool);
 
     /// @notice Open a request; emits `RequestStart` for CVM listeners.
-    function sendRequest(
-        CvmJob job,
-        bytes calldata args,
-        uint32 callbackGasLimit
-    ) external returns (bytes32 requestId);
+    function sendRequest(CvmJob job, bytes calldata args, uint32 callbackGasLimit) external returns (bytes32 requestId);
 
     /// @notice Oracle-only fulfill; callbacks `handleOracleFulfillment` on the requester.
     function fulfill(bytes32 requestId, bytes calldata response, bytes calldata err) external;

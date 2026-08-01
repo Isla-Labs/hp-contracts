@@ -32,8 +32,8 @@ import { ProxyUtils } from "./ProxyUtils.sol";
  *        4) Initialize proxies (resolve once into storage)
  *
  *      Non-AddressBook contracts (timelocks, lockers, Automator, DeployTournament) still take
- *      explicit ctor args. EligibilityVerifier proxy is created here so Automator can seed EV
- *      as a verified caller; DeployData upgrades that proxy and deploys EligibilityStore.
+ *      explicit ctor args. A data-plane InitGuard proxy is seeded so Automator has a verified
+ *      caller slot for the upcoming Phala/PbrSettle path (legacy EligibilityVerifier archived).
  */
 abstract contract DeployCore is ProxyUtils {
     struct CoreDeployment {
@@ -43,7 +43,8 @@ abstract contract DeployCore is ProxyUtils {
         address maintenanceTimelock;
         address transferLocker;
         address dopplerLocker;
-        address eligibilityVerifier;
+        /// @notice Placeholder proxy for future data-plane Automator wiring (was EligibilityVerifier).
+        address dataPlanePlaceholder;
         address automator;
         address deployTournament;
         address tournamentRegistry;
@@ -75,7 +76,7 @@ abstract contract DeployCore is ProxyUtils {
 
         d.tournamentRegistry = _deployInitGuardProxy(guard, deployer);
         d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
-        d.eligibilityVerifier = _deployInitGuardProxy(guard, deployer);
+        d.dataPlanePlaceholder = _deployInitGuardProxy(guard, deployer);
 
         d.tournamentRegistryImpl = address(new TournamentRegistry(d.addressProvider));
         d.playerSetRegistryImpl = address(new PlayerSetRegistry(d.addressProvider));
@@ -83,11 +84,11 @@ abstract contract DeployCore is ProxyUtils {
         d.dopplerLocker = address(new DopplerLocker(d.constitutionalTimelock, dao));
         d.transferLocker = address(new TransferLocker(d.playerSetRegistry, d.tournamentRegistry));
 
-        address[] memory evDestinations = new address[](2);
-        evDestinations[0] = d.dopplerLocker;
-        evDestinations[1] = d.transferLocker;
+        address[] memory dataDestinations = new address[](2);
+        dataDestinations[0] = d.dopplerLocker;
+        dataDestinations[1] = d.transferLocker;
         VerifiedCallerConfig[] memory callerConfigs = new VerifiedCallerConfig[](1);
-        callerConfigs[0] = VerifiedCallerConfig({ caller: d.eligibilityVerifier, destinations: evDestinations });
+        callerConfigs[0] = VerifiedCallerConfig({ caller: d.dataPlanePlaceholder, destinations: dataDestinations });
         d.automator = address(new Automator(dao, d.constitutionalTimelock, callerConfigs));
 
         TransferLocker(d.transferLocker).setAutomator(d.automator);
@@ -129,7 +130,6 @@ abstract contract DeployCore is ProxyUtils {
 
         _transferProxyAdmin(d.tournamentRegistry, d.constitutionalTimelock);
         _transferProxyAdmin(d.playerSetRegistry, d.constitutionalTimelock);
-        // EV proxy admin stays with deployer until DeployData upgrades then transfers.
 
         _logCore(d);
     }
@@ -141,7 +141,7 @@ abstract contract DeployCore is ProxyUtils {
         console.log("MaintenanceTimelock", d.maintenanceTimelock);
         console.log("TransferLocker", d.transferLocker);
         console.log("DopplerLocker", d.dopplerLocker);
-        console.log("EligibilityVerifier (proxy)", d.eligibilityVerifier);
+        console.log("DataPlanePlaceholder (proxy)", d.dataPlanePlaceholder);
         console.log("Automator", d.automator);
         console.log("DeployTournament", d.deployTournament);
         console.log("TournamentRegistry (proxy)", d.tournamentRegistry);

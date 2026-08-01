@@ -15,7 +15,9 @@ enum CvmJob {
     /// @dev Matchweek player performance metrics (PPM) ingest helper.
     MatchweekPpm,
     /// @dev League/season squad sync for `EligibilityStore` (chunked club returns).
-    SquadSync
+    SquadSync,
+    /// @dev Sepolia smoke: CVM fetches a URL (or stub) and returns a string body.
+    TestFetch
 }
 
 /// @notice Onchain commitment stored while a request is in flight.

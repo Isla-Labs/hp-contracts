@@ -77,6 +77,30 @@ oracle-sepolia-add-compose:
 		cast send "$$COORD" "addComposeHash(bytes32)" "$(COMPOSE_HASH)" \
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
 
+# Drop a compose hash from DstackApp + attestation policy (instant isOracle revoke).
+oracle-sepolia-remove-compose:
+	@test -n "$(COMPOSE_HASH)" || (echo "COMPOSE_HASH=0x… required" && exit 1)
+	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1)
+	@COORD=$$(sed -n 's/.*"cvmCoordinator": "\([^"]*\)".*/\1/p' deployments/base-sepolia-oracle.json | head -1); \
+		test -n "$$COORD" || (echo "could not parse cvmCoordinator" && exit 1); \
+		echo "removeComposeHash $$COORD $(COMPOSE_HASH)"; \
+		cast send "$$COORD" "removeComposeHash(bytes32)" "$(COMPOSE_HASH)" \
+			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
+
+# Deploy TestData consumer against the live Sepolia CvmRouter.
+# → deployments/base-sepolia-test-data.json
+# Smoke (after CVM image understands CvmJob.TestFetch):
+#   cast send $(jq -r .testData deployments/base-sepolia-test-data.json) \
+#     "request(string)" "hello" --private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
+deploy-base-sepolia-test-data:
+	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy oracle first" && exit 1)
+	@ROUTER=$${CVM_ROUTER:-$$(sed -n 's/.*"cvmRouter": "\([^"]*\)".*/\1/p' deployments/base-sepolia-oracle.json | head -1)}; \
+		test -n "$$ROUTER" || (echo "could not parse cvmRouter" && exit 1); \
+		echo "Deploying TestData → router $$ROUTER"; \
+		CVM_ROUTER=$$ROUTER forge script script/oracle/DeployTestData.s.sol:DeployTestData \
+			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+			--broadcast --slow
+
 # ---------------------------------------------------------------------------
 # Build & test
 # ---------------------------------------------------------------------------
@@ -102,5 +126,5 @@ fmt-check:
 .PHONY: generate-history \
 	deploy-base-core deploy-base-factories deploy-base-data \
 	deploy-base-sepolia-core deploy-base-sepolia-factories deploy-base-sepolia-data \
-	deploy-base-sepolia-oracle oracle-sepolia-add-compose \
+	deploy-base-sepolia-oracle oracle-sepolia-add-compose oracle-sepolia-remove-compose deploy-base-sepolia-test-data \
 	install build test coverage fmt fmt-check

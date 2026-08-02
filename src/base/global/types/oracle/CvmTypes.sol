@@ -5,19 +5,30 @@ pragma solidity ^0.8.34;
  * @title CvmTypes
  * @notice Types for the Phala CVM oracle bus (Functions-style request → fulfill).
  * @dev Jobs are fixed allowlisted scripts inside the attested compose — not arbitrary source.
+ *      `CvmJob` is append-only: never reorder or remove variants after a live deploy.
  */
 
 /// @notice Which preconfigured CVM script to run for a request.
 enum CvmJob {
     None,
+    /// @dev Sepolia smoke: CVM fetches a URL (or stub) and returns a string body.
+    TestFetch,
     /// @dev Player name / metadata fetch (eligibility / listing surfaces).
     PlayerMetadata,
-    /// @dev Matchweek player performance metrics (PPM) ingest helper.
-    MatchweekPpm,
-    /// @dev League/season squad sync for `EligibilityStore` (chunked club returns).
+    /// @dev CREATE2 vanity salts (`0x22` / `0x42` PlayerToken+Vault, `0x99` PbrTreasury).
+    VanitySalts,
+    /// @dev Live league/season squad sync for `EligibilityStore`.
     SquadSync,
-    /// @dev Sepolia smoke: CVM fetches a URL (or stub) and returns a string body.
-    TestFetch
+    /// @dev Live matchweek / round fixture sync.
+    RoundSync,
+    /// @dev DMS → RawStatStack + Succinct prove (PPM settle path).
+    SettleDms,
+    /// @dev One-time / bootstrap squad sync (historical).
+    HistoricalSquadSync,
+    /// @dev One-time / bootstrap round sync (historical).
+    HistoricalRoundSync,
+    /// @dev One-time / bootstrap DMS ingest (batched per request).
+    HistoricalDms
 }
 
 /// @notice Onchain commitment stored while a request is in flight.
@@ -38,7 +49,7 @@ struct CvmCommitment {
     uint64 exclusiveUntil;
 }
 
-/// @notice Router runtime configuration.
+/// @notice Router runtime configuration (global; exclusive windows are per-job).
 struct CvmRouterConfig {
     /// @notice Upper bound for `callbackGasLimit` on new requests.
     uint32 maxCallbackGasLimit;
@@ -46,9 +57,6 @@ struct CvmRouterConfig {
     uint32 requestTimeout;
     /// @notice Gas reserved to detect insufficient gas before the exact-gas callback (EIP-150).
     uint16 gasForCallExactCheck;
-    /// @notice Seconds after `sendRequest` during which only `assignee` may fulfill.
-    /// @dev Must be > 0 and ≤ `requestTimeout`. After this window, any `isOracle` may fulfill until `timeoutAt`.
-    uint32 assigneeExclusiveSeconds;
 }
 
 /// @notice Claim extracted from a TEE attestation used for permissionless oracle join.

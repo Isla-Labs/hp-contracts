@@ -66,23 +66,20 @@ deploy-base-sepolia-oracle:
 	@echo "Wrote deployments/base-sepolia-oracle.json"
 	@echo "Next: allowlist Phala compose_hash via make oracle-sepolia-add-compose COMPOSE_HASH=0x…"
 
-# Upgrade coordinator logic in place (stable proxy — no CVM sealed-env change).
-# Usage: make upgrade-base-sepolia-cvm-coordinator COORDINATOR_PROXY=0x…
+# Upgrade coordinator logic in place (stable proxy from deployments/base-sepolia-oracle.json).
+# Writes cvmCoordinatorImpl back to that file.
 upgrade-base-sepolia-cvm-coordinator:
-	@test -n "$(COORDINATOR_PROXY)" || (echo "COORDINATOR_PROXY=0x… required" && exit 1)
-	@COORDINATOR_PROXY=$(COORDINATOR_PROXY) forge script script/oracle/UpgradeCvmCoordinator.s.sol:UpgradeCvmCoordinator \
+	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json" && exit 1)
+	@forge script script/oracle/UpgradeCvmCoordinator.s.sol:UpgradeCvmCoordinator \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
 
-# Upgrade router logic in place, or deploy a new router proxy if ROUTER_PROXY is unset.
-# Usage (upgrade): make upgrade-base-sepolia-cvm-router CVM_COORDINATOR=0x… ROUTER_PROXY=0x…
-# Usage (new):     make upgrade-base-sepolia-cvm-router CVM_COORDINATOR=0x…
+# Upgrade router logic in place (stable proxy from deployments/base-sepolia-oracle.json).
+# Seeds default per-job exclusives, writes cvmRouterImpl back to that file.
 upgrade-base-sepolia-cvm-router:
-	@test -n "$(CVM_COORDINATOR)" || (echo "CVM_COORDINATOR=0x… required" && exit 1)
-	@CVM_COORDINATOR=$(CVM_COORDINATOR) \
-		$(if $(ROUTER_PROXY),ROUTER_PROXY=$(ROUTER_PROXY)) \
-		forge script script/oracle/DeployCvmRouter.s.sol:DeployCvmRouter \
+	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json" && exit 1)
+	@forge script script/oracle/UpgradeCvmRouter.s.sol:UpgradeCvmRouter \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow

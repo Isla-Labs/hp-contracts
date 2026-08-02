@@ -17,7 +17,7 @@ import { CvmCommitment, CvmJob, CvmRouterConfig } from "@types/oracle/CvmTypes.s
  * @title CvmRouter
  * @notice Request bus for Phala CVM oracles (soft assignee + single fulfill).
  * @dev Intended behind `TransparentUpgradeableProxy` so sealed CVM env can keep a stable
- *      `CVM_ROUTER` across logic upgrades.
+ *      `CVM_ROUTER` across logic upgrades. Assignee exclusive windows are per-`CvmJob`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -29,6 +29,11 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
 
     uint16 public constant MAX_CALLBACK_RETURN_BYTES = 4 + 4 * 32;
 
+    /// @dev Default exclusive windows (HTTP-ish jobs ~60s; DMS batches 3m; SettleDms + zk 15m).
+    uint32 private constant _EXCLUSIVE_FAST = 60;
+    uint32 private constant _EXCLUSIVE_HISTORICAL_DMS = 3 minutes;
+    uint32 private constant _EXCLUSIVE_SETTLE_DMS = 15 minutes;
+
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -39,6 +44,7 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
     uint256 private _requestCount;
 
     mapping(bytes32 requestId => CvmCommitment) private _commitments;
+    mapping(CvmJob job => uint32 exclusiveSeconds) private _jobExclusiveSeconds;
 
     // --------------------------------------------
     //  Initialization
@@ -70,6 +76,7 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
 
         _coordinator = ICvmCoordinator(coordinator_);
         _setConfig(config_);
+        _setDefaultJobExclusives();
     }
 
     // --------------------------------------------
@@ -84,6 +91,11 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
     /// @inheritdoc ICvmRouter
     function getConfig() external view returns (CvmRouterConfig memory) {
         return _config;
+    }
+
+    /// @inheritdoc ICvmRouter
+    function jobExclusiveSeconds(CvmJob job) external view returns (uint32) {
+        return _jobExclusiveSeconds[job];
     }
 
     /// @inheritdoc ICvmRouter
@@ -113,6 +125,11 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
             revert Errors.CallbackGasLimitTooHigh(callbackGasLimit, config.maxCallbackGasLimit);
         }
 
+        uint32 exclusiveSeconds = _jobExclusiveSeconds[job];
+        if (exclusiveSeconds == 0 || exclusiveSeconds > config.requestTimeout) {
+            revert Errors.InvalidConfig();
+        }
+
         uint256 nonce;
         unchecked {
             nonce = ++_requestCount;
@@ -127,7 +144,7 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
         if (assignee == address(0)) revert Errors.NoLiveOracle();
 
         uint64 timeoutAt = uint64(block.timestamp) + config.requestTimeout;
-        uint64 exclusiveUntil = uint64(block.timestamp) + config.assigneeExclusiveSeconds;
+        uint64 exclusiveUntil = uint64(block.timestamp) + exclusiveSeconds;
         if (exclusiveUntil > timeoutAt) exclusiveUntil = timeoutAt;
 
         _commitments[requestId] = CvmCommitment({
@@ -203,6 +220,17 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
         _setConfig(config_);
     }
 
+    /// @notice Tune soft-assignee exclusive window for a job (must be > 0 and ≤ `requestTimeout`).
+    function setJobExclusiveSeconds(CvmJob job, uint32 exclusiveSeconds) external onlyRole(Roles.CATEGORY_ONE) {
+        if (job == CvmJob.None) revert Errors.InvalidJob(job);
+        _setJobExclusive(job, exclusiveSeconds);
+    }
+
+    /// @notice Seed / refresh default per-job exclusives (for upgrades that add the mapping).
+    function seedDefaultJobExclusives() external onlyRole(Roles.CATEGORY_ONE) {
+        _setDefaultJobExclusives();
+    }
+
     /// @notice Point at a new coordinator proxy (rare; same-chain registry swap).
     function setCoordinator(address coordinator_) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (coordinator_ == address(0)) revert Errors.ZeroAddress();
@@ -222,14 +250,31 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
     // --------------------------------------------
 
     function _setConfig(CvmRouterConfig memory config_) internal {
-        if (
-            config_.maxCallbackGasLimit == 0 || config_.requestTimeout == 0 || config_.gasForCallExactCheck == 0
-                || config_.assigneeExclusiveSeconds == 0 || config_.assigneeExclusiveSeconds > config_.requestTimeout
-        ) {
+        if (config_.maxCallbackGasLimit == 0 || config_.requestTimeout == 0 || config_.gasForCallExactCheck == 0) {
             revert Errors.InvalidConfig();
         }
         _config = config_;
         emit Events.ConfigUpdated(config_);
+    }
+
+    function _setDefaultJobExclusives() internal {
+        _setJobExclusive(CvmJob.TestFetch, _EXCLUSIVE_FAST);
+        _setJobExclusive(CvmJob.PlayerMetadata, _EXCLUSIVE_FAST);
+        _setJobExclusive(CvmJob.VanitySalts, _EXCLUSIVE_FAST);
+        _setJobExclusive(CvmJob.SquadSync, _EXCLUSIVE_FAST);
+        _setJobExclusive(CvmJob.RoundSync, _EXCLUSIVE_FAST);
+        _setJobExclusive(CvmJob.SettleDms, _EXCLUSIVE_SETTLE_DMS);
+        _setJobExclusive(CvmJob.HistoricalSquadSync, _EXCLUSIVE_FAST);
+        _setJobExclusive(CvmJob.HistoricalRoundSync, _EXCLUSIVE_FAST);
+        _setJobExclusive(CvmJob.HistoricalDms, _EXCLUSIVE_HISTORICAL_DMS);
+    }
+
+    function _setJobExclusive(CvmJob job, uint32 exclusiveSeconds) internal {
+        if (exclusiveSeconds == 0 || exclusiveSeconds > _config.requestTimeout) {
+            revert Errors.InvalidConfig();
+        }
+        _jobExclusiveSeconds[job] = exclusiveSeconds;
+        emit Events.JobExclusiveSecondsSet(job, exclusiveSeconds);
     }
 
     function _pickAssignee(bytes32 salt) internal view returns (address) {

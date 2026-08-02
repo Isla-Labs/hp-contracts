@@ -34,6 +34,8 @@ library CvmEvents {
 
     event ConfigUpdated(CvmRouterConfig config);
 
+    event JobExclusiveSecondsSet(CvmJob indexed job, uint32 exclusiveSeconds);
+
     // --------------------------------------------
     //  Coordinator
     // --------------------------------------------

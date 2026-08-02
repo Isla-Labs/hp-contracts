@@ -67,8 +67,7 @@ contract DeployOracle is Script, ProxyUtils {
         CvmRouterConfig memory routerConfig = CvmRouterConfig({
             maxCallbackGasLimit: 500_000,
             requestTimeout: uint32(1 days),
-            gasForCallExactCheck: 5000,
-            assigneeExclusiveSeconds: 5 minutes
+            gasForCallExactCheck: 5000
         });
 
         address routerProxy = _deployInitGuardProxy(guard, dao);

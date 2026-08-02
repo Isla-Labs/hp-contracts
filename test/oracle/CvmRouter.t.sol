@@ -21,6 +21,10 @@ contract MockCvmConsumer is CvmClient {
         return _sendRequest(CvmJob.TestFetch, args, 300_000);
     }
 
+    function requestJob(CvmJob job, bytes calldata args) external returns (bytes32) {
+        return _sendRequest(job, args, 300_000);
+    }
+
     function _fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
         lastRequestId = requestId;
         lastResponse = response;
@@ -41,7 +45,8 @@ contract CvmRouterTest is Test {
     CvmRouter internal router;
     MockCvmConsumer internal consumer;
 
-    uint32 internal constant EXCLUSIVE = 5 minutes;
+    uint32 internal constant EXCLUSIVE_FAST = 60;
+    uint32 internal constant EXCLUSIVE_SETTLE = 15 minutes;
     uint32 internal constant TIMEOUT = 1 hours;
 
     function setUp() public {
@@ -56,12 +61,8 @@ contract CvmRouterTest is Test {
             )
         );
 
-        CvmRouterConfig memory cfg = CvmRouterConfig({
-            maxCallbackGasLimit: 500_000,
-            requestTimeout: TIMEOUT,
-            gasForCallExactCheck: 5000,
-            assigneeExclusiveSeconds: EXCLUSIVE
-        });
+        CvmRouterConfig memory cfg =
+            CvmRouterConfig({ maxCallbackGasLimit: 500_000, requestTimeout: TIMEOUT, gasForCallExactCheck: 5000 });
         CvmRouter routerImpl = new CvmRouter();
         router = CvmRouter(
             address(
@@ -84,8 +85,24 @@ contract CvmRouterTest is Test {
         bytes32 id = consumer.request("hello");
         CvmCommitment memory c = router.getCommitment(id);
         assertTrue(c.assignee == oracleA || c.assignee == oracleB);
-        assertEq(c.exclusiveUntil, uint64(block.timestamp) + EXCLUSIVE);
+        assertEq(c.exclusiveUntil, uint64(block.timestamp) + EXCLUSIVE_FAST);
         assertEq(c.timeoutAt, uint64(block.timestamp) + TIMEOUT);
+        assertEq(router.jobExclusiveSeconds(CvmJob.TestFetch), EXCLUSIVE_FAST);
+    }
+
+    function test_sendRequest_settleDmsUsesLongerExclusive() public {
+        bytes32 id = consumer.requestJob(CvmJob.SettleDms, "settle");
+        CvmCommitment memory c = router.getCommitment(id);
+        assertEq(c.exclusiveUntil, uint64(block.timestamp) + EXCLUSIVE_SETTLE);
+        assertEq(router.jobExclusiveSeconds(CvmJob.SettleDms), EXCLUSIVE_SETTLE);
+    }
+
+    function test_setJobExclusiveSeconds() public {
+        vm.prank(constitutional);
+        router.setJobExclusiveSeconds(CvmJob.TestFetch, 90);
+
+        bytes32 id = consumer.request("hello");
+        assertEq(router.getCommitment(id).exclusiveUntil, uint64(block.timestamp) + 90);
     }
 
     function test_fulfill_onlyAssigneeDuringExclusiveWindow() public {
@@ -108,7 +125,7 @@ contract CvmRouterTest is Test {
         address assignee = router.getCommitment(id).assignee;
         address other = assignee == oracleA ? oracleB : oracleA;
 
-        vm.warp(block.timestamp + EXCLUSIVE + 1);
+        vm.warp(block.timestamp + EXCLUSIVE_FAST + 1);
 
         vm.prank(other);
         router.fulfill(id, abi.encode("failover"), "");

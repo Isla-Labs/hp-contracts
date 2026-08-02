@@ -30,7 +30,7 @@ DAO only sets **attestation policy** (`composeHash` allowlist on the Base coordi
 | Piece | Notes |
 |---|---|
 | `CvmCoordinator` | Registry only (no DstackApp ownership) |
-| `CvmRouter` | Soft assignee + request bus |
+| `CvmRouter` | Soft assignee (per-`CvmJob` exclusive) + request bus |
 | Both | Behind `TransparentUpgradeableProxy`; ProxyAdmin owned by DAO/deployer |
 
 ### Permissionless
@@ -68,4 +68,5 @@ setRegistrationTtl(ttl)
 Logic changes → deploy new implementation → `ProxyAdmin.upgradeAndCall` on the **same proxy address**.  
 CVM sealed env (`CVM_COORDINATOR` / `CVM_ROUTER`) stays unchanged.
 
-Scripts: `DeployOracle.s.sol`, `UpgradeCvmCoordinator.s.sol`, `DeployCvmRouter.s.sol` (`ROUTER_PROXY=` for upgrade).
+Scripts: `DeployOracle.s.sol`, `UpgradeCvmCoordinator.s.sol`, `UpgradeCvmRouter.s.sol`
+(Makefile targets read/write `deployments/base-sepolia-oracle.json`).

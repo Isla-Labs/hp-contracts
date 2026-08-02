@@ -12,7 +12,7 @@ create2_deployer = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
 fs_permissions = [
   { access = "read", path = "./lib" },
   { access = "read", path = "./script" },
-  { access = "write", path = "./deployments" },
+  { access = "read-write", path = "./deployments" },
 ]
 
 [fuzz]

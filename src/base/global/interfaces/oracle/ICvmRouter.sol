@@ -12,6 +12,9 @@ interface ICvmRouter {
 
     function getConfig() external view returns (CvmRouterConfig memory);
 
+    /// @notice Soft-assignee exclusive window for `job` (seconds from `sendRequest`).
+    function jobExclusiveSeconds(CvmJob job) external view returns (uint32);
+
     function getCommitment(bytes32 requestId) external view returns (CvmCommitment memory);
 
     function isPending(bytes32 requestId) external view returns (bool);

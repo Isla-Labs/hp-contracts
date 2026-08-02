@@ -2,14 +2,13 @@
 pragma solidity ^0.8.34;
 
 import { Test } from "forge-std/Test.sol";
+import { TransparentUpgradeableProxy } from "@openzeppelin/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 import { CvmCoordinator } from "@src/oracle/CvmCoordinator.sol";
 import { MockAttestationVerifier } from "@src/oracle/attestation/MockAttestationVerifier.sol";
 import { AttestationLib } from "@src/oracle/attestation/AttestationLib.sol";
 import { AttestationClaim, OracleRegistration } from "@types/oracle/CvmTypes.sol";
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { CvmErrors as Errors } from "@errors/oracle/CvmErrors.sol";
-import { MockDstackApp } from "./mocks/MockDstackApp.sol";
 
 contract CvmCoordinatorTest is Test {
     address internal dao = makeAddr("dao");
@@ -24,22 +23,23 @@ contract CvmCoordinatorTest is Test {
     uint64 internal constant TTL = 1 days;
     uint64 internal constant MAX_QUOTE_AGE = 1 hours;
 
-    MockDstackApp internal dstack;
     MockAttestationVerifier internal verifier;
     CvmCoordinator internal coordinator;
 
     function setUp() public {
-        dstack = new MockDstackApp(address(this));
         verifier = new MockAttestationVerifier(MAX_QUOTE_AGE);
-        coordinator = new CvmCoordinator(dao, constitutional, address(0), address(verifier), TTL);
-
-        dstack.transferOwnership(address(coordinator));
-
-        vm.prank(dao);
-        coordinator.setDstackApp(address(dstack));
+        coordinator = _deployCoordinator(address(verifier), TTL);
 
         vm.prank(dao);
         coordinator.addComposeHash(COMPOSE_V1);
+    }
+
+    function _deployCoordinator(address verifier_, uint64 ttl) internal returns (CvmCoordinator) {
+        CvmCoordinator impl = new CvmCoordinator();
+        TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
+            address(impl), dao, abi.encodeCall(CvmCoordinator.initialize, (dao, constitutional, verifier_, ttl))
+        );
+        return CvmCoordinator(address(proxy));
     }
 
     function _claim(
@@ -106,7 +106,6 @@ contract CvmCoordinatorTest is Test {
         coordinator.registerOracle(abi.encode(c1));
         uint64 firstExpiry = coordinator.getRegistration(transmitter).expiresAt;
 
-        // Stay within maxQuoteAge while advancing toward TTL refresh.
         vm.warp(block.timestamp + MAX_QUOTE_AGE / 2);
         AttestationClaim memory c2 = _claim(transmitter, DEVICE, COMPOSE_V1, keccak256("n6"));
         c2.quotedAt = uint64(block.timestamp);
@@ -144,14 +143,6 @@ contract CvmCoordinatorTest is Test {
         assertEq(coordinator.getRegistration(transmitter).composeHash, bytes32(0));
     }
 
-    function test_breakglass_addCvm_writesDevice() public {
-        vm.prank(constitutional);
-        coordinator.addCvm(DEVICE, transmitter);
-
-        assertTrue(dstack.allowedDeviceIds(DEVICE));
-        assertTrue(coordinator.isOracle(transmitter));
-    }
-
     function test_onlyDao_setRegistrationTtl() public {
         vm.prank(dao);
         coordinator.setRegistrationTtl(2 days);
@@ -160,5 +151,15 @@ contract CvmCoordinatorTest is Test {
         vm.prank(transmitter);
         vm.expectRevert();
         coordinator.setRegistrationTtl(3 days);
+    }
+
+    function test_addComposeHash_isLocalPolicyOnly() public {
+        vm.prank(dao);
+        coordinator.addComposeHash(COMPOSE_V2);
+        assertTrue(coordinator.isComposeAllowed(COMPOSE_V2));
+
+        vm.prank(dao);
+        coordinator.removeComposeHash(COMPOSE_V2);
+        assertFalse(coordinator.isComposeAllowed(COMPOSE_V2));
     }
 }

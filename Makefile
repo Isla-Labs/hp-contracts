@@ -55,9 +55,9 @@ deploy-base-sepolia-data:
 		--broadcast --slow
 	$(MAKE) generate-history
 
-# CVM oracle bus (MockDstackApp + MockAttestationVerifier by default).
-# Optional: COMPOSE_HASH=0x… (bytes32) to allowlist at deploy — or run
-# oracle-sepolia-add-compose after Phala prints the real compose_hash.
+# CVM oracle bus (upgradeable TUP proxies; MockAttestationVerifier by default).
+# ProxyAdmin owner = DAO_ADDRESS (defaults to deployer). Optional: COMPOSE_HASH=0x…
+# at deploy, or run oracle-sepolia-add-compose after Phala prints the real hash.
 deploy-base-sepolia-oracle:
 	@forge script script/oracle/DeployOracle.s.sol:DeployOracle \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
@@ -65,6 +65,27 @@ deploy-base-sepolia-oracle:
 		--broadcast --slow
 	@echo "Wrote deployments/base-sepolia-oracle.json"
 	@echo "Next: allowlist Phala compose_hash via make oracle-sepolia-add-compose COMPOSE_HASH=0x…"
+
+# Upgrade coordinator logic in place (stable proxy — no CVM sealed-env change).
+# Usage: make upgrade-base-sepolia-cvm-coordinator COORDINATOR_PROXY=0x…
+upgrade-base-sepolia-cvm-coordinator:
+	@test -n "$(COORDINATOR_PROXY)" || (echo "COORDINATOR_PROXY=0x… required" && exit 1)
+	@COORDINATOR_PROXY=$(COORDINATOR_PROXY) forge script script/oracle/UpgradeCvmCoordinator.s.sol:UpgradeCvmCoordinator \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+
+# Upgrade router logic in place, or deploy a new router proxy if ROUTER_PROXY is unset.
+# Usage (upgrade): make upgrade-base-sepolia-cvm-router CVM_COORDINATOR=0x… ROUTER_PROXY=0x…
+# Usage (new):     make upgrade-base-sepolia-cvm-router CVM_COORDINATOR=0x…
+upgrade-base-sepolia-cvm-router:
+	@test -n "$(CVM_COORDINATOR)" || (echo "CVM_COORDINATOR=0x… required" && exit 1)
+	@CVM_COORDINATOR=$(CVM_COORDINATOR) \
+		$(if $(ROUTER_PROXY),ROUTER_PROXY=$(ROUTER_PROXY)) \
+		forge script script/oracle/DeployCvmRouter.s.sol:DeployCvmRouter \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
 
 # Sync Phala CVM compose_hash onto the Sepolia coordinator attestation policy.
 # Requires: COMPOSE_HASH=0x…64 hex chars, and deployments/base-sepolia-oracle.json
@@ -77,7 +98,18 @@ oracle-sepolia-add-compose:
 		cast send "$$COORD" "addComposeHash(bytes32)" "$(COMPOSE_HASH)" \
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
 
-# Drop a compose hash from DstackApp + attestation policy (instant isOracle revoke).
+# Tighten / loosen registration TTL (default deploy was 7d; prefer 1d with 4h re-attest).
+# Usage: make oracle-sepolia-set-ttl TTL=86400
+oracle-sepolia-set-ttl:
+	@test -n "$(TTL)" || (echo "TTL=<seconds> required (e.g. 86400)" && exit 1)
+	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1)
+	@COORD=$$(sed -n 's/.*"cvmCoordinator": "\([^"]*\)".*/\1/p' deployments/base-sepolia-oracle.json | head -1); \
+		test -n "$$COORD" || (echo "could not parse cvmCoordinator" && exit 1); \
+		echo "setRegistrationTtl $$COORD $(TTL)"; \
+		cast send "$$COORD" "setRegistrationTtl(uint64)" "$(TTL)" \
+			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
+
+# Drop a compose hash from local attestation policy (instant isOracle revoke).
 oracle-sepolia-remove-compose:
 	@test -n "$(COMPOSE_HASH)" || (echo "COMPOSE_HASH=0x… required" && exit 1)
 	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1)
@@ -126,5 +158,6 @@ fmt-check:
 .PHONY: generate-history \
 	deploy-base-core deploy-base-factories deploy-base-data \
 	deploy-base-sepolia-core deploy-base-sepolia-factories deploy-base-sepolia-data \
-	deploy-base-sepolia-oracle oracle-sepolia-add-compose oracle-sepolia-remove-compose deploy-base-sepolia-test-data \
+	deploy-base-sepolia-oracle upgrade-base-sepolia-cvm-coordinator upgrade-base-sepolia-cvm-router \
+	oracle-sepolia-add-compose oracle-sepolia-remove-compose oracle-sepolia-set-ttl deploy-base-sepolia-test-data \
 	install build test coverage fmt fmt-check

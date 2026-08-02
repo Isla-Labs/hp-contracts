@@ -32,6 +32,10 @@ struct CvmCommitment {
     uint32 callbackGasLimit;
     /// @notice Unix timestamp after which fulfill reverts and cancel is allowed.
     uint64 timeoutAt;
+    /// @notice Primary transmitter chosen at request time (live oracle, deterministic).
+    address assignee;
+    /// @notice Until this time only `assignee` may fulfill; afterward any live oracle (failover).
+    uint64 exclusiveUntil;
 }
 
 /// @notice Router runtime configuration.
@@ -42,6 +46,9 @@ struct CvmRouterConfig {
     uint32 requestTimeout;
     /// @notice Gas reserved to detect insufficient gas before the exact-gas callback (EIP-150).
     uint16 gasForCallExactCheck;
+    /// @notice Seconds after `sendRequest` during which only `assignee` may fulfill.
+    /// @dev Must be > 0 and ≤ `requestTimeout`. After this window, any `isOracle` may fulfill until `timeoutAt`.
+    uint32 assigneeExclusiveSeconds;
 }
 
 /// @notice Claim extracted from a TEE attestation used for permissionless oracle join.

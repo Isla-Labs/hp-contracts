@@ -3,8 +3,9 @@ pragma solidity ^0.8.34;
 
 /**
  * @title IDstackApp
- * @notice Minimal surface of Phala Onchain KMS `DstackApp` used by `CvmCoordinator`.
- * @dev See https://github.com/Phala-Network/dstack/blob/master/kms/auth-eth/contracts/DstackApp.sol
+ * @notice Minimal surface of Phala Onchain KMS `DstackApp` (Ethereum) for tooling/reference.
+ * @dev Not used by Base `CvmCoordinator` (attestation registry only). See
+ *      https://github.com/Phala-Network/dstack/blob/master/kms/auth-eth/contracts/DstackApp.sol
  */
 interface IDstackApp {
     function owner() external view returns (address);

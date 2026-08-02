@@ -15,7 +15,9 @@ library CvmEvents {
         CvmJob job,
         bytes args,
         uint32 callbackGasLimit,
-        uint64 timeoutAt
+        uint64 timeoutAt,
+        address assignee,
+        uint64 exclusiveUntil
     );
 
     event RequestProcessed(
@@ -36,8 +38,6 @@ library CvmEvents {
     //  Coordinator
     // --------------------------------------------
 
-    event DstackAppSet(address indexed dstackApp);
-
     event OracleRegistered(address indexed transmitter, bytes32 indexed deviceId);
 
     event OracleRegisteredWithAttestation(
@@ -46,15 +46,9 @@ library CvmEvents {
 
     event OracleRevoked(address indexed transmitter, bytes32 indexed deviceId);
 
-    event DeviceAdded(bytes32 indexed deviceId);
-
-    event DeviceRemoved(bytes32 indexed deviceId);
-
     event ComposeHashAdded(bytes32 indexed composeHash);
 
     event ComposeHashRemoved(bytes32 indexed composeHash);
-
-    event AllowAnyDeviceSet(bool allowAny);
 
     event AttestationVerifierSet(address indexed verifier);
 

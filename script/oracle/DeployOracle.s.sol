@@ -3,36 +3,34 @@ pragma solidity ^0.8.34;
 
 import { Script, console2 } from "forge-std/Script.sol";
 
+import { InitGuard } from "@base/abstract/InitGuard.sol";
 import { CvmCoordinator } from "@src/oracle/CvmCoordinator.sol";
 import { CvmRouter } from "@src/oracle/CvmRouter.sol";
 import { AutomataAttestationVerifier } from "@src/oracle/attestation/AutomataAttestationVerifier.sol";
 import { MockAttestationVerifier } from "@src/oracle/attestation/MockAttestationVerifier.sol";
 import { CvmRouterConfig } from "@types/oracle/CvmTypes.sol";
 import { HP85432 } from "@addresses/HP84532.sol";
-import { MockDstackApp } from "../../test/oracle/mocks/MockDstackApp.sol";
+
+import { ProxyUtils } from "../utils/ProxyUtils.sol";
 
 /**
  * @title DeployOracle
- * @notice Base Sepolia bootstrap for CVM oracle bus + registry.
- * @dev Hybrid phase: Phala may deploy a real DstackApp on Base mainnet for KMS boot;
- *      this script deploys a Sepolia MockDstackApp owned by CvmCoordinator for local
- *      compose policy only (not the Phala KMS contract).
+ * @notice Base Sepolia bootstrap: upgradeable CvmCoordinator + CvmRouter (Transparent proxies).
+ * @dev Hybrid: Phala DstackApp/KMS on Ethereum (out of band). This stack is attestation registry
+ *      + request bus only — stable proxy addresses so CVM sealed env need not change on upgrades.
+ *
+ *      ProxyAdmin owner = DAO/deployer initially.
  *
  *      Makefile: `make deploy-base-sepolia-oracle`
- *               `make oracle-sepolia-add-compose COMPOSE_HASH=0x…`
  *
  *      Env:
- *        PRIVATE_KEY            — deployer (defaults to DAO / CATEGORY_ONE)
- *        DAO_ADDRESS            — optional admin
- *        CONSTITUTIONAL_ADDRESS — optional cat-1
- *        USE_MOCK_VERIFIER      — default true (Sepolia staging)
- *        REGISTRATION_TTL       — default 7 days
- *        MAX_QUOTE_AGE          — default 1 hour
- *        COMPOSE_HASH           — optional bytes32 to allowlist immediately
- *
- *      Writes `deployments/base-sepolia-oracle.json`.
+ *        PRIVATE_KEY, DAO_ADDRESS, CONSTITUTIONAL_ADDRESS
+ *        USE_MOCK_VERIFIER (default true)
+ *        REGISTRATION_TTL (default 1 day)
+ *        MAX_QUOTE_AGE (default 1 hour)
+ *        COMPOSE_HASH (optional immediate allowlist)
  */
-contract DeployOracle is Script {
+contract DeployOracle is Script, ProxyUtils {
     function run() external {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(privateKey);
@@ -40,12 +38,12 @@ contract DeployOracle is Script {
         address constitutional = vm.envOr("CONSTITUTIONAL_ADDRESS", deployer);
 
         bool useMock = vm.envOr("USE_MOCK_VERIFIER", true);
-        uint64 ttl = uint64(vm.envOr("REGISTRATION_TTL", uint256(7 days)));
+        uint64 ttl = uint64(vm.envOr("REGISTRATION_TTL", uint256(1 days)));
         uint64 maxQuoteAge = uint64(vm.envOr("MAX_QUOTE_AGE", uint256(1 hours)));
 
         vm.startBroadcast(privateKey);
 
-        MockDstackApp dstack = new MockDstackApp(deployer);
+        InitGuard guard = new InitGuard();
 
         address verifier;
         if (useMock) {
@@ -54,53 +52,72 @@ contract DeployOracle is Script {
             verifier = address(new AutomataAttestationVerifier(HP85432.AUTOMATA_DCAP_ATTESTATION, maxQuoteAge));
         }
 
-        CvmCoordinator coordinator = new CvmCoordinator(dao, constitutional, address(0), verifier, ttl);
+        address coordinatorProxy = _deployInitGuardProxy(guard, dao);
+        address coordinatorImpl = address(new CvmCoordinator());
+        _upgradeAndCall(
+            coordinatorProxy,
+            coordinatorImpl,
+            abi.encodeCall(CvmCoordinator.initialize, (dao, constitutional, verifier, ttl))
+        );
 
-        dstack.transferOwnership(address(coordinator));
-
-        if (dao == deployer) {
-            coordinator.setDstackApp(address(dstack));
-            if (vm.envExists("COMPOSE_HASH")) {
-                coordinator.addComposeHash(vm.envBytes32("COMPOSE_HASH"));
-            }
-        } else {
-            console2.log("DAO != deployer: call setDstackApp (+ addComposeHash) from DAO");
+        if (dao == deployer && vm.envExists("COMPOSE_HASH")) {
+            CvmCoordinator(coordinatorProxy).addComposeHash(vm.envBytes32("COMPOSE_HASH"));
         }
 
         CvmRouterConfig memory routerConfig = CvmRouterConfig({
-            maxCallbackGasLimit: 500_000, requestTimeout: uint32(1 days), gasForCallExactCheck: 5000
+            maxCallbackGasLimit: 500_000,
+            requestTimeout: uint32(1 days),
+            gasForCallExactCheck: 5000,
+            assigneeExclusiveSeconds: 5 minutes
         });
-        CvmRouter router = new CvmRouter(dao, constitutional, address(coordinator), routerConfig);
+
+        address routerProxy = _deployInitGuardProxy(guard, dao);
+        address routerImpl = address(new CvmRouter());
+        _upgradeAndCall(
+            routerProxy,
+            routerImpl,
+            abi.encodeCall(CvmRouter.initialize, (dao, constitutional, coordinatorProxy, routerConfig))
+        );
 
         vm.stopBroadcast();
 
-        console2.log("MockDstackApp", address(dstack));
+        console2.log("InitGuard", address(guard));
         console2.log("AttestationVerifier", verifier);
-        console2.log("CvmCoordinator", address(coordinator));
-        console2.log("CvmRouter", address(router));
+        console2.log("CvmCoordinator proxy", coordinatorProxy);
+        console2.log("CvmCoordinator impl", coordinatorImpl);
+        console2.log("CvmRouter proxy", routerProxy);
+        console2.log("CvmRouter impl", routerImpl);
+        console2.log("ProxyAdmin owner", dao);
         console2.log("useMockVerifier", useMock);
 
         string memory json = string.concat(
             "{\n",
             '  "chainId": 84532,\n',
-            '  "dstackApp": "',
-            vm.toString(address(dstack)),
-            '",\n',
             '  "attestationVerifier": "',
             vm.toString(verifier),
             '",\n',
             '  "cvmCoordinator": "',
-            vm.toString(address(coordinator)),
+            vm.toString(coordinatorProxy),
+            '",\n',
+            '  "cvmCoordinatorImpl": "',
+            vm.toString(coordinatorImpl),
             '",\n',
             '  "cvmRouter": "',
-            vm.toString(address(router)),
+            vm.toString(routerProxy),
+            '",\n',
+            '  "cvmRouterImpl": "',
+            vm.toString(routerImpl),
             '",\n',
             '  "useMockVerifier": ',
             useMock ? "true" : "false",
             ",\n",
             '  "registrationTtl": ',
             vm.toString(uint256(ttl)),
-            "\n}\n"
+            ",\n",
+            '  "proxyAdminOwner": "',
+            vm.toString(dao),
+            '"\n',
+            "}\n"
         );
         vm.writeFile("deployments/base-sepolia-oracle.json", json);
     }

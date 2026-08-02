@@ -2,6 +2,7 @@
 pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { EnumerableSet } from "@openzeppelin/utils/structs/EnumerableSet.sol";
 
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
@@ -9,35 +10,28 @@ import { CvmErrors as Errors } from "@errors/oracle/CvmErrors.sol";
 import { CvmEvents as Events } from "@events/oracle/CvmEvents.sol";
 import { IAttestationVerifier } from "@interfaces/oracle/IAttestationVerifier.sol";
 import { ICvmCoordinator } from "@interfaces/oracle/ICvmCoordinator.sol";
-import { IDstackApp } from "@interfaces/oracle/IDstackApp.sol";
 import { AttestationClaim, OracleRegistration } from "@types/oracle/CvmTypes.sol";
 
 /**
  * @title CvmCoordinator
- * @notice DstackApp owner facade + oracle registry with attestation-gated joins (Option C).
- * @dev Trust split:
- *        - DstackApp / Onchain KMS → boot-time composeHash + deviceId (keys only if allowed)
- *        - Attestation register → transmitter EOA bound to a fresh TEE quote + policy compose
- *        - `isOracle` → fulfill gate (active, unexpired, compose still allowed)
+ * @notice Attestation-gated oracle registry for the Base CVM bus.
+ * @dev Hybrid layout: Phala Onchain KMS / `DstackApp` boot on Ethereum; this contract only
+ *      gates who may `registerOracle` / `fulfill` on Base via TEE attestation + compose policy.
  *
- *      Permissionless: `registerOracle(attestation)` via `IAttestationVerifier`.
- *      Break-glass: `registerOracleBreakglass` / `addCvm` (CATEGORY_ONE), policy-exempt.
- *
- *      Latest-compose enforcement: remove compose from attestation policy → all registrations
- *      on that hash fail `isOracle` immediately (even before TTL), without restarting Phala.
+ *      Intended behind `TransparentUpgradeableProxy` (stable address → no CVM sealed-env churn
+ *      on logic upgrades). ProxyAdmin owner = DAO / deployer initially.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  * @custom:see ./deviceRegistration.md
  */
-contract CvmCoordinator is AccessControl, ICvmCoordinator {
+contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
 
-    address private _dstackApp;
     IAttestationVerifier private _attestationVerifier;
     uint64 private _registrationTtl;
 
@@ -51,20 +45,23 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
     //  Initialization
     // --------------------------------------------
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     /**
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
-     * @param constitutional_ `ConstitutionalTimelock` — `CATEGORY_ONE` break-glass / devices.
-     * @param dstackApp_ Optional Phala `DstackApp` (or set later).
-     * @param attestationVerifier_ Optional `IAttestationVerifier` (required before permissionless join).
-     * @param registrationTtl_ Live registration lifetime in seconds (re-attest to refresh).
+     * @param dao_ Aragon DAO / deployer — `DEFAULT_ADMIN_ROLE` (compose policy, verifier, TTL).
+     * @param constitutional_ `ConstitutionalTimelock` / deployer — `CATEGORY_ONE` break-glass.
+     * @param attestationVerifier_ Optional; required before permissionless `registerOracle`.
+     * @param registrationTtl_ Live registration lifetime in seconds.
      */
-    constructor(
+    function initialize(
         address dao_,
         address constitutional_,
-        address dstackApp_,
         address attestationVerifier_,
         uint64 registrationTtl_
-    ) {
+    ) external initializer {
         if (dao_ == address(0) || constitutional_ == address(0)) {
             revert Errors.ZeroAddress();
         }
@@ -76,10 +73,6 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
         _registrationTtl = registrationTtl_;
         emit Events.RegistrationTtlSet(registrationTtl_);
 
-        if (dstackApp_ != address(0)) {
-            _dstackApp = dstackApp_;
-            emit Events.DstackAppSet(dstackApp_);
-        }
         if (attestationVerifier_ != address(0)) {
             _attestationVerifier = IAttestationVerifier(attestationVerifier_);
             emit Events.AttestationVerifierSet(attestationVerifier_);
@@ -89,11 +82,6 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
     // --------------------------------------------
     //  Views
     // --------------------------------------------
-
-    /// @inheritdoc ICvmCoordinator
-    function dstackApp() public view returns (address) {
-        return _dstackApp;
-    }
 
     /// @inheritdoc ICvmCoordinator
     function attestationVerifier() public view returns (address) {
@@ -140,6 +128,22 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
         return _oracles.values();
     }
 
+    /// @inheritdoc ICvmCoordinator
+    function pickAssignee(bytes32 salt) public view returns (address) {
+        uint256 n = _oracles.length();
+        if (n == 0) return address(0);
+
+        uint256 start = uint256(salt) % n;
+        for (uint256 i = 0; i < n;) {
+            address cand = _oracles.at((start + i) % n);
+            if (isOracle(cand)) return cand;
+            unchecked {
+                ++i;
+            }
+        }
+        return address(0);
+    }
+
     // --------------------------------------------
     //  Permissionless attestation join
     // --------------------------------------------
@@ -159,21 +163,8 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
     }
 
     // --------------------------------------------
-    //  Break-glass / device ops (CATEGORY_ONE)
+    //  Break-glass (CATEGORY_ONE)
     // --------------------------------------------
-
-    /// @inheritdoc ICvmCoordinator
-    function addCvm(bytes32 deviceId, address transmitter) external onlyRole(Roles.CATEGORY_ONE) {
-        _addDevice(deviceId);
-        _upsertRegistration(deviceId, transmitter, bytes32(0), type(uint64).max);
-        emit Events.OracleRegistered(transmitter, deviceId);
-    }
-
-    /// @inheritdoc ICvmCoordinator
-    function removeCvm(bytes32 deviceId, address transmitter) external onlyRole(Roles.CATEGORY_ONE) {
-        _revokeOracle(transmitter);
-        _removeDevice(deviceId);
-    }
 
     /// @inheritdoc ICvmCoordinator
     function registerOracleBreakglass(bytes32 deviceId, address transmitter) external onlyRole(Roles.CATEGORY_ONE) {
@@ -186,16 +177,6 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
         _revokeOracle(transmitter);
     }
 
-    /// @inheritdoc ICvmCoordinator
-    function addDevice(bytes32 deviceId) external onlyRole(Roles.CATEGORY_ONE) {
-        _addDevice(deviceId);
-    }
-
-    /// @inheritdoc ICvmCoordinator
-    function removeDevice(bytes32 deviceId) external onlyRole(Roles.CATEGORY_ONE) {
-        _removeDevice(deviceId);
-    }
-
     // --------------------------------------------
     //  Compose / policy governance (DAO)
     // --------------------------------------------
@@ -203,7 +184,6 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
     /// @inheritdoc ICvmCoordinator
     function addComposeHash(bytes32 composeHash) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (composeHash == bytes32(0)) revert Errors.ZeroComposeHash();
-        _app().addComposeHash(composeHash);
         _composeAllowed[composeHash] = true;
         emit Events.ComposeHashAdded(composeHash);
         emit Events.AttestationComposeAllowed(composeHash, true);
@@ -212,7 +192,6 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
     /// @inheritdoc ICvmCoordinator
     function removeComposeHash(bytes32 composeHash) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (composeHash == bytes32(0)) revert Errors.ZeroComposeHash();
-        _app().removeComposeHash(composeHash);
         _composeAllowed[composeHash] = false;
         emit Events.ComposeHashRemoved(composeHash);
         emit Events.AttestationComposeAllowed(composeHash, false);
@@ -223,18 +202,6 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
         if (composeHash == bytes32(0)) revert Errors.ZeroComposeHash();
         _composeAllowed[composeHash] = allowed;
         emit Events.AttestationComposeAllowed(composeHash, allowed);
-    }
-
-    /// @inheritdoc ICvmCoordinator
-    function setAllowAnyDevice(bool allowAny) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        _app().setAllowAnyDevice(allowAny);
-        emit Events.AllowAnyDeviceSet(allowAny);
-    }
-
-    /// @inheritdoc ICvmCoordinator
-    function transferDstackAppOwnership(address newOwner) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newOwner == address(0)) revert Errors.ZeroAddress();
-        _app().transferOwnership(newOwner);
     }
 
     /// @inheritdoc ICvmCoordinator
@@ -251,39 +218,9 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
         emit Events.RegistrationTtlSet(ttl);
     }
 
-    /// @notice Bind the Phala `DstackApp` this coordinator owns. One-shot.
-    function setDstackApp(address dstackApp_) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (dstackApp_ == address(0)) revert Errors.ZeroAddress();
-        if (_dstackApp != address(0)) revert Errors.DstackAppAlreadySet();
-        _dstackApp = dstackApp_;
-        emit Events.DstackAppSet(dstackApp_);
-    }
-
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
-
-    function _app() internal view returns (IDstackApp app) {
-        address appAddr = _dstackApp;
-        if (appAddr == address(0)) revert Errors.DstackAppNotSet();
-        app = IDstackApp(appAddr);
-    }
-
-    function _addDevice(bytes32 deviceId) internal {
-        if (deviceId == bytes32(0)) revert Errors.ZeroDeviceId();
-        _app().addDevice(deviceId);
-        emit Events.DeviceAdded(deviceId);
-    }
-
-    function _removeDevice(bytes32 deviceId) internal {
-        if (deviceId == bytes32(0)) revert Errors.ZeroDeviceId();
-        address transmitter = _transmitterOf[deviceId];
-        if (transmitter != address(0)) {
-            _revokeOracle(transmitter);
-        }
-        _app().removeDevice(deviceId);
-        emit Events.DeviceRemoved(deviceId);
-    }
 
     function _upsertRegistration(
         bytes32 deviceId,
@@ -299,7 +236,6 @@ contract CvmCoordinator is AccessControl, ICvmCoordinator {
             _revokeOracle(existingOnDevice);
         }
 
-        // If transmitter was bound to another device, clear that reverse index.
         bytes32 prevDevice = _deviceOf[transmitter];
         if (prevDevice != bytes32(0) && prevDevice != deviceId && _transmitterOf[prevDevice] == transmitter) {
             delete _transmitterOf[prevDevice];

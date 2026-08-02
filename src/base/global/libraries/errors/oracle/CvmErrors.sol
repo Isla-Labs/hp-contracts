@@ -10,6 +10,8 @@ library CvmErrors {
     error InvalidJob(CvmJob job);
     error InvalidConfig();
     error OnlyOracle(address caller);
+    error OnlyAssignee(address assignee, address caller);
+    error NoLiveOracle();
     error OnlyRouter(address caller);
     error OnlyRequester(address caller);
     error UnknownRequest(bytes32 requestId);
@@ -19,8 +21,6 @@ library CvmErrors {
     error CallbackGasLimitTooHigh(uint32 limit, uint32 max);
     error AlreadyOracle(address transmitter);
     error NotOracle(address transmitter);
-    error DstackAppNotSet();
-    error DstackAppAlreadySet();
     error AttestationVerifierNotSet();
     error ComposeNotAllowed(bytes32 composeHash);
     error RegistrationExpired(address transmitter);

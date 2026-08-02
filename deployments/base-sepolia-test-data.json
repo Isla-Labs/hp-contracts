@@ -1,7 +1,7 @@
 {
   "chainId": 84532,
-  "testData": "0x981B2BC3c744fB63D87705A9E907c2d68332e646",
-  "cvmRouter": "0xfa3693100Ee1A6AF742C246596EaFA81F2DB7afE",
+  "testData": "0x7c20F9Af20Ccc9266165cC1093118A1d7ae33cf6",
+  "cvmRouter": "0xA6392AE508A940D92cf4458dd66D098aC7717883",
   "job": "TestFetch",
   "fulfillGasLimit": 300000
 }

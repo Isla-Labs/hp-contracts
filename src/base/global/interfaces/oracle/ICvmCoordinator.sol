@@ -5,13 +5,12 @@ import { OracleRegistration } from "@types/oracle/CvmTypes.sol";
 
 /**
  * @title ICvmCoordinator
- * @notice DstackApp owner facade + oracle transmitter registry for the CVM bus.
- * @dev Fulfill gating (`isOracle`) requires an active registration whose `composeHash` is still
+ * @notice Attestation-gated oracle transmitter registry for the CVM bus (Base).
+ * @dev Phala `DstackApp` / Onchain KMS live on Ethereum and are out of scope here.
+ *      Fulfill gating (`isOracle`) requires an active registration whose `composeHash` is still
  *      in attestation policy (or break-glass with `composeHash == 0`) and not past `expiresAt`.
  */
 interface ICvmCoordinator {
-    function dstackApp() external view returns (address);
-
     function attestationVerifier() external view returns (address);
 
     function registrationTtl() external view returns (uint64);
@@ -28,45 +27,36 @@ interface ICvmCoordinator {
 
     function oracles() external view returns (address[] memory);
 
+    /// @notice Deterministic live-oracle pick for request assignment (`salt` usually = requestId).
+    function pickAssignee(bytes32 salt) external view returns (address);
+
     // --------------------------------------------
-    //  Permissionless (Option C)
+    //  Permissionless
     // --------------------------------------------
 
-    /// @notice Verify TEE attestation and register / refresh transmitter (TTL clock resets).
     function registerOracle(bytes calldata attestation) external;
 
     // --------------------------------------------
-    //  Break-glass / bootstrap (CATEGORY_ONE)
+    //  Break-glass (CATEGORY_ONE)
     // --------------------------------------------
-
-    function addCvm(bytes32 deviceId, address transmitter) external;
-
-    function removeCvm(bytes32 deviceId, address transmitter) external;
 
     function registerOracleBreakglass(bytes32 deviceId, address transmitter) external;
 
     function revokeOracle(address transmitter) external;
 
-    function addDevice(bytes32 deviceId) external;
-
-    function removeDevice(bytes32 deviceId) external;
-
     // --------------------------------------------
-    //  Governance
+    //  Governance (DAO)
     // --------------------------------------------
 
+    /// @notice Allowlist compose for attestation joins + `isOracle` (local policy only).
     function addComposeHash(bytes32 composeHash) external;
 
+    /// @notice Remove compose from attestation policy (instant `isOracle` deny for that hash).
     function removeComposeHash(bytes32 composeHash) external;
 
-    function setAllowAnyDevice(bool allowAny) external;
-
-    function transferDstackAppOwnership(address newOwner) external;
+    function setAttestationComposeAllowed(bytes32 composeHash, bool allowed) external;
 
     function setAttestationVerifier(address verifier) external;
 
     function setRegistrationTtl(uint64 ttl) external;
-
-    /// @notice Attestation policy: which compose hashes may hold a live `isOracle` registration.
-    function setAttestationComposeAllowed(bytes32 composeHash, bool allowed) external;
 }

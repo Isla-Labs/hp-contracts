@@ -2,6 +2,7 @@
 pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { Pausable } from "@openzeppelin/utils/Pausable.sol";
 
 import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
@@ -14,31 +15,25 @@ import { CvmCommitment, CvmJob, CvmRouterConfig } from "@types/oracle/CvmTypes.s
 
 /**
  * @title CvmRouter
- * @notice Chainlink Functions-style request bus backed by a Phala Cloud CVM (not a DON).
- * @dev Flow:
- *        1. Consumer `sendRequest` → store commitment, emit `RequestStart`
- *        2. Attested CVM watches the event, runs the fixed `CvmJob` script
- *        3. Registered transmitter `fulfill` → callback `handleOracleFulfillment`
- *
- *      Fulfill is gated by `coordinator.isOracle(msg.sender)`. Listening to events is public;
- *      only KMS-backed transmitters registered on the coordinator may return data.
+ * @notice Request bus for Phala CVM oracles (soft assignee + single fulfill).
+ * @dev Intended behind `TransparentUpgradeableProxy` so sealed CVM env can keep a stable
+ *      `CVM_ROUTER` across logic upgrades.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract CvmRouter is AccessControl, Pausable, ICvmRouter {
+contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
     // --------------------------------------------
     //  Constants
     // --------------------------------------------
 
-    /// @dev Selector + 4 words — same budget as Functions Router (avoid OOG griefing).
     uint16 public constant MAX_CALLBACK_RETURN_BYTES = 4 + 4 * 32;
 
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
 
-    ICvmCoordinator private immutable _coordinator;
+    ICvmCoordinator private _coordinator;
 
     CvmRouterConfig private _config;
     uint256 private _requestCount;
@@ -49,13 +44,23 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
     //  Initialization
     // --------------------------------------------
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     /**
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
-     * @param constitutional_ `ConstitutionalTimelock` — `CATEGORY_ONE` (config / pause).
-     * @param coordinator_ `CvmCoordinator` used for `isOracle` checks.
+     * @param dao_ Aragon DAO / deployer — `DEFAULT_ADMIN_ROLE`.
+     * @param constitutional_ Cat-1 / deployer — pause + config.
+     * @param coordinator_ `CvmCoordinator` proxy used for `isOracle` / oracle set.
      * @param config_ Initial router config.
      */
-    constructor(address dao_, address constitutional_, address coordinator_, CvmRouterConfig memory config_) {
+    function initialize(
+        address dao_,
+        address constitutional_,
+        address coordinator_,
+        CvmRouterConfig calldata config_
+    ) external initializer {
         if (dao_ == address(0) || constitutional_ == address(0) || coordinator_ == address(0)) {
             revert Errors.ZeroAddress();
         }
@@ -118,13 +123,21 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
             revert Errors.DuplicateRequestId(requestId);
         }
 
+        address assignee = _pickAssignee(requestId);
+        if (assignee == address(0)) revert Errors.NoLiveOracle();
+
         uint64 timeoutAt = uint64(block.timestamp) + config.requestTimeout;
+        uint64 exclusiveUntil = uint64(block.timestamp) + config.assigneeExclusiveSeconds;
+        if (exclusiveUntil > timeoutAt) exclusiveUntil = timeoutAt;
+
         _commitments[requestId] = CvmCommitment({
             requester: msg.sender,
             job: job,
             argsHash: keccak256(args),
             callbackGasLimit: callbackGasLimit,
-            timeoutAt: timeoutAt
+            timeoutAt: timeoutAt,
+            assignee: assignee,
+            exclusiveUntil: exclusiveUntil
         });
 
         emit Events.RequestStart({
@@ -134,7 +147,9 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
             job: job,
             args: args,
             callbackGasLimit: callbackGasLimit,
-            timeoutAt: timeoutAt
+            timeoutAt: timeoutAt,
+            assignee: assignee,
+            exclusiveUntil: exclusiveUntil
         });
     }
 
@@ -149,6 +164,9 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
         CvmCommitment memory commitment = _commitments[requestId];
         if (commitment.requester == address(0)) revert Errors.UnknownRequest(requestId);
         if (block.timestamp > commitment.timeoutAt) revert Errors.RequestTimedOut(requestId);
+        if (block.timestamp <= commitment.exclusiveUntil && msg.sender != commitment.assignee) {
+            revert Errors.OnlyAssignee(commitment.assignee, msg.sender);
+        }
 
         delete _commitments[requestId];
 
@@ -185,6 +203,12 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
         _setConfig(config_);
     }
 
+    /// @notice Point at a new coordinator proxy (rare; same-chain registry swap).
+    function setCoordinator(address coordinator_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (coordinator_ == address(0)) revert Errors.ZeroAddress();
+        _coordinator = ICvmCoordinator(coordinator_);
+    }
+
     function pause() external onlyRole(Roles.CATEGORY_ONE) {
         _pause();
     }
@@ -198,17 +222,32 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
     // --------------------------------------------
 
     function _setConfig(CvmRouterConfig memory config_) internal {
-        if (config_.maxCallbackGasLimit == 0 || config_.requestTimeout == 0 || config_.gasForCallExactCheck == 0) {
+        if (
+            config_.maxCallbackGasLimit == 0 || config_.requestTimeout == 0 || config_.gasForCallExactCheck == 0
+                || config_.assigneeExclusiveSeconds == 0 || config_.assigneeExclusiveSeconds > config_.requestTimeout
+        ) {
             revert Errors.InvalidConfig();
         }
         _config = config_;
         emit Events.ConfigUpdated(config_);
     }
 
-    /**
-     * @dev Exact-gas callback patterned after Functions Router `_callback`.
-     *      Failures in the consumer do not revert fulfill — they surface via `callbackSuccess`.
-     */
+    function _pickAssignee(bytes32 salt) internal view returns (address) {
+        address[] memory all = _coordinator.oracles();
+        uint256 n = all.length;
+        if (n == 0) return address(0);
+
+        uint256 start = uint256(salt) % n;
+        for (uint256 i = 0; i < n;) {
+            address cand = all[(start + i) % n];
+            if (_coordinator.isOracle(cand)) return cand;
+            unchecked {
+                ++i;
+            }
+        }
+        return address(0);
+    }
+
     function _callback(
         bytes32 requestId,
         bytes memory response,
@@ -234,7 +273,6 @@ contract CvmRouter is AccessControl, Pausable, ICvmRouter {
             let g := gas()
             if lt(g, gasForCallExactCheck) { revert(0, 0) }
             g := sub(g, gasForCallExactCheck)
-            // EIP-150: ensure callbackGasLimit fits in 63/64 of remaining gas.
             if iszero(gt(sub(g, div(g, 64)), callbackGasLimit)) { revert(0, 0) }
 
             let gasBefore := gas()

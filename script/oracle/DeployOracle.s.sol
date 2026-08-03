@@ -57,7 +57,7 @@ contract DeployOracle is Script, ProxyUtils {
         _upgradeAndCall(
             coordinatorProxy,
             coordinatorImpl,
-            abi.encodeCall(CvmCoordinator.initialize, (dao, constitutional, verifier, ttl))
+            abi.encodeCall(CvmCoordinator.initialize, (dao, verifier, ttl))
         );
 
         if (dao == deployer && vm.envExists("COMPOSE_HASH")) {

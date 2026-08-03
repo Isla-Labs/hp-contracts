@@ -2,7 +2,7 @@
   "chainId": 84532,
   "attestationVerifier": "0xcA6AD7614f81C0803014cDddD2a1C13149996834",
   "cvmCoordinator": "0x321564785385E1F2C426297B06afcc129C1DbDE5",
-  "cvmCoordinatorImpl": "0x04A0D3cDf81cB0293d74e18DCBAA424118c915D0",
+  "cvmCoordinatorImpl": "0x5F05FE2933Dc2b712C7F3EA0060b056DF8397320",
   "cvmRouter": "0xA6392AE508A940D92cf4458dd66D098aC7717883",
   "cvmRouterImpl": "0xb8738e63C59BE1585F1Ae27e59A41197919b3B96",
   "useMockVerifier": false,

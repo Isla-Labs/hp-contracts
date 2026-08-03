@@ -12,7 +12,6 @@ import { CvmErrors as Errors } from "@errors/oracle/CvmErrors.sol";
 
 contract CvmCoordinatorTest is Test {
     address internal dao = makeAddr("dao");
-    address internal constitutional = makeAddr("constitutional");
     address internal transmitter = makeAddr("transmitter");
     address internal transmitter2 = makeAddr("transmitter2");
 
@@ -37,7 +36,7 @@ contract CvmCoordinatorTest is Test {
     function _deployCoordinator(address verifier_, uint64 ttl) internal returns (CvmCoordinator) {
         CvmCoordinator impl = new CvmCoordinator();
         TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
-            address(impl), dao, abi.encodeCall(CvmCoordinator.initialize, (dao, constitutional, verifier_, ttl))
+            address(impl), dao, abi.encodeCall(CvmCoordinator.initialize, (dao, verifier_, ttl))
         );
         return CvmCoordinator(address(proxy));
     }
@@ -90,7 +89,7 @@ contract CvmCoordinatorTest is Test {
         assertTrue(coordinator.isOracle(transmitter));
 
         vm.prank(dao);
-        coordinator.setAttestationComposeAllowed(COMPOSE_V1, false);
+        coordinator.removeComposeHash(COMPOSE_V1);
 
         assertFalse(coordinator.isOracle(transmitter));
     }
@@ -122,7 +121,7 @@ contract CvmCoordinatorTest is Test {
 
         vm.startPrank(dao);
         coordinator.addComposeHash(COMPOSE_V2);
-        coordinator.setAttestationComposeAllowed(COMPOSE_V1, false);
+        coordinator.removeComposeHash(COMPOSE_V1);
         vm.stopPrank();
 
         assertFalse(coordinator.isOracle(transmitter));
@@ -130,17 +129,6 @@ contract CvmCoordinatorTest is Test {
         AttestationClaim memory v2 = _claim(transmitter2, keccak256("device-2"), COMPOSE_V2, keccak256("n8"));
         coordinator.registerOracle(abi.encode(v2));
         assertTrue(coordinator.isOracle(transmitter2));
-    }
-
-    function test_breakglass_policyExempt() public {
-        vm.prank(constitutional);
-        coordinator.registerOracleBreakglass(DEVICE, transmitter);
-
-        vm.prank(dao);
-        coordinator.setAttestationComposeAllowed(COMPOSE_V1, false);
-
-        assertTrue(coordinator.isOracle(transmitter));
-        assertEq(coordinator.getRegistration(transmitter).composeHash, bytes32(0));
     }
 
     function test_onlyDao_setRegistrationTtl() public {

@@ -8,7 +8,7 @@ import { OracleRegistration } from "@types/oracle/CvmTypes.sol";
  * @notice Attestation-gated oracle transmitter registry for the CVM bus (Base).
  * @dev Phala `DstackApp` / Onchain KMS live on Ethereum and are out of scope here.
  *      Fulfill gating (`isOracle`) requires an active registration whose `composeHash` is still
- *      in attestation policy (or break-glass with `composeHash == 0`) and not past `expiresAt`.
+ *      in attestation policy and not past `expiresAt`.
  */
 interface ICvmCoordinator {
     function attestationVerifier() external view returns (address);
@@ -37,14 +37,6 @@ interface ICvmCoordinator {
     function registerOracle(bytes calldata attestation) external;
 
     // --------------------------------------------
-    //  Break-glass (CATEGORY_ONE)
-    // --------------------------------------------
-
-    function registerOracleBreakglass(bytes32 deviceId, address transmitter) external;
-
-    function revokeOracle(address transmitter) external;
-
-    // --------------------------------------------
     //  Governance (DAO)
     // --------------------------------------------
 
@@ -53,8 +45,6 @@ interface ICvmCoordinator {
 
     /// @notice Remove compose from attestation policy (instant `isOracle` deny for that hash).
     function removeComposeHash(bytes32 composeHash) external;
-
-    function setAttestationComposeAllowed(bytes32 composeHash, bool allowed) external;
 
     function setAttestationVerifier(address verifier) external;
 

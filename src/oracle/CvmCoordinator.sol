@@ -5,7 +5,6 @@ import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { EnumerableSet } from "@openzeppelin/utils/structs/EnumerableSet.sol";
 
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { CvmErrors as Errors } from "@errors/oracle/CvmErrors.sol";
 import { CvmEvents as Events } from "@events/oracle/CvmEvents.sol";
 import { IAttestationVerifier } from "@interfaces/oracle/IAttestationVerifier.sol";
@@ -52,23 +51,18 @@ contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
 
     /**
      * @param dao_ Aragon DAO / deployer — `DEFAULT_ADMIN_ROLE` (compose policy, verifier, TTL).
-     * @param constitutional_ `ConstitutionalTimelock` / deployer — `CATEGORY_ONE` break-glass.
      * @param attestationVerifier_ Optional; required before permissionless `registerOracle`.
      * @param registrationTtl_ Live registration lifetime in seconds.
      */
     function initialize(
         address dao_,
-        address constitutional_,
         address attestationVerifier_,
         uint64 registrationTtl_
     ) external initializer {
-        if (dao_ == address(0) || constitutional_ == address(0)) {
-            revert Errors.ZeroAddress();
-        }
+        if (dao_ == address(0)) revert Errors.ZeroAddress();
         if (registrationTtl_ == 0) revert Errors.ZeroRegistrationTtl();
 
         _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, constitutional_);
 
         _registrationTtl = registrationTtl_;
         emit Events.RegistrationTtlSet(registrationTtl_);
@@ -108,8 +102,7 @@ contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
         OracleRegistration memory reg = _registration[transmitter];
         if (!reg.active) return false;
         if (block.timestamp > reg.expiresAt) return false;
-        // Break-glass: composeHash == 0 skips policy. Attested joins require live policy membership.
-        if (reg.composeHash != bytes32(0) && !_composeAllowed[reg.composeHash]) return false;
+        if (!_composeAllowed[reg.composeHash]) return false;
         return true;
     }
 
@@ -163,21 +156,6 @@ contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
     }
 
     // --------------------------------------------
-    //  Break-glass (CATEGORY_ONE)
-    // --------------------------------------------
-
-    /// @inheritdoc ICvmCoordinator
-    function registerOracleBreakglass(bytes32 deviceId, address transmitter) external onlyRole(Roles.CATEGORY_ONE) {
-        _upsertRegistration(deviceId, transmitter, bytes32(0), type(uint64).max);
-        emit Events.OracleRegistered(transmitter, deviceId);
-    }
-
-    /// @inheritdoc ICvmCoordinator
-    function revokeOracle(address transmitter) external onlyRole(Roles.CATEGORY_ONE) {
-        _revokeOracle(transmitter);
-    }
-
-    // --------------------------------------------
     //  Compose / policy governance (DAO)
     // --------------------------------------------
 
@@ -195,13 +173,6 @@ contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
         _composeAllowed[composeHash] = false;
         emit Events.ComposeHashRemoved(composeHash);
         emit Events.AttestationComposeAllowed(composeHash, false);
-    }
-
-    /// @inheritdoc ICvmCoordinator
-    function setAttestationComposeAllowed(bytes32 composeHash, bool allowed) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (composeHash == bytes32(0)) revert Errors.ZeroComposeHash();
-        _composeAllowed[composeHash] = allowed;
-        emit Events.AttestationComposeAllowed(composeHash, allowed);
     }
 
     /// @inheritdoc ICvmCoordinator

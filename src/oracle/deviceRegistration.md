@@ -19,9 +19,9 @@ DAO only sets **attestation policy** (`composeHash` allowlist on the Base coordi
 |---|---|---|
 | Boot / keys | Phala Onchain KMS + `DstackApp` (**Ethereum**) | Only allowlisted compose can receive app keys |
 | Transmitter join | `CvmCoordinator.registerOracle` + verifier (**Base**) | Transmitter bound in a fresh TEE quote under Base policy |
-| Fulfill | `CvmRouter` → `isOracle` | Active, unexpired, compose still allowed (or break-glass) |
+| Fulfill | `CvmRouter` → `isOracle` | Active, unexpired, compose still allowlisted |
 
-**Latest-compose enforcement:** `removeComposeHash` / `setAttestationComposeAllowed(h, false)` makes registrations on that hash fail `isOracle` immediately.
+**Latest-compose enforcement:** `removeComposeHash` makes registrations on that hash fail `isOracle` immediately.
 
 ---
 
@@ -29,8 +29,8 @@ DAO only sets **attestation policy** (`composeHash` allowlist on the Base coordi
 
 | Piece | Notes |
 |---|---|
-| `CvmCoordinator` | Registry only (no DstackApp ownership) |
-| `CvmRouter` | Soft assignee (per-`CvmJob` exclusive) + request bus |
+| `CvmCoordinator` | Registry only (no DstackApp ownership); DAO admin for compose / verifier / TTL |
+| `CvmRouter` | Soft assignee (per-`CvmJob` exclusive) + request bus; Cat-1 for pause / config / exclusives |
 | Both | Behind `TransparentUpgradeableProxy`; ProxyAdmin owned by DAO/deployer |
 
 ### Permissionless
@@ -39,27 +39,19 @@ DAO only sets **attestation policy** (`composeHash` allowlist on the Base coordi
 registerOracle(bytes calldata attestation)
 ```
 
-### Break-glass (CATEGORY_ONE)
-
-```solidity
-registerOracleBreakglass(deviceId, transmitter)
-revokeOracle(transmitter)
-```
-
-### Governance (DAO)
+### Governance (DAO — `DEFAULT_ADMIN_ROLE`)
 
 ```solidity
 addComposeHash / removeComposeHash   // local _composeAllowed only
-setAttestationComposeAllowed(h, bool)
 setAttestationVerifier(addr)
 setRegistrationTtl(ttl)
 ```
 
 ### `isOracle` rules
 
-1. `active`  
-2. `block.timestamp <= expiresAt`  
-3. if `composeHash != 0` → `_composeAllowed[composeHash]`  
+1. `active`
+2. `block.timestamp <= expiresAt`
+3. `_composeAllowed[composeHash]`
 
 ---
 

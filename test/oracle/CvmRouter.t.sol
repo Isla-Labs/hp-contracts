@@ -7,8 +7,9 @@ import { TransparentUpgradeableProxy } from "@openzeppelin/proxy/transparent/Tra
 import { CvmClient } from "@src/oracle/CvmClient.sol";
 import { CvmCoordinator } from "@src/oracle/CvmCoordinator.sol";
 import { CvmRouter } from "@src/oracle/CvmRouter.sol";
+import { MockAttestationVerifier } from "@src/oracle/attestation/MockAttestationVerifier.sol";
 import { CvmErrors as Errors } from "@errors/oracle/CvmErrors.sol";
-import { CvmCommitment, CvmJob, CvmRouterConfig } from "@types/oracle/CvmTypes.sol";
+import { AttestationClaim, CvmCommitment, CvmJob, CvmRouterConfig } from "@types/oracle/CvmTypes.sol";
 
 contract MockCvmConsumer is CvmClient {
     bytes32 public lastRequestId;
@@ -40,6 +41,8 @@ contract CvmRouterTest is Test {
 
     bytes32 internal constant DEVICE_A = keccak256("device-a");
     bytes32 internal constant DEVICE_B = keccak256("device-b");
+    bytes32 internal constant COMPOSE_A = keccak256("compose-a");
+    bytes32 internal constant COMPOSE_B = keccak256("compose-b");
 
     CvmCoordinator internal coordinator;
     CvmRouter internal router;
@@ -50,13 +53,15 @@ contract CvmRouterTest is Test {
     uint32 internal constant TIMEOUT = 1 hours;
 
     function setUp() public {
+        MockAttestationVerifier verifier = new MockAttestationVerifier(1 hours);
+
         CvmCoordinator coordImpl = new CvmCoordinator();
         coordinator = CvmCoordinator(
             address(
                 new TransparentUpgradeableProxy(
                     address(coordImpl),
                     dao,
-                    abi.encodeCall(CvmCoordinator.initialize, (dao, constitutional, address(0), 1 days))
+                    abi.encodeCall(CvmCoordinator.initialize, (dao, address(verifier), 1 days))
                 )
             )
         );
@@ -75,10 +80,28 @@ contract CvmRouterTest is Test {
         );
         consumer = new MockCvmConsumer(address(router));
 
-        vm.startPrank(constitutional);
-        coordinator.registerOracleBreakglass(DEVICE_A, oracleA);
-        coordinator.registerOracleBreakglass(DEVICE_B, oracleB);
+        vm.startPrank(dao);
+        coordinator.addComposeHash(COMPOSE_A);
+        coordinator.addComposeHash(COMPOSE_B);
         vm.stopPrank();
+
+        coordinator.registerOracle(abi.encode(_claim(oracleA, DEVICE_A, COMPOSE_A, keccak256("n-a"))));
+        coordinator.registerOracle(abi.encode(_claim(oracleB, DEVICE_B, COMPOSE_B, keccak256("n-b"))));
+    }
+
+    function _claim(
+        address transmitter,
+        bytes32 deviceId,
+        bytes32 composeHash,
+        bytes32 nonce
+    ) internal view returns (AttestationClaim memory) {
+        return AttestationClaim({
+            transmitter: transmitter,
+            deviceId: deviceId,
+            composeHash: composeHash,
+            nonce: nonce,
+            quotedAt: uint64(block.timestamp)
+        });
     }
 
     function test_sendRequest_assignsLiveOracle() public {
@@ -133,18 +156,18 @@ contract CvmRouterTest is Test {
     }
 
     function test_sendRequest_revertsWithoutLiveOracle() public {
-        vm.startPrank(constitutional);
-        coordinator.revokeOracle(oracleA);
-        coordinator.revokeOracle(oracleB);
+        vm.startPrank(dao);
+        coordinator.removeComposeHash(COMPOSE_A);
+        coordinator.removeComposeHash(COMPOSE_B);
         vm.stopPrank();
 
         vm.expectRevert(Errors.NoLiveOracle.selector);
         consumer.request("hello");
     }
 
-    function test_pickAssignee_skipsRevoked() public {
-        vm.prank(constitutional);
-        coordinator.revokeOracle(oracleA);
+    function test_pickAssignee_skipsInactiveCompose() public {
+        vm.prank(dao);
+        coordinator.removeComposeHash(COMPOSE_A);
 
         address picked = coordinator.pickAssignee(bytes32(uint256(0)));
         assertEq(picked, oracleB);

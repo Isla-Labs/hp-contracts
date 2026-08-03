@@ -75,7 +75,7 @@ struct AttestationClaim {
 /// @notice Onchain oracle registration record (fulfill gate + compose freshness).
 struct OracleRegistration {
     bytes32 deviceId;
-    /// @notice Compose proven at registration; `bytes32(0)` = break-glass (policy-exempt).
+    /// @notice Compose proven at registration; must remain in coordinator attestation policy.
     bytes32 composeHash;
     uint64 expiresAt;
     bool active;

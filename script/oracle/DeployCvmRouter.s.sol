@@ -29,8 +29,8 @@ contract DeployCvmRouter is Script, ProxyUtils, OracleDeployment {
         address coordinator = _oracleCoordinator(json);
 
         CvmRouterConfig memory routerConfig = CvmRouterConfig({
-            maxCallbackGasLimit: 500_000,
-            requestTimeout: uint32(1 days),
+            maxCallbackGasLimit: 5_000_000,
+            requestTimeout: uint32(1 hours),
             gasForCallExactCheck: 5000
         });
 

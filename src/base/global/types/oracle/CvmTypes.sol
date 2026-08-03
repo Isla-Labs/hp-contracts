@@ -15,7 +15,7 @@ enum CvmJob {
     TestFetch,
     /// @dev Player name / metadata fetch (eligibility / listing surfaces).
     PlayerMetadata,
-    /// @dev CREATE2 vanity salts (`0x22` / `0x42` PlayerToken+Vault, `0x99` PbrTreasury).
+    /// @dev Vanity salts by `VanityDeployKind` (`Asset` → `0x22`/`0x42`, `Tournament` → `0x99`).
     VanitySalts,
     /// @dev Live league/season squad sync for `EligibilityStore`.
     SquadSync,
@@ -29,6 +29,16 @@ enum CvmJob {
     HistoricalRoundSync,
     /// @dev One-time / bootstrap DMS ingest (batched per request).
     HistoricalDms
+}
+
+/// @notice Which vanity salt set `CvmJob.VanitySalts` should mine.
+/// @dev Append-only after a live deploy. Unused response slots for a kind are zeroed.
+enum VanityDeployKind {
+    None,
+    /// @dev PlayerToken `0x22` (CREATE2) + PlayerVault `0x42` (CreateX CREATE3).
+    Asset,
+    /// @dev PbrTreasury `0x99` (CreateX CREATE3).
+    Tournament
 }
 
 /// @notice Onchain commitment stored while a request is in flight.

@@ -65,8 +65,9 @@ contract DeployOracle is Script, ProxyUtils {
         }
 
         CvmRouterConfig memory routerConfig = CvmRouterConfig({
-            maxCallbackGasLimit: 500_000,
-            requestTimeout: uint32(1 days),
+            // Headroom for one-club squad upserts (Base per-tx cap ~16.7M; raise later if needed).
+            maxCallbackGasLimit: 5_000_000,
+            requestTimeout: uint32(1 hours),
             gasForCallExactCheck: 5000
         });
 

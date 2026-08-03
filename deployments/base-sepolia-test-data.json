@@ -1,7 +1,7 @@
 {
   "chainId": 84532,
-  "testData": "0x606bbF30c8Cf86fbA9e5719771f65D9C5277c31e",
+  "testData": "0x27d9feea47F867F60e8Ff6d63428eb102B01E7FF",
   "cvmRouter": "0xA6392AE508A940D92cf4458dd66D098aC7717883",
-  "job": "TestFetch",
+  "job": "VanitySalts",
   "fulfillGasLimit": 300000
 }

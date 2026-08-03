@@ -7,7 +7,7 @@ import { TestData } from "@src/data/test/TestData.sol";
 
 /**
  * @title DeployTestData
- * @notice Deploy the Sepolia `TestData` consumer against the live `CvmRouter`.
+ * @notice Deploy the Sepolia `TestData` (`VanitySalts`) consumer against the live `CvmRouter`.
  * @dev Makefile: `make deploy-base-sepolia-test-data`
  *
  *      Env:
@@ -40,7 +40,7 @@ contract DeployTestData is Script {
             '  "cvmRouter": "',
             vm.toString(router),
             '",\n',
-            '  "job": "TestFetch",\n',
+            '  "job": "VanitySalts",\n',
             '  "fulfillGasLimit": ',
             vm.toString(uint256(fulfillGas)),
             "\n}\n"

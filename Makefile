@@ -108,6 +108,18 @@ oracle-sepolia-set-verifier:
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL); \
 		echo "onchain:" $$(cast call "$$COORD" "attestationVerifier()(address)" --rpc-url $(BASE_SEPOLIA_RPC_URL))
 
+# Push canonical CvmRouterConfig to the live Sepolia proxy (no upgrade).
+# Defaults: maxCallbackGasLimit=5M, requestTimeout=1h, gasForCallExactCheck=5000.
+# Requires CATEGORY_ONE key. Usage: make oracle-sepolia-set-config
+oracle-sepolia-set-config:
+	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1)
+	@ROUTER=$$(sed -n 's/.*"cvmRouter": "\([^"]*\)".*/\1/p' deployments/base-sepolia-oracle.json | head -1); \
+		test -n "$$ROUTER" || (echo "could not parse cvmRouter" && exit 1); \
+		echo "updateConfig $$ROUTER (5000000,3600,5000)"; \
+		cast send "$$ROUTER" "updateConfig((uint32,uint32,uint16))" "(5000000,3600,5000)" \
+			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL); \
+		echo "onchain:" $$(cast call "$$ROUTER" "getConfig()(uint32,uint32,uint16)" --rpc-url $(BASE_SEPOLIA_RPC_URL))
+
 # Tighten / loosen registration TTL (default deploy was 7d; prefer 1d with 4h re-attest).
 # Usage: make oracle-sepolia-set-ttl TTL=86400
 oracle-sepolia-set-ttl:
@@ -169,5 +181,5 @@ fmt-check:
 	deploy-base-core deploy-base-factories deploy-base-data \
 	deploy-base-sepolia-core deploy-base-sepolia-factories deploy-base-sepolia-data \
 	deploy-base-sepolia-oracle upgrade-base-sepolia-cvm-coordinator upgrade-base-sepolia-cvm-router \
-	oracle-sepolia-add-compose oracle-sepolia-remove-compose oracle-sepolia-set-verifier oracle-sepolia-set-ttl deploy-base-sepolia-test-data \
+	oracle-sepolia-add-compose oracle-sepolia-remove-compose oracle-sepolia-set-verifier oracle-sepolia-set-config oracle-sepolia-set-ttl deploy-base-sepolia-test-data \
 	install build test coverage fmt fmt-check

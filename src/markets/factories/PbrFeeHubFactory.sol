@@ -14,37 +14,25 @@ import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
 /**
  * @title PbrFeeHubFactory
  * @notice Deploys per-domestic-league `PbrFeeHub` beacon proxies (FeeRouter destinations).
- * @dev Beacon ownership (logic upgrades) is assigned to `ConstitutionalTimelock`. Hubs store
- *      treasury destinations locally; default weights: 90/9/1 top-level, 89% domestic league share.
- *      `create` is restricted to `CREATE_TOURNAMENT` (cat-1 orchestrator via ConstitutionalTimelock).
- *      Protocol addresses are resolved once from `AddressProvider` in the factory constructor.
+ * @dev Beacon ownership (logic upgrades) is assigned to `Orchestrator`. Hubs store treasury
+ *      destinations locally; default weights: 90/9/1 top-level, 89% domestic league share.
+ *      `create` is restricted to `Orchestrator`. Protocol addresses are resolved once from
+ *      `AddressProvider` in the factory constructor.
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract PbrFeeHubFactory is AddressBook, IPbrFeeHubFactory {
     UpgradeableBeacon public immutable beacon;
 
-    /// @notice Granted `CATEGORY_TWO` on each hub
-    address public immutable maintenanceTimelock;
-
-    /// @notice Granted `CATEGORY_ONE` on each hub; owns the beacon
-    address public immutable constitutionalTimelock;
-
-    /// @notice Granted `DEFAULT_ADMIN_ROLE` on each hub
-    address public immutable dao;
-
-    /// @notice Sole caller of `create`
-    address public immutable createTournament;
+    /// @notice Owns the beacon (logic upgrades); sole caller of `create`
+    address public immutable orchestrator;
 
     /**
-     * @param addressProvider_ Canonical `AddressProvider` — resolves governance + orchestrator deps.
+     * @param addressProvider_ Canonical `AddressProvider` — resolves orchestrator.
      */
     constructor(address addressProvider_) AddressBook(addressProvider_) {
-        maintenanceTimelock = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
-        constitutionalTimelock = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
-        dao = _getAddress(_addressKey(Addresses.DAO));
-        createTournament = _getAddress(_addressKey(Addresses.CREATE_TOURNAMENT));
-        beacon = new UpgradeableBeacon(address(new PbrFeeHub(addressProvider_)), constitutionalTimelock);
+        orchestrator = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
+        beacon = new UpgradeableBeacon(address(new PbrFeeHub(addressProvider_)), orchestrator);
     }
 
     /**
@@ -54,7 +42,7 @@ contract PbrFeeHubFactory is AddressBook, IPbrFeeHubFactory {
      * @param leagueTreasury Primary domestic-league `PbrTreasury`.
      */
     function create(bytes32 leagueId, address leagueTreasury) external returns (address hub) {
-        if (msg.sender != createTournament) revert Errors.Unauthorized();
+        if (msg.sender != orchestrator) revert Errors.Unauthorized();
         if (leagueId == bytes32(0)) revert Errors.ZeroId();
         if (leagueTreasury == address(0)) revert Errors.ZeroAddress();
 

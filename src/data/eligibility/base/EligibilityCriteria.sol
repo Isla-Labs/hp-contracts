@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol";
 
 /**
  * @title EligibilityCriteria
- * @notice Governance-updatable deploy / continuity thresholds for `EligibilityVerifier`.
- * @dev Ringfenced policy module (same idea as `DopplerConfig`): `CATEGORY_ONE` may update
- *      thresholds without redeploying the verifier. Defaults match the original hardcoded
- *      constants. Call `__EligibilityCriteria_init` from the concrete verifier's `initialize`
- *      (guarded by `initializer` there).
+ * @notice Owner-updatable deploy / continuity thresholds for `EligibilityVerifier`.
+ * @dev Ringfenced policy module (same idea as `DopplerConfig`). Defaults match the original
+ *      hardcoded constants. Call `__EligibilityCriteria_init` from the concrete verifier's
+ *      `initialize` (guarded by `initializer` there). Owner is transferred to Orchestrator
+ *      in the concrete contract.
  *
  *      Effective-minute comparisons use `weightedScoreWad / SCORE_WAD`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-abstract contract EligibilityCriteria is AccessControl {
+abstract contract EligibilityCriteria is Ownable {
     // -------------------------------------------------------------------------
-    //  Storage — shared until governance updates
+    //  Storage — shared until owner updates
     // -------------------------------------------------------------------------
 
     /// @notice GK continuity / deploy threshold (effective minutes).
@@ -44,16 +43,7 @@ abstract contract EligibilityCriteria is AccessControl {
     //  Initialization
     // -------------------------------------------------------------------------
 
-    /**
-     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE` config updates.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
-     */
-    function __EligibilityCriteria_init(address constitutionalTimelock_, address dao_) internal {
-        if (constitutionalTimelock_ == address(0) || dao_ == address(0)) revert Errors.ZeroAddress();
-
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
-
+    function __EligibilityCriteria_init() internal {
         _applyThresholds(361, 181, 901, 1, 21);
     }
 
@@ -61,7 +51,7 @@ abstract contract EligibilityCriteria is AccessControl {
     //  Views
     // -------------------------------------------------------------------------
 
-    /// @notice Snapshot of all governance-tunable criteria.
+    /// @notice Snapshot of all owner-tunable criteria.
     function eligibilityCriteria()
         external
         view
@@ -77,7 +67,7 @@ abstract contract EligibilityCriteria is AccessControl {
     }
 
     // -------------------------------------------------------------------------
-    //  Governance setters — CATEGORY_ONE
+    //  Owner setters
     // -------------------------------------------------------------------------
 
     /**
@@ -90,7 +80,7 @@ abstract contract EligibilityCriteria is AccessControl {
         uint32 thresholdOutfield_,
         uint32 thresholdNewTransfer_,
         uint256 under21Age_
-    ) external onlyRole(Roles.CATEGORY_ONE) {
+    ) external onlyOwner {
         _applyThresholds(thresholdGk_, thresholdUnder21_, thresholdOutfield_, thresholdNewTransfer_, under21Age_);
         emit Events.EligibilityThresholdsUpdated(
             thresholdGk_, thresholdUnder21_, thresholdOutfield_, thresholdNewTransfer_, under21Age_

@@ -9,7 +9,7 @@ import { Hub, RoundSchedule, Season, TournamentType } from "@types/TournamentTyp
  */
 interface ITournamentRegistry {
     // --------------------------------------------
-    //  Domestic hubs — CATEGORY_ONE
+    //  Domestic hubs — owner (Orchestrator)
     // --------------------------------------------
 
     function registerHub(Hub calldata hub) external;
@@ -17,7 +17,7 @@ interface ITournamentRegistry {
     function pbrFeeHubOf(bytes32 leagueId) external view returns (address);
 
     // --------------------------------------------
-    //  Tournament registration — CATEGORY_ONE
+    //  Tournament registration — owner (Orchestrator)
     // --------------------------------------------
 
     function createTournament(
@@ -30,7 +30,7 @@ interface ITournamentRegistry {
     function linkHub(bytes32 tournamentId, Hub calldata hub) external;
 
     // --------------------------------------------
-    //  Vault membership SoT — CATEGORY_ONE / TWO / THREE
+    //  Vault membership SoT — owner (Orchestrator)
     // --------------------------------------------
 
     /// @notice Register vaults for `tournamentId` and sync the treasury cache.
@@ -40,7 +40,7 @@ interface ITournamentRegistry {
     function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external;
 
     // --------------------------------------------
-    //  Season calendar — CATEGORY_THREE
+    //  Season calendar — owner (Orchestrator)
     // --------------------------------------------
 
     function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) external;

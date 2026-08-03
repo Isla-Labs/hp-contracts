@@ -16,11 +16,11 @@ import { StakedToken } from "@vaults/StakedToken.sol";
 /**
  * @title PlayerVaultFactory
  * @notice Deploys per-market `PlayerVault` beacon proxies + bound `StakedToken`s via CreateX CREATE3.
- * @dev Beacon ownership (logic upgrades) is assigned to `ConstitutionalTimelock`.
+ * @dev Beacon ownership (logic upgrades) is assigned to `Orchestrator`.
  *      CREATE3 addresses depend only on CreateX + this factory's guarded salt (not initcode), so
  *      vanity prefixes (e.g. `0x42…` vault / stToken) can be mined offline against `computeCreate3Address`.
  *      Prefer permissioned salts: `address(this) || 0x00 || entropy11` via `makeSalt`.
- *      `create` is restricted to `automator` to prevent salt sniping.
+ *      `create` is restricted to `Orchestrator` to prevent salt sniping.
  *      Protocol addresses are resolved once from `AddressProvider` in the factory constructor.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
@@ -31,32 +31,15 @@ contract PlayerVaultFactory is AddressBook {
 
     UpgradeableBeacon public immutable beacon;
 
-    /// @notice Granted `CATEGORY_THREE` on each vault; sole caller of `create`
-    address public immutable automator;
-
-    /// @notice Granted `CATEGORY_TWO` on each vault
-    address public immutable maintenanceTimelock;
-
-    /// @notice Granted `DEFAULT_ADMIN_ROLE` on each vault (pause)
-    address public immutable dao;
-
-    /// @notice Owns the beacon (logic upgrades)
-    address public immutable constitutionalTimelock;
-
-    address public immutable tournamentRegistry;
-    address public immutable playerSetRegistry;
+    /// @notice Owns the beacon (logic upgrades); sole caller of `create`
+    address public immutable orchestrator;
 
     /**
-     * @param addressProvider_ Canonical `AddressProvider` — resolves governance + registry deps.
+     * @param addressProvider_ Canonical `AddressProvider` — resolves orchestrator.
      */
     constructor(address addressProvider_) AddressBook(addressProvider_) {
-        automator = _getAddress(_addressKey(Addresses.AUTOMATOR));
-        maintenanceTimelock = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
-        dao = _getAddress(_addressKey(Addresses.DAO));
-        constitutionalTimelock = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
-        tournamentRegistry = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
-        playerSetRegistry = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
-        beacon = new UpgradeableBeacon(address(new PlayerVault(addressProvider_)), constitutionalTimelock);
+        orchestrator = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
+        beacon = new UpgradeableBeacon(address(new PlayerVault(addressProvider_)), orchestrator);
     }
 
     /**
@@ -78,7 +61,7 @@ contract PlayerVaultFactory is AddressBook {
         bytes32 stTokenSalt,
         address expectedStToken
     ) external returns (address playerVault, address stToken) {
-        if (msg.sender != automator) revert Errors.Unauthorized();
+        if (msg.sender != orchestrator) revert Errors.Unauthorized();
         if (playerId == bytes32(0)) revert Errors.ZeroId();
         if (playerToken == address(0) || expectedVault == address(0) || expectedStToken == address(0)) {
             revert Errors.ZeroAddress();

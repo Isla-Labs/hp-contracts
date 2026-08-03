@@ -6,7 +6,7 @@ import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvent
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
 import { EligibilityBucket, EligibilityGroups, DopplerTypes } from "@types/governance/DopplerTypes.sol";
 
-import { DopplerConfig } from "@governance/deployments/assets/deploy/config/DopplerConfig.sol";
+import { DopplerConfig } from "@deployments/assets/deploy/config/DopplerConfig.sol";
 
 /// @dev Optional metadata oracle (legacy EligibilityVerifier shape). `address(0)` → empty name/symbol.
 interface IPlayerMetadataOracle {
@@ -19,15 +19,14 @@ interface IPlayerMetadataOracle {
 /**
  * Two completely different flows live in this contract:
  *
- * 0) Eligibility waiting room (from data plane via Automator)
+ * 0) Eligibility waiting room (from data plane)
  *    - `enqueueEligible` stores cohort-tagged playerIds for later deploy formatting.
- *    - Only the configured `automator` may write; optional metadata oracle for name/symbol.
+ *    - Owner (`Orchestrator`) or configured `eligibilityVerifier` may write.
  *    - Consumes deploy cohorts only; lifecycle arrays go to `TransferLocker`.
  *    - Name/symbol copied from metadata oracle when set; else empty until waiting-room override.
  *
  * 1) Initial market deployment (gated)
  *    - Requires zk proof of eligibility (trustlessEligibility).
- *    - Held behind a timelock / DelayedBatchExecutor schedule path.
  *    - Creates the bonding market only — no VaultSet / AdvancedTradeSet yet.
  *    - `Airlock.create` params assembled via `DopplerTypes.buildCreateParams(marketLaunchConfig())`
  *      with `DN404Factory` tokenData (`name`, `symbol`, `baseURI`, `dn404Unit`).
@@ -39,7 +38,7 @@ interface IPlayerMetadataOracle {
  *    - Anyone may call; checks revert if the market is not ready or already processed.
  *
  * Shared launch recipe is inherited from `DopplerConfig` (defaults in constructor;
- * `CATEGORY_ONE` may update without redeploying this stack).
+ * owner may update without redeploying this stack).
  *
  * Scanner (offchain):
  * - Enumerate PlayerSetRegistry players with PlayerStatus.BONDING.
@@ -54,31 +53,17 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
     //  Eligibility waiting room
     // -------------------------------------------------------------------------
 
-    /// @notice Sole writer for `enqueueEligible` (Automator; set once after Automator deploy).
-    address public automator;
-
-    /// @notice Optional metadata oracle for enqueue (`IPlayerMetadataOracle`; set once).
+    /// @notice Enqueue writer + optional metadata oracle (`IPlayerMetadataOracle`; set once).
     address public eligibilityVerifier;
 
     DopplerTypes.PendingEligible[] private _pending;
     mapping(bytes32 playerId => bool) private _queued;
 
-    /**
-     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE` (config overrides).
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
-     */
-    constructor(address constitutionalTimelock_, address dao_) DopplerConfig(constitutionalTimelock_, dao_) { }
+    /// @param orchestrator_ `Orchestrator` — Ownable owner (config + enqueue).
+    constructor(address orchestrator_) DopplerConfig(orchestrator_) { }
 
-    /// @notice One-time wire: Automator is the only `enqueueEligible` caller.
-    function setAutomator(address automator_) external {
-        if (automator != address(0)) revert Errors.AlreadySet();
-        if (automator_ == address(0)) revert Errors.ZeroAddress();
-        automator = automator_;
-        emit Events.AutomatorSet(automator_);
-    }
-
-    /// @notice One-time wire: EligibilityVerifier for `getPlayerMetadata` during enqueue.
-    function setEligibilityVerifier(address eligibilityVerifier_) external {
+    /// @notice One-time wire: EligibilityVerifier for enqueue + `getPlayerMetadata`.
+    function setEligibilityVerifier(address eligibilityVerifier_) external onlyOwner {
         if (eligibilityVerifier != address(0)) revert Errors.AlreadySet();
         if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
         eligibilityVerifier = eligibilityVerifier_;
@@ -87,7 +72,7 @@ contract DopplerLocker is DopplerConfig, IDopplerLocker {
 
     /// @inheritdoc IDopplerLocker
     function enqueueEligible(EligibilityGroups calldata groups) external {
-        if (msg.sender != automator) revert Errors.Unauthorized();
+        if (msg.sender != owner() && msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
 
         uint256 added;
         added += _enqueueCohort(groups.goalkeepers, EligibilityBucket.Goalkeeper);

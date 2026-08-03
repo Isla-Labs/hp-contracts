@@ -14,7 +14,7 @@ import { ProxyUtils } from "../utils/ProxyUtils.sol";
  * @title DeployCvmRouter
  * @notice Deploy a **new** upgradeable CvmRouter proxy (rare). Prefer
  *         `UpgradeCvmRouter` for logic upgrades against the stable proxy.
- * @dev Env: PRIVATE_KEY, optional DAO_ADDRESS / CONSTITUTIONAL_ADDRESS.
+ * @dev Env: PRIVATE_KEY, optional OWNER_ADDRESS (fallback DAO_ADDRESS).
  *      Coordinator is read from `deployments/base-sepolia-oracle.json`.
  *      After deploy, updates that file's `cvmRouter` + `cvmRouterImpl`.
  */
@@ -22,8 +22,7 @@ contract DeployCvmRouter is Script, ProxyUtils, OracleDeployment {
     function run() external {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(privateKey);
-        address dao = vm.envOr("DAO_ADDRESS", deployer);
-        address constitutional = vm.envOr("CONSTITUTIONAL_ADDRESS", deployer);
+        address owner = vm.envOr("OWNER_ADDRESS", vm.envOr("DAO_ADDRESS", deployer));
 
         string memory json = _readOracleDeployment();
         address coordinator = _oracleCoordinator(json);
@@ -37,11 +36,9 @@ contract DeployCvmRouter is Script, ProxyUtils, OracleDeployment {
         vm.startBroadcast(privateKey);
         InitGuard guard = new InitGuard();
         CvmRouter impl = new CvmRouter();
-        address proxy = _deployInitGuardProxy(guard, dao);
+        address proxy = _deployInitGuardProxy(guard, owner);
         _upgradeAndCall(
-            proxy,
-            address(impl),
-            abi.encodeCall(CvmRouter.initialize, (dao, constitutional, coordinator, routerConfig))
+            proxy, address(impl), abi.encodeCall(CvmRouter.initialize, (owner, coordinator, routerConfig))
         );
         vm.stopBroadcast();
 

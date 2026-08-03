@@ -2,50 +2,39 @@
 pragma solidity ^0.8.34;
 
 import { console2 as console } from "forge-std/console2.sol";
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
 import { InitGuard } from "@base/abstract/InitGuard.sol";
 import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
-import { VerifiedCallerConfig } from "@types/governance/AutomatorTypes.sol";
 
-import { ConstitutionalTimelock } from "@governance/access/cat-1/ConstitutionalTimelock.sol";
-import { MaintenanceTimelock } from "@governance/access/cat-2/MaintenanceTimelock.sol";
-import { Automator } from "@governance/access/cat-3/Automator.sol";
-import { DopplerLocker } from "@governance/deployments/assets/deploy/DopplerLocker.sol";
-import { TransferLocker } from "@governance/deployments/assets/transfer/TransferLocker.sol";
-import { DeployTournament } from "@governance/deployments/tournaments/DeployTournament.sol";
+import { DopplerLocker } from "@deployments/assets/deploy/DopplerLocker.sol";
+import { TransferLocker } from "@deployments/assets/transfer/TransferLocker.sol";
+import { DeployTournament } from "@deployments/tournaments/DeployTournament.sol";
+import { Orchestrator } from "@src/Orchestrator.sol";
 
 import { AddressProvider } from "@src/AddressProvider.sol";
-import { TournamentRegistry } from "@src/TournamentRegistry.sol";
-import { PlayerSetRegistry } from "@src/PlayerSetRegistry.sol";
+import { TournamentRegistry } from "@registries/TournamentRegistry.sol";
+import { PlayerSetRegistry } from "@registries/PlayerSetRegistry.sol";
 
 import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployCore
- * @notice Bootstrap: AddressProvider, access stack, lockers, DeployTournament, registries.
+ * @notice Bootstrap: AddressProvider, Orchestrator, DeployTournament, lockers, registries.
  * @dev AddressBook upgradeables follow:
- *        1) Deploy AddressProvider
- *        2) Deploy proxies + AddressBook implementations (ctors only store the provider)
- *        3) Register names on AddressProvider
- *        4) Initialize proxies (resolve once into storage)
- *
- *      Non-AddressBook contracts (timelocks, lockers, Automator, DeployTournament) still take
- *      explicit ctor args. A data-plane InitGuard proxy is seeded so Automator has a verified
- *      caller slot for the upcoming Phala/PbrSettle path (legacy EligibilityVerifier archived).
+ *        1) Deploy AddressProvider (temporary owner = deployer)
+ *        2) Deploy proxies + implementations
+ *        3) Deploy Orchestrator + DeployTournament; authorize DT; register names
+ *        4) Initialize proxies (resolve Orchestrator as owner)
+ *        5) Transfer AddressProvider + ProxyAdmins to Orchestrator
  */
 abstract contract DeployCore is ProxyUtils {
     struct CoreDeployment {
         address addressProvider;
         address initGuard;
-        address constitutionalTimelock;
-        address maintenanceTimelock;
         address transferLocker;
         address dopplerLocker;
-        /// @notice Placeholder proxy for future data-plane Automator wiring (was EligibilityVerifier).
-        address dataPlanePlaceholder;
-        address automator;
+        address orchestrator;
         address deployTournament;
         address tournamentRegistry;
         address playerSetRegistry;
@@ -53,21 +42,18 @@ abstract contract DeployCore is ProxyUtils {
         address playerSetRegistryImpl;
     }
 
-    function _deployCore(address dao, address deployer) internal returns (CoreDeployment memory d) {
-        if (dao == address(0)) revert("DAO_ADDRESS required");
+    function _deployCore(address owner, address deployer) internal returns (CoreDeployment memory d) {
+        if (owner == address(0)) revert("OWNER_ADDRESS required");
         if (deployer == address(0)) revert("deployer required");
 
         // --------------------------------------------
-        //  1) AddressProvider (+ bootstrap access)
+        //  1) AddressProvider (+ temporary deployer ownership)
         // --------------------------------------------
 
         InitGuard guard = new InitGuard();
         d.initGuard = address(guard);
 
-        d.constitutionalTimelock = address(new ConstitutionalTimelock(dao, 0));
-        d.maintenanceTimelock = address(new MaintenanceTimelock(dao, 0));
-
-        AddressProvider ap = new AddressProvider(deployer, d.constitutionalTimelock);
+        AddressProvider ap = new AddressProvider(deployer);
         d.addressProvider = address(ap);
 
         // --------------------------------------------
@@ -76,36 +62,29 @@ abstract contract DeployCore is ProxyUtils {
 
         d.tournamentRegistry = _deployInitGuardProxy(guard, deployer);
         d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
-        d.dataPlanePlaceholder = _deployInitGuardProxy(guard, deployer);
 
         d.tournamentRegistryImpl = address(new TournamentRegistry(d.addressProvider));
         d.playerSetRegistryImpl = address(new PlayerSetRegistry(d.addressProvider));
 
-        d.dopplerLocker = address(new DopplerLocker(d.constitutionalTimelock, dao));
-        d.transferLocker = address(new TransferLocker(d.playerSetRegistry, d.tournamentRegistry));
-
-        address[] memory dataDestinations = new address[](2);
-        dataDestinations[0] = d.dopplerLocker;
-        dataDestinations[1] = d.transferLocker;
-        VerifiedCallerConfig[] memory callerConfigs = new VerifiedCallerConfig[](1);
-        callerConfigs[0] = VerifiedCallerConfig({ caller: d.dataPlanePlaceholder, destinations: dataDestinations });
-        d.automator = address(new Automator(dao, d.constitutionalTimelock, callerConfigs));
-
-        TransferLocker(d.transferLocker).setAutomator(d.automator);
-        DopplerLocker(d.dopplerLocker).setAutomator(d.automator);
-
+        d.orchestrator = address(new Orchestrator(owner));
         d.deployTournament =
-            address(new DeployTournament(d.constitutionalTimelock, dao, d.tournamentRegistry, d.playerSetRegistry));
+            address(new DeployTournament(owner, d.orchestrator, d.tournamentRegistry, d.playerSetRegistry));
+
+        if (deployer == owner) {
+            Orchestrator(d.orchestrator).addAuthorizedContract(d.deployTournament);
+        } else {
+            console.log("OWNER != deployer: grant DeployTournament AUTHORIZED_CONTRACT on Orchestrator");
+        }
+
+        d.dopplerLocker = address(new DopplerLocker(d.orchestrator));
+        d.transferLocker = address(new TransferLocker(d.orchestrator, d.playerSetRegistry, d.tournamentRegistry));
 
         // --------------------------------------------
         //  3) Register AddressProvider names
         // --------------------------------------------
 
-        ap.setName(Keys.DAO, dao);
-        ap.setName(Keys.CONSTITUTIONAL_TIMELOCK, d.constitutionalTimelock);
-        ap.setName(Keys.MAINTENANCE_TIMELOCK, d.maintenanceTimelock);
-        ap.setName(Keys.AUTOMATOR, d.automator);
-        ap.setName(Keys.CREATE_TOURNAMENT, d.deployTournament);
+        ap.setName(Keys.ORCHESTRATOR, d.orchestrator);
+        ap.setName(Keys.DEPLOY_TOURNAMENT, d.deployTournament);
         ap.setName(Keys.TOURNAMENT_REGISTRY, d.tournamentRegistry);
         ap.setName(Keys.PLAYER_SET_REGISTRY, d.playerSetRegistry);
         ap.setName(Keys.DOPPLER_LOCKER, d.dopplerLocker);
@@ -120,16 +99,13 @@ abstract contract DeployCore is ProxyUtils {
         );
         _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, abi.encodeCall(PlayerSetRegistry.initialize, ()));
 
-        if (deployer == dao) {
-            AccessControl(d.tournamentRegistry).grantRole(Roles.CATEGORY_ONE, d.deployTournament);
-            AccessControl(d.tournamentRegistry).grantRole(Roles.CATEGORY_THREE, d.deployTournament);
-        } else {
-            console.log("DAO != deployer: grant DeployTournament CAT_ONE + CAT_THREE on TournamentRegistry");
-            AccessControl(d.addressProvider).grantRole(bytes32(0), dao);
-        }
+        // --------------------------------------------
+        //  5) Hand ownership to Orchestrator
+        // --------------------------------------------
 
-        _transferProxyAdmin(d.tournamentRegistry, d.constitutionalTimelock);
-        _transferProxyAdmin(d.playerSetRegistry, d.constitutionalTimelock);
+        Ownable(d.addressProvider).transferOwnership(d.orchestrator);
+        _transferProxyAdmin(d.tournamentRegistry, d.orchestrator);
+        _transferProxyAdmin(d.playerSetRegistry, d.orchestrator);
 
         _logCore(d);
     }
@@ -137,12 +113,9 @@ abstract contract DeployCore is ProxyUtils {
     function _logCore(CoreDeployment memory d) internal pure {
         console.log("AddressProvider", d.addressProvider);
         console.log("InitGuard", d.initGuard);
-        console.log("ConstitutionalTimelock", d.constitutionalTimelock);
-        console.log("MaintenanceTimelock", d.maintenanceTimelock);
         console.log("TransferLocker", d.transferLocker);
         console.log("DopplerLocker", d.dopplerLocker);
-        console.log("DataPlanePlaceholder (proxy)", d.dataPlanePlaceholder);
-        console.log("Automator", d.automator);
+        console.log("Orchestrator", d.orchestrator);
         console.log("DeployTournament", d.deployTournament);
         console.log("TournamentRegistry (proxy)", d.tournamentRegistry);
         console.log("PlayerSetRegistry (proxy)", d.playerSetRegistry);

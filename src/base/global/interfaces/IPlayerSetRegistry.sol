@@ -17,7 +17,7 @@ import {
  */
 interface IPlayerSetRegistry {
     // --------------------------------------------
-    //  Registration — CATEGORY_THREE
+    //  Registration — owner (Orchestrator)
     // --------------------------------------------
 
     function addPlayerSet(

@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { EnumerableSet } from "@openzeppelin/utils/structs/EnumerableSet.sol";
 
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { AddressProviderErrors as Errors } from "@errors/AddressProviderErrors.sol";
 import { AddressProviderEvents as Events } from "@events/AddressProviderEvents.sol";
 
 /// @title HighPotential Address Provider
 /// @notice Dynamic registry: each logical slot is a `bytes32` key; string names use `keccak256(bytes(name))`.
-/// @dev Enumeration tracks keys with a non-zero address. Mutations are role-gated; `version` increments per mutation.
-contract AddressProvider is AccessControl {
+/// @dev Enumeration tracks keys with a non-zero address. Mutations are owner-gated; bootstrap may
+///      register under the temporary deployer owner, then transfer ownership to `Orchestrator`.
+contract AddressProvider is Ownable {
     using EnumerableSet for EnumerableSet.Bytes32Set;
 
     EnumerableSet.Bytes32Set private _keys;
@@ -22,19 +22,16 @@ contract AddressProvider is AccessControl {
     //  Initialization
     // --------------------------------------------
 
-    constructor(address dao_, address constitutionalTimelock_) {
-        if (dao_ == address(0) || constitutionalTimelock_ == address(0)) revert Errors.ZeroAddress();
-
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
+    constructor(address owner_) Ownable(owner_) {
+        if (owner_ == address(0)) revert Errors.ZeroAddress();
     }
 
     // --------------------------------------------
-    //  Deployment wiring
+    //  Mutations (owner)
     // --------------------------------------------
 
     /// @notice First-write only: reverts if `key` already holds a non-zero address.
-    function registerName(string calldata name, address addr) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function registerName(string calldata name, address addr) external onlyOwner {
         if (bytes(name).length == 0) revert Errors.EmptyName();
         if (addr == address(0)) return;
 
@@ -47,7 +44,7 @@ contract AddressProvider is AccessControl {
     }
 
     /// @notice First-write only for raw keys.
-    function registerKey(bytes32 key, address addr, string calldata name) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function registerKey(bytes32 key, address addr, string calldata name) external onlyOwner {
         if (key == bytes32(0)) revert Errors.ZeroKey();
         if (addr == address(0)) return;
         if (bytes(name).length != 0 && keccak256(bytes(name)) != key) revert Errors.NameKeyMismatch();
@@ -64,12 +61,8 @@ contract AddressProvider is AccessControl {
         emit Events.AddressSet(key, name, _addr[key], addr);
     }
 
-    // --------------------------------------------
-    //  Upkeep (CATEGORY_ONE)
-    // --------------------------------------------
-
     /// @notice Upsert by human-readable `name`. Storage key is `keccak256(bytes(name))`.
-    function setName(string calldata name, address addr) external onlyRole(Roles.CATEGORY_ONE) {
+    function setName(string calldata name, address addr) external onlyOwner {
         if (bytes(name).length == 0) revert Errors.EmptyName();
 
         bytes32 key = keccak256(bytes(name));
@@ -79,7 +72,7 @@ contract AddressProvider is AccessControl {
     }
 
     /// @notice Upsert by raw key. Non-empty `name` must satisfy `keccak256(bytes(name)) == key`; use "" to keep the existing label.
-    function setKey(bytes32 key, address addr, string calldata name) external onlyRole(Roles.CATEGORY_ONE) {
+    function setKey(bytes32 key, address addr, string calldata name) external onlyOwner {
         if (key == bytes32(0)) revert Errors.ZeroKey();
         if (bytes(name).length != 0) {
             if (keccak256(bytes(name)) != key) revert Errors.NameKeyMismatch();

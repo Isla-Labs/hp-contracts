@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 
@@ -14,20 +13,17 @@ import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
 
 /**
  * @title DopplerConfig
- * @notice Governance-updatable bonding / migrate launch parameters for `DeployDoppler`.
+ * @notice Owner-updatable bonding / migrate launch parameters for `DopplerLocker`.
  * @dev Constructor seeds defaults from `DopplerTypes.defaultMarketLaunchConfig()`.
- *      `CATEGORY_ONE` (`ConstitutionalTimelock`) may replace the shared recipe later without
- *      redeploying the full deployment stack. `DeployDoppler` extends this contract.
- *
- *      HP graduation policy fields (`minGraduateProceeds`, `minBondingDuration`) are enforced
- *      by `DeployDoppler` finalization logic (not by Doppler Airlock itself):
+ *      Owner is the `Orchestrator`. HP graduation policy fields (`minGraduateProceeds`,
+ *      `minBondingDuration`) are enforced by finalization logic (not by Doppler Airlock):
  *        - farTick reached anytime, OR
  *        - `raised ≥ minGraduateProceeds` after `launch + minBondingDuration`
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-abstract contract DopplerConfig is AccessControl {
+abstract contract DopplerConfig is Ownable {
     // -------------------------------------------------------------------------
     //  Storage — shared across every player market until governance updates
     // -------------------------------------------------------------------------
@@ -67,16 +63,8 @@ abstract contract DopplerConfig is AccessControl {
 
     DopplerTypes.Curve[] internal _bondingCurves;
 
-    /**
-     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE` config updates.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
-     */
-    constructor(address constitutionalTimelock_, address dao_) {
-        if (constitutionalTimelock_ == address(0) || dao_ == address(0)) revert Errors.ZeroAddress();
-
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
-
+    /// @param orchestrator_ `Orchestrator` — sole owner for config updates.
+    constructor(address orchestrator_) Ownable(orchestrator_) {
         _applyLaunchConfig(DopplerTypes.defaultMarketLaunchConfig());
     }
 
@@ -117,16 +105,14 @@ abstract contract DopplerConfig is AccessControl {
     }
 
     // -------------------------------------------------------------------------
-    //  Governance setters — CATEGORY_ONE
+    //  Owner setters
     // -------------------------------------------------------------------------
 
     /**
      * @notice Replace the full shared launch recipe (scalars + curves + graduation policy).
      * @dev Does not affect markets already deployed; only subsequent `Airlock.create` calls.
      */
-    function setMarketLaunchConfig(
-        DopplerTypes.MarketLaunchConfig memory config_
-    ) external onlyRole(Roles.CATEGORY_ONE) {
+    function setMarketLaunchConfig(DopplerTypes.MarketLaunchConfig memory config_) external onlyOwner {
         _applyLaunchConfig(config_);
         emit Events.MarketLaunchConfigUpdated(
             config_.initialSupply, config_.numTokensToSell, config_.farTick, config_.curves.length
@@ -134,23 +120,20 @@ abstract contract DopplerConfig is AccessControl {
     }
 
     /// @notice Update multicurve segments only (shares must sum to WAD).
-    function setBondingCurves(DopplerTypes.Curve[] memory curves_) external onlyRole(Roles.CATEGORY_ONE) {
+    function setBondingCurves(DopplerTypes.Curve[] memory curves_) external onlyOwner {
         _setBondingCurves(curves_);
         emit Events.BondingCurvesUpdated(curves_.length);
     }
 
     /// @notice Update HP soft-graduation policy (50 ETH / 30d defaults).
-    function setGraduationPolicy(
-        uint256 minGraduateProceeds_,
-        uint32 minBondingDuration_
-    ) external onlyRole(Roles.CATEGORY_ONE) {
+    function setGraduationPolicy(uint256 minGraduateProceeds_, uint32 minBondingDuration_) external onlyOwner {
         minGraduateProceeds = minGraduateProceeds_;
         minBondingDuration = minBondingDuration_;
         emit Events.GraduationPolicyUpdated(minGraduateProceeds_, minBondingDuration_);
     }
 
     /// @notice Update Rehype fee routing matrix (each source row must sum to WAD).
-    function setFeeDistribution(FeeDistributionInfo calldata feeDistribution_) external onlyRole(Roles.CATEGORY_ONE) {
+    function setFeeDistribution(FeeDistributionInfo calldata feeDistribution_) external onlyOwner {
         _validateFeeDistribution(feeDistribution_);
         feeDistribution = feeDistribution_;
         emit Events.FeeDistributionUpdated();

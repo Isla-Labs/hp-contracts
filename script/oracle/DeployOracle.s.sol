@@ -19,12 +19,12 @@ import { ProxyUtils } from "../utils/ProxyUtils.sol";
  * @dev Hybrid: Phala DstackApp/KMS on Ethereum (out of band). This stack is attestation registry
  *      + request bus only — stable proxy addresses so CVM sealed env need not change on upgrades.
  *
- *      ProxyAdmin owner = DAO/deployer initially.
+ *      ProxyAdmin owner = OWNER/deployer initially.
  *
  *      Makefile: `make deploy-base-sepolia-oracle`
  *
  *      Env:
- *        PRIVATE_KEY, DAO_ADDRESS, CONSTITUTIONAL_ADDRESS
+ *        PRIVATE_KEY, OWNER_ADDRESS (fallback DAO_ADDRESS)
  *        USE_MOCK_VERIFIER (default false — Automata DCAP; set true for local/unit bring-up)
  *        REGISTRATION_TTL (default 1 day)
  *        MAX_QUOTE_AGE (default 1 hour)
@@ -34,8 +34,7 @@ contract DeployOracle is Script, ProxyUtils {
     function run() external {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(privateKey);
-        address dao = vm.envOr("DAO_ADDRESS", deployer);
-        address constitutional = vm.envOr("CONSTITUTIONAL_ADDRESS", deployer);
+        address owner = vm.envOr("OWNER_ADDRESS", vm.envOr("DAO_ADDRESS", deployer));
 
         bool useMock = vm.envOr("USE_MOCK_VERIFIER", false);
         uint64 ttl = uint64(vm.envOr("REGISTRATION_TTL", uint256(1 days)));
@@ -52,15 +51,15 @@ contract DeployOracle is Script, ProxyUtils {
             verifier = address(new AutomataAttestationVerifier(HP85432.AUTOMATA_DCAP_ATTESTATION, maxQuoteAge));
         }
 
-        address coordinatorProxy = _deployInitGuardProxy(guard, dao);
+        address coordinatorProxy = _deployInitGuardProxy(guard, owner);
         address coordinatorImpl = address(new CvmCoordinator());
         _upgradeAndCall(
             coordinatorProxy,
             coordinatorImpl,
-            abi.encodeCall(CvmCoordinator.initialize, (dao, verifier, ttl))
+            abi.encodeCall(CvmCoordinator.initialize, (owner, verifier, ttl))
         );
 
-        if (dao == deployer && vm.envExists("COMPOSE_HASH")) {
+        if (owner == deployer && vm.envExists("COMPOSE_HASH")) {
             CvmCoordinator(coordinatorProxy).addComposeHash(vm.envBytes32("COMPOSE_HASH"));
         }
 
@@ -71,12 +70,12 @@ contract DeployOracle is Script, ProxyUtils {
             gasForCallExactCheck: 5000
         });
 
-        address routerProxy = _deployInitGuardProxy(guard, dao);
+        address routerProxy = _deployInitGuardProxy(guard, owner);
         address routerImpl = address(new CvmRouter());
         _upgradeAndCall(
             routerProxy,
             routerImpl,
-            abi.encodeCall(CvmRouter.initialize, (dao, constitutional, coordinatorProxy, routerConfig))
+            abi.encodeCall(CvmRouter.initialize, (owner, coordinatorProxy, routerConfig))
         );
 
         vm.stopBroadcast();
@@ -87,7 +86,7 @@ contract DeployOracle is Script, ProxyUtils {
         console2.log("CvmCoordinator impl", coordinatorImpl);
         console2.log("CvmRouter proxy", routerProxy);
         console2.log("CvmRouter impl", routerImpl);
-        console2.log("ProxyAdmin owner", dao);
+        console2.log("ProxyAdmin owner", owner);
         console2.log("useMockVerifier", useMock);
 
         string memory json = string.concat(
@@ -115,7 +114,7 @@ contract DeployOracle is Script, ProxyUtils {
             vm.toString(uint256(ttl)),
             ",\n",
             '  "proxyAdminOwner": "',
-            vm.toString(dao),
+            vm.toString(owner),
             '"\n',
             "}\n"
         );

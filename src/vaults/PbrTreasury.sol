@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
 import { RoundSchedule } from "@types/TournamentTypes.sol";
@@ -24,7 +23,7 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  * @dev One deployment per `tournamentId`. Fees arrive from `PbrFeeHub` (or directly).
  *
  *      Access:
- *      - `CATEGORY_THREE` (`Automator`): `settle`.
+ *      - `Orchestrator` (owner) or optional `PBR_SETTLE`: `settle`.
  *      - `TournamentRegistry` only: `syncRegisterVault` / `syncUnregisterVault` (cache mirror).
  *
  *      Vault membership SoT is `TournamentRegistry`. This contract keeps a local `_vaults` /
@@ -36,7 +35,7 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGuard, IPbrTreasury {
+contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IPbrTreasury {
     // --------------------------------------------
     //  Internal Constants
     // --------------------------------------------
@@ -75,6 +74,9 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
     uint256 public snapshotCursor;
     bool public snapshotPending;
 
+    /// @notice Optional settle pipeline caller when registered in `AddressProvider`
+    address public pbrSettle;
+
     // --------------------------------------------
     //  Access
     // --------------------------------------------
@@ -84,18 +86,24 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
         _;
     }
 
+    modifier onlyOwnerOrPbrSettle() {
+        address sender = msg.sender;
+        if (sender != owner() && sender != pbrSettle) revert Errors.Unauthorized();
+        _;
+    }
+
     // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) {
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
         _disableInitializers();
     }
 
     /**
-     * @notice Resolves governance roles from `AddressProvider` once; tournament ids stay explicit.
+     * @notice Initializes per-tournament treasury storage; tournament ids stay explicit.
      * @param tournamentId_ Sole tournament this treasury serves.
      * @param initialSeason_ Starting season (e.g. 2025).
      */
@@ -103,10 +111,10 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
         if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
         if (initialSeason_ == 0) revert Errors.ZeroSeason();
 
-        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
-        address maintenanceTimelock_ = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
-        address dao_ = _getAddress(_addressKey(Addresses.DAO));
-        address createTournament_ = _getAddress(_addressKey(Addresses.CREATE_TOURNAMENT));
+        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
+        address pbrSettle_ = addressProvider.get(_addressKey(Addresses.PBR_SETTLE));
+        if (pbrSettle_ != address(0)) pbrSettle = pbrSettle_;
+
         address tournamentRegistry_ = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
         address playerSetRegistry_ = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
 
@@ -114,17 +122,6 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
         seasonId = initialSeason_;
         activeRound = 1;
         tradingRound = 1;
-
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, createTournament_);
-        _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
-        _grantRole(Roles.CATEGORY_THREE, automator_);
-
-        // Optional: Phala/Succinct settle pipeline may push `settle` directly when registered.
-        address pbrSettle_ = addressProvider.get(_addressKey(Addresses.PBR_SETTLE));
-        if (pbrSettle_ != address(0)) {
-            _grantRole(Roles.CATEGORY_THREE, pbrSettle_);
-        }
 
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
@@ -260,7 +257,7 @@ contract PbrTreasury is Initializable, AddressBook, AccessControl, ReentrancyGua
         address[] calldata vaults,
         uint256[] calldata mwPoints,
         uint256 adjTotalPoints
-    ) external onlyRole(Roles.CATEGORY_THREE) {
+    ) external onlyOwnerOrPbrSettle {
         if (vaults.length != mwPoints.length) revert Errors.LengthMismatch();
         if (adjTotalPoints == 0) revert Errors.ZeroMAdj();
 

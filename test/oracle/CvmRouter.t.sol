@@ -35,7 +35,6 @@ contract MockCvmConsumer is CvmClient {
 
 contract CvmRouterTest is Test {
     address internal dao = makeAddr("dao");
-    address internal constitutional = makeAddr("constitutional");
     address internal oracleA = makeAddr("oracleA");
     address internal oracleB = makeAddr("oracleB");
 
@@ -74,7 +73,7 @@ contract CvmRouterTest is Test {
                 new TransparentUpgradeableProxy(
                     address(routerImpl),
                     dao,
-                    abi.encodeCall(CvmRouter.initialize, (dao, constitutional, address(coordinator), cfg))
+                    abi.encodeCall(CvmRouter.initialize, (dao, address(coordinator), cfg))
                 )
             )
         );
@@ -121,7 +120,7 @@ contract CvmRouterTest is Test {
     }
 
     function test_setJobExclusiveSeconds() public {
-        vm.prank(constitutional);
+        vm.prank(dao);
         router.setJobExclusiveSeconds(CvmJob.TestFetch, 90);
 
         bytes32 id = consumer.request("hello");

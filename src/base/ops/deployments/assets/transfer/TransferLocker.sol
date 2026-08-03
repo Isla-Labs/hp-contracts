@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
+
 import { LifecycleErrors as Errors } from "@errors/governance/LifecycleErrors.sol";
 import { LifecycleEvents as Events } from "@events/governance/LifecycleEvents.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
@@ -18,32 +20,24 @@ interface IFeeRouterHub {
  * @title TransferLocker
  * @notice Waiting room for soft-inactivity / reactivation candidates (mirrors DopplerLocker).
  * @dev Flow:
- *      0) EligibilityVerifier (via Automator) enqueues continuity failures, league-leavers,
+ *      0) EligibilityVerifier (or Orchestrator owner) enqueues continuity failures, league-leavers,
  *         cross-league moves (`ChangedLeague`), or reactivations.
  *      1) Offchain / manual review (webhook + email — TBD) confirms or rejects.
- *      2) Confirmed deactivate → Automator → `setStatus(INACTIVE)` (not wired yet).
- *      3) Confirmed reactivate → Automator → restore prior active status (not wired yet).
- *
- *      Cross-league moves (e.g. Bundesliga → EPL) are not standard continuity reactivates:
- *      deactivate in the old league first, migrate `PlayerSet.leagueId` + `FeeRouter.pbrFeeHub`
- *      (+ vault ↔ `PbrTreasury` registration), then reactivate. `confirmReactivate` refuses
- *      unless `leagueId → PbrFeeHub / PbrTreasury` topology still matches.
- *
- *      Deactivate and reactivate queues are independent so a prior deactivate enqueue
- *      does not block a later reactivate enqueue (and vice versa).
+ *      2) Confirmed deactivate → owner → `setStatus(INACTIVE)` (not wired yet).
+ *      3) Confirmed reactivate → owner → restore prior active status (not wired yet).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TransferLocker is ITransferLocker {
+contract TransferLocker is Ownable, ITransferLocker {
     /// @notice Canonical player market index.
     IPlayerSetRegistry public immutable playerSetRegistry;
 
     /// @notice Domestic hub + tournament treasury topology.
     ITournamentRegistry public immutable tournamentRegistry;
 
-    /// @notice Sole writer for `enqueueLifecycle` (Automator; set once after Automator deploy).
-    address public automator;
+    /// @notice Enqueue writer (set once); owner may also enqueue.
+    address public eligibilityVerifier;
 
     PendingLifecycle[] private _pending;
     /// @dev ContinuityUnderThreshold / LeftLeague / ChangedLeague — pending review.
@@ -52,21 +46,22 @@ contract TransferLocker is ITransferLocker {
     mapping(bytes32 playerId => bool) private _queuedReactivate;
 
     /**
+     * @param orchestrator_ `Orchestrator` — Ownable owner.
      * @param playerSetRegistry_ Canonical `PlayerSetRegistry` proxy.
      * @param tournamentRegistry_ Canonical `TournamentRegistry` proxy.
      */
-    constructor(address playerSetRegistry_, address tournamentRegistry_) {
+    constructor(address orchestrator_, address playerSetRegistry_, address tournamentRegistry_) Ownable(orchestrator_) {
         if (playerSetRegistry_ == address(0) || tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
     }
 
-    /// @notice One-time wire: Automator is the only `enqueueLifecycle` caller.
-    function setAutomator(address automator_) external {
-        if (automator != address(0)) revert Errors.AlreadySet();
-        if (automator_ == address(0)) revert Errors.ZeroAddress();
-        automator = automator_;
-        emit Events.AutomatorSet(automator_);
+    /// @notice One-time wire: EligibilityVerifier may call `enqueueLifecycle`.
+    function setEligibilityVerifier(address eligibilityVerifier_) external onlyOwner {
+        if (eligibilityVerifier != address(0)) revert Errors.AlreadySet();
+        if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
+        eligibilityVerifier = eligibilityVerifier_;
+        emit Events.EligibilityVerifierSet(eligibilityVerifier_);
     }
 
     /// @inheritdoc ITransferLocker
@@ -75,7 +70,7 @@ contract TransferLocker is ITransferLocker {
         LifecycleReason reason,
         uint32[] calldata effectiveMins
     ) external {
-        if (msg.sender != automator) revert Errors.Unauthorized();
+        if (msg.sender != owner() && msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
 
         uint256 length = playerIds.length;
         if (effectiveMins.length != 0 && effectiveMins.length != length) {
@@ -148,32 +143,12 @@ contract TransferLocker is ITransferLocker {
     //  Confirm — manual / gated (NOT public yet)
     // -------------------------------------------------------------------------
 
-    /**
-     * After waiting-room review confirms soft-inactivity:
-     * - Require still deployed and not already INACTIVE.
-     * - Automator → PlayerSetRegistry.setStatus(INACTIVE).
-     * - Clear `_queuedDeactivate` for the player.
-     *
-     * Access: gated (timelock / proposer) — mirror DopplerLocker deploy path.
-     */
     function confirmInactive( /* playerId */ ) external {
-        // gated: manual review + Automator setStatus(INACTIVE)
+        // gated: manual review + owner setStatus(INACTIVE)
     }
 
-    /**
-     * After waiting-room review confirms PBR reactivation:
-     * - Require status == INACTIVE and continuity still holds.
-     * - Require `leagueId → FeeRouter.pbrFeeHub / PbrTreasury` topology matches (cross-league
-     *   hub + vault migration must complete before this call).
-     * - Automator → restore prior active status (typically GRADUATED).
-     * - Clear `_queuedReactivate` for the player.
-     *
-     * Access: gated (timelock / proposer).
-     */
     function confirmReactivate(bytes32 playerId) external view {
-        // gated: manual review + Automator setStatus(GRADUATED) / prior status
-        // Topology gate is live now so cross-league reactivates cannot skip hub migration.
-        // `view` until status restore / queue clear are wired (those will drop `view`).
+        // gated: manual review + owner setStatus(GRADUATED) / prior status
         _requireFeeTopologyConsistent(playerId);
     }
 
@@ -181,17 +156,6 @@ contract TransferLocker is ITransferLocker {
     //  Fee topology
     // -------------------------------------------------------------------------
 
-    /**
-     * @dev Ensures the player's recorded domestic league still lines up with fee routing
-     *      and vault membership before status is restored.
-     *
-     *      Checks:
-     *      1) `tournamentData.leagueId` set and hub registered.
-     *      2) `FeeRouter.pbrFeeHub == TournamentRegistry.pbrFeeHubOf(leagueId)`.
-     *      3) Domestic-league treasury exists (`tournamentId == leagueId`).
-     *      4) If a player vault exists: registered on the domestic tournament in TR SoT
-     *         (and therefore mirrored on the treasury cache).
-     */
     function _requireFeeTopologyConsistent(bytes32 playerId) internal view {
         PlayerSet memory set = playerSetRegistry.getPlayerSet(playerId);
 
@@ -209,7 +173,6 @@ contract TransferLocker is ITransferLocker {
             revert Errors.FeeHubMismatch(playerId, leagueId, expectedHub, actualHub);
         }
 
-        // Domestic league tournament id equals `leagueId` (see TournamentRegistry.createTournament).
         address domesticTreasury = tournamentRegistry.getPbrTreasury(leagueId);
         address vault = set.vaultData.playerVault;
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 import { Pausable } from "@openzeppelin/utils/Pausable.sol";
@@ -12,7 +12,6 @@ import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
 import { RoundStatus } from "@types/vaults/VaultTypes.sol";
@@ -28,8 +27,7 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
  * @dev Snapshot callers must be `TournamentRegistry.getPbrTreasury(tournamentId)`.
  *      Stake/unstake syncs `VaultData.isUtilized` on `PlayerSetRegistry` when `totalStaked`
  *      crosses zero. Vault must already be registered via `addVaultData`.
- *      `DEFAULT_ADMIN_ROLE` (DAO) may pause/unpause user stake and claim flows.
- *      `CATEGORY_THREE` (`Automator`) or `CATEGORY_TWO` (`MaintenanceTimelock`) may toggle
+ *      `Orchestrator` (owner) may pause/unpause user stake and claim flows and toggle
  *      `isActive` for lifecycle support / discontinuation (or manual repair).
  *
  *      Referral boost (optional `REFERRAL_REGISTRY`): claim weights use
@@ -38,7 +36,7 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerVault is Initializable, AddressBook, AccessControl, Pausable, ReentrancyGuard {
+contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Checkpoints for Checkpoints.Trace160;
 
@@ -92,30 +90,17 @@ contract PlayerVault is Initializable, AddressBook, AccessControl, Pausable, Ree
     RoundKey[] private _snapRounds;
 
     // --------------------------------------------
-    //  Access
-    // --------------------------------------------
-
-    /// @dev Automator (cat-3) or MaintenanceTimelock (cat-2) for lifecycle / manual repair.
-    modifier onlyCategoryTwoOrThree() {
-        address sender = _msgSender();
-        if (!hasRole(Roles.CATEGORY_TWO, sender) && !hasRole(Roles.CATEGORY_THREE, sender)) {
-            revert Errors.Unauthorized();
-        }
-        _;
-    }
-
-    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) {
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
         _disableInitializers();
     }
 
     /**
-     * @notice Resolves governance + registries from `AddressProvider` once; market ids stay explicit.
+     * @notice Resolves registries from `AddressProvider`; market ids stay explicit.
      * @param playerId_ Player identity associated with this vault.
      * @param playerToken_ Underlying player ERC20.
      * @param stToken_ Bound staked-token share receipt.
@@ -124,9 +109,8 @@ contract PlayerVault is Initializable, AddressBook, AccessControl, Pausable, Ree
         if (playerToken_ == address(0) || stToken_ == address(0)) revert Errors.ZeroAddress();
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
 
-        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
-        address maintenanceTimelock_ = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
-        address dao_ = _getAddress(_addressKey(Addresses.DAO));
+        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
+
         address tournamentRegistry_ = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
         address playerSetRegistry_ = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
 
@@ -136,34 +120,29 @@ contract PlayerVault is Initializable, AddressBook, AccessControl, Pausable, Ree
         playerToken = playerToken_;
         stToken = stToken_;
         isActive = true;
-
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_THREE, automator_);
-        _grantRole(Roles.CATEGORY_TWO, maintenanceTimelock_);
     }
 
     // --------------------------------------------
-    //  Pause (DEFAULT_ADMIN_ROLE)
+    //  Pause (owner)
     // --------------------------------------------
 
-    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function pause() external onlyOwner {
         _pause();
     }
 
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function unpause() external onlyOwner {
         _unpause();
     }
 
     // --------------------------------------------
-    //  Lifecycle (CATEGORY_THREE)
+    //  Lifecycle (owner)
     // --------------------------------------------
 
     /**
      * @notice Mark the vault as supported or unsupported for new stakes.
-     * @dev Lifecycle automation (cat-3) or manual maintenance (cat-2).
-     *      Unstake and claim remain available when inactive.
+     * @dev Unstake and claim remain available when inactive.
      */
-    function setActive(bool active_) external onlyCategoryTwoOrThree {
+    function setActive(bool active_) external onlyOwner {
         isActive = active_;
         emit Events.ActiveUpdated(playerId, active_);
     }

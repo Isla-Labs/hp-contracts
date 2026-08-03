@@ -9,10 +9,10 @@ contract DeployCoreStack is DeployCore {
     function run() external returns (CoreDeployment memory d) {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(privateKey);
-        address dao = vm.envOr("DAO_ADDRESS", deployer);
+        address owner = vm.envOr("OWNER_ADDRESS", vm.envOr("DAO_ADDRESS", deployer));
 
         vm.startBroadcast(privateKey);
-        d = _deployCore(dao, deployer);
+        d = _deployCore(owner, deployer);
         vm.stopBroadcast();
     }
 }
@@ -22,9 +22,9 @@ contract DeployFactoriesStack is DeployFactories {
     function run() external returns (FactoryDeployment memory f) {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(privateKey);
-        // DeployFactories reads DAO_ADDRESS — default to deployer for solo bootstraps.
-        if (!vm.envExists("DAO_ADDRESS")) {
-            vm.setEnv("DAO_ADDRESS", vm.toString(deployer));
+        // DeployFactories reads OWNER_ADDRESS — default to deployer for solo bootstraps.
+        if (!vm.envExists("OWNER_ADDRESS") && !vm.envExists("DAO_ADDRESS")) {
+            vm.setEnv("OWNER_ADDRESS", vm.toString(deployer));
         }
 
         vm.startBroadcast(privateKey);
@@ -32,5 +32,3 @@ contract DeployFactoriesStack is DeployFactories {
         vm.stopBroadcast();
     }
 }
-
-// DeployDataStack archived with CRE eligibility/matchweeks under `.junk/data-legacy`.

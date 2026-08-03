@@ -56,7 +56,7 @@ deploy-base-sepolia-data:
 	$(MAKE) generate-history
 
 # CVM oracle bus (upgradeable TUP proxies; MockAttestationVerifier by default).
-# ProxyAdmin owner = DAO_ADDRESS (defaults to deployer). Optional: COMPOSE_HASH=0x…
+# ProxyAdmin owner = OWNER_ADDRESS (defaults to deployer). Optional: COMPOSE_HASH=0x…
 # at deploy, or run oracle-sepolia-add-compose after Phala prints the real hash.
 deploy-base-sepolia-oracle:
 	@forge script script/oracle/DeployOracle.s.sol:DeployOracle \

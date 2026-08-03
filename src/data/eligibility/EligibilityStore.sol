@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { IReceiver } from "@cre/v1/interfaces/IReceiver.sol";
 
@@ -11,7 +11,6 @@ import { AddressKeys as Addresses } from "@base/global/libraries/addresses/Addre
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { Position } from "@types/PlayerSetTypes.sol";
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 
 import { EligibilityErrors as Errors } from "@errors/data/EligibilityErrors.sol";
 import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol";
@@ -54,7 +53,7 @@ import {
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract EligibilityStore is Initializable, AddressBook, AccessControl, CreReceiver {
+contract EligibilityStore is Initializable, AddressBook, Ownable, CreReceiver {
     // --------------------------------------------
     //  Constants
     // --------------------------------------------
@@ -149,12 +148,12 @@ contract EligibilityStore is Initializable, AddressBook, AccessControl, CreRecei
 
     /// @param addressProvider_ Canonical `AddressProvider`.
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) {
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
         _disableInitializers();
     }
 
     /**
-     * @notice Proxy init: roles, CRE forwarder + workflow id, year clocks, verifier wire.
+     * @notice Proxy init: ownership, CRE forwarder + workflow id, year clocks, verifier wire.
      * @param workflowId_ Expected CRE workflow id (squads `eligibility-store`).
      * @param baseYear_ Sets `scoreBaseYear` (G-index origin) and initial `currentSeasonStartYear`.
      * @param eligibilityVerifier_ `EligibilityVerifier` proxy (verify-page privileged caller).
@@ -164,14 +163,9 @@ contract EligibilityStore is Initializable, AddressBook, AccessControl, CreRecei
         if (baseYear_ == 0) revert Errors.ZeroId();
         if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
 
-        address dao_ = _getAddress(_addressKey(Addresses.DAO));
-        address constitutionalTimelock_ = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
-        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
         address forwarder_ = _getAddress(_addressKey(Addresses.CRE_FORWARDER));
 
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
-        _grantRole(Roles.CATEGORY_THREE, automator_);
+        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
 
         eligibilityVerifier = eligibilityVerifier_;
 
@@ -187,7 +181,7 @@ contract EligibilityStore is Initializable, AddressBook, AccessControl, CreRecei
     }
 
     // --------------------------------------------
-    //  Ops — CATEGORY_THREE (Automator) / CATEGORY_ONE
+    //  Ops — owner (Orchestrator)
     // --------------------------------------------
 
     /// @notice Manually queue a league's seasons (oldest→newest). Prefer CRE `SYNC_LEAGUE`.
@@ -195,21 +189,21 @@ contract EligibilityStore is Initializable, AddressBook, AccessControl, CreRecei
         bytes32 leagueId,
         bytes32[] calldata seasonIds,
         uint16[] calldata seasonStartYears
-    ) external onlyRole(Roles.CATEGORY_THREE) {
+    ) external onlyOwner {
         _queueLeague(leagueId, seasonIds, seasonStartYears);
     }
 
     /// @notice Set / retune `currentSeasonStartYear` while idle (monotonic tick usually via finalize).
-    function setCurrentSeasonStartYear(uint16 year) external onlyRole(Roles.CATEGORY_ONE) {
+    function setCurrentSeasonStartYear(uint16 year) external onlyOwner {
         _setCurrentSeasonStartYear(year);
     }
 
-    function setExpectedWorkflowId(bytes32 workflowId_) external onlyRole(Roles.CATEGORY_ONE) {
+    function setExpectedWorkflowId(bytes32 workflowId_) external onlyOwner {
         if (workflowId_ == bytes32(0)) revert Errors.ZeroWorkflowId();
         _setExpectedWorkflowId(workflowId_);
     }
 
-    function setForwarderAddress(address forwarder_) external onlyRole(Roles.CATEGORY_ONE) {
+    function setForwarderAddress(address forwarder_) external onlyOwner {
         _setForwarderAddress(forwarder_);
     }
 
@@ -1249,9 +1243,8 @@ contract EligibilityStore is Initializable, AddressBook, AccessControl, CreRecei
         return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
     }
 
-    function supportsInterface(bytes4 interfaceId) public view override(AccessControl, CreReceiver) returns (bool) {
-        return interfaceId == type(IReceiver).interfaceId || AccessControl.supportsInterface(interfaceId)
-            || CreReceiver.supportsInterface(interfaceId);
+    function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
+        return interfaceId == type(IReceiver).interfaceId || CreReceiver.supportsInterface(interfaceId);
     }
 
     // --------------------------------------------

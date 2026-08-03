@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { IEligibilityStore } from "@interfaces/data/IEligibilityStore.sol";
-import { IAutomator } from "@interfaces/governance/IAutomator.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { LifecycleReason } from "@types/governance/LifecycleTypes.sol";
+import { EligibilityGroups as LockerEligibilityGroups } from "@types/governance/DopplerTypes.sol";
 import { PlayerStatus, Position } from "@types/PlayerSetTypes.sol";
 import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol";
 
@@ -29,16 +30,11 @@ import {
 
 /**
  * @title EligibilityVerifier
- * @notice Criteria + rate-limited verify scan; Automator → DopplerLocker / TransferLocker.
+ * @notice Criteria + rate-limited verify scan; enqueues DopplerLocker / TransferLocker directly.
  * @dev Proxy-initialized. Separation:
  *        - `EligibilityStore` — CRE squads + `recordAppearances` / score math (own proxy)
- *        - `EligibilityCriteria` — governance thresholds only
- *        - this contract — scan, classify, Automator handoff
- *
- *      Squads CRE reports → Store `onReport`.
- *      PpmVerifier → Store `recordAppearances`.
- *      `verifyEligibility` syncs + reads a lean `VerifySnapshot` (current-league
- *      `LeagueMinutes` only), then classifies deploy / continuity cohorts.
+ *        - `EligibilityCriteria` — owner-tunable thresholds only
+ *        - this contract — scan, classify, locker handoff
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -61,20 +57,23 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
     /// @param addressProvider_ Canonical `AddressProvider`.
     /// @param cooldown_ Min seconds between `verifyEligibility` pages.
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_, uint256 cooldown_) AddressBook(addressProvider_) RateLimit(cooldown_) {
+    constructor(address addressProvider_, uint256 cooldown_)
+        AddressBook(addressProvider_)
+        Ownable(msg.sender)
+        RateLimit(cooldown_)
+    {
         _disableInitializers();
     }
 
     /**
-     * @notice Proxy init: roles, criteria defaults, wire to `EligibilityStore`.
+     * @notice Proxy init: ownership, criteria defaults, wire to `EligibilityStore`.
      * @dev Resolves `ELIGIBILITY_STORE` from AddressProvider (must be registered first).
      */
     function initialize() external initializer {
-        address dao_ = _getAddress(_addressKey(Addresses.DAO));
-        address constitutionalTimelock_ = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
         address store_ = _getAddress(_addressKey(Addresses.ELIGIBILITY_STORE));
 
-        __EligibilityCriteria_init(constitutionalTimelock_, dao_);
+        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
+        __EligibilityCriteria_init();
         store = IEligibilityStore(store_);
     }
 
@@ -89,7 +88,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
      *      2) Idle-decay `LeagueMinutes` for `currentLeagueId` → `G_now` (`syncAndSnapshot`)
      *      3) Classify from lean snapshot (current-league score only)
      *      4) Drain SORT change buckets (`_drainChangers`)
-     *      5) Automator → DopplerLocker / TransferLocker
+     *      5) Enqueue DopplerLocker / TransferLocker directly
      *      Continuity uses `thresholdNewTransfer` when `startYearCurrentLeague` matches
      *      the live season (cross-league tenure / first-year in league).
      */
@@ -244,10 +243,6 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
 
     function _tournamentRegistry() internal view returns (ITournamentRegistry) {
         return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-    }
-
-    function _automator() internal view returns (IAutomator) {
-        return IAutomator(_getAddress(_addressKey(Addresses.AUTOMATOR)));
     }
 
     function _dopplerLocker() internal view returns (IDopplerLocker) {
@@ -440,19 +435,12 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
     }
 
     function _enqueueEligible(EligibilityGroups memory groups) private {
-        _automator()
-            .executeAutomation(
-                address(_dopplerLocker()), 0, abi.encodeWithSelector(IDopplerLocker.enqueueEligible.selector, groups)
-            );
+        // Identical layout to locker `EligibilityGroups` (separate type modules).
+        _dopplerLocker().enqueueEligible(abi.decode(abi.encode(groups), (LockerEligibilityGroups)));
     }
 
     function _enqueueLifecycle(bytes32[] memory ids, LifecycleReason reason, uint32[] memory effectiveMins) private {
-        _automator()
-            .executeAutomation(
-                address(_transferLocker()),
-                0,
-                abi.encodeWithSelector(ITransferLocker.enqueueLifecycle.selector, ids, reason, effectiveMins)
-            );
+        _transferLocker().enqueueLifecycle(ids, reason, effectiveMins);
     }
 
     function _compactIds(bytes32[] memory src, uint256 n) private pure returns (bytes32[] memory out) {

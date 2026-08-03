@@ -7,12 +7,12 @@ import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTy
  * @title ITransferLocker
  * @notice Waiting-room intake for deployed players flagged for deactivate / reactivate.
  * @dev Mirrors DopplerLocker waiting room. Actual status writes happen later after
- *      manual review (Automator path), not at enqueue time.
+ *      manual review (Orchestrator path), not at enqueue time.
  */
 interface ITransferLocker {
     /**
      * @notice Queue players for lifecycle review (same `reason` / parallel `effectiveMins`).
-     * @dev Called by `Automator` only (EV/Store relay via `executeAutomation`).
+     * @dev Called by `EligibilityVerifier` or Orchestrator owner.
      *      Skips zero ids and already-queued players for that direction (deactivate vs reactivate).
      *      `effectiveMins.length` must be 0 (treated as all zeros) or equal `playerIds.length`.
      */

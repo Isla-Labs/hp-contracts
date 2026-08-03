@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
 import { Hub, Season, Tournament, TournamentType, RoundSchedule } from "@types/TournamentTypes.sol";
@@ -23,9 +22,8 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
  *        - `UCL`: CONTINENTAL, feeHubs = all domestic hubs, treasury = UCL pot
  *
  *      Access:
- *      - `CATEGORY_ONE` (`ConstitutionalTimelock` / `DeployTournament`): `registerHub`,
- *        tournament create, `linkHub`, vault membership.
- *      - `CATEGORY_TWO` / `CATEGORY_THREE`: vault membership + season calendar (cat-3).
+ *      - Owner (`Orchestrator`): `registerHub`, tournament create, `linkHub`, vault membership,
+ *        and season calendar.
  *
  *      Vault membership is the SoT here; each write syncs a local cache on the tournament's
  *      `PbrTreasury` so crank paths never re-read this registry for the vault set.
@@ -33,7 +31,7 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITournamentRegistry {
+contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentRegistry {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -53,45 +51,23 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
     mapping(bytes32 tournamentId => mapping(address vault => bool)) private _isVaultRegistered;
 
     // --------------------------------------------
-    //  Access
-    // --------------------------------------------
-
-    modifier onlyMembershipAdmin() {
-        address sender = _msgSender();
-        if (
-            !hasRole(Roles.CATEGORY_ONE, sender) && !hasRole(Roles.CATEGORY_TWO, sender)
-                && !hasRole(Roles.CATEGORY_THREE, sender)
-        ) {
-            revert Errors.NotAuthorized();
-        }
-        _;
-    }
-
-    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) {
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
         _disableInitializers();
     }
 
-    /// @notice Resolves DAO / cat-1 / Automator / `PlayerSetRegistry` from `AddressProvider` once.
+    /// @notice Transfers ownership to `Orchestrator` and resolves `PlayerSetRegistry` from `AddressProvider` once.
     function initialize() external initializer {
-        address constitutionalTimelock_ = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
-        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
-        address dao_ = _getAddress(_addressKey(Addresses.DAO));
-        address playerSetRegistry_ = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
-
-        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
-        _grantRole(Roles.CATEGORY_THREE, automator_);
+        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
+        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
     }
 
     // --------------------------------------------
-    //  Domestic hubs (FeeRouter) — CATEGORY_ONE
+    //  Domestic hubs (FeeRouter) — owner
     // --------------------------------------------
 
     /**
@@ -100,7 +76,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
      *      STEP1: call registerHub
      *      STEP2: call createTournament
      */
-    function registerHub(Hub calldata hub) external onlyRole(Roles.CATEGORY_ONE) {
+    function registerHub(Hub calldata hub) external onlyOwner {
         if (hub.leagueId == bytes32(0)) revert Errors.ZeroId();
         if (hub.pbrFeeHub == address(0)) revert Errors.ZeroAddress();
         if (pbrFeeHubOf[hub.leagueId] != address(0)) revert Errors.HubAlreadyRegistered(hub.leagueId);
@@ -111,7 +87,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
     }
 
     // --------------------------------------------
-    //  Tournament registration — CATEGORY_ONE
+    //  Tournament registration — owner
     // --------------------------------------------
 
     /**
@@ -127,7 +103,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
         TournamentType tournamentType,
         Hub[] calldata feeHubs,
         address pbrTreasury
-    ) external onlyRole(Roles.CATEGORY_ONE) {
+    ) external onlyOwner {
         if (tournamentId == bytes32(0)) revert Errors.ZeroId();
         if (pbrTreasury == address(0)) revert Errors.ZeroAddress();
         if (_tournaments[tournamentId].tournamentId != bytes32(0)) revert Errors.Exists();
@@ -157,7 +133,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
      * @dev Used when a new domestic league comes online and existing multi-hub tournaments must
      *      include its hub. Domestic leagues/cups get their hub only at `createTournament`.
      */
-    function linkHub(bytes32 tournamentId, Hub calldata hub) external onlyRole(Roles.CATEGORY_ONE) {
+    function linkHub(bytes32 tournamentId, Hub calldata hub) external onlyOwner {
         Tournament storage t = _requireTournament(tournamentId);
         TournamentType tournamentType = t.tournamentType;
         if (tournamentType != TournamentType.CONTINENTAL && tournamentType != TournamentType.INTERNATIONAL) {
@@ -167,11 +143,11 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
     }
 
     // --------------------------------------------
-    //  Vault membership SoT — CATEGORY_ONE / TWO / THREE
+    //  Vault membership SoT — owner
     // --------------------------------------------
 
     /// @inheritdoc ITournamentRegistry
-    function registerVaults(bytes32 tournamentId, address[] calldata vaults) external onlyMembershipAdmin {
+    function registerVaults(bytes32 tournamentId, address[] calldata vaults) external onlyOwner {
         Tournament storage t = _requireTournament(tournamentId);
         address treasury = t.pbrTreasury;
         uint256 length = vaults.length;
@@ -181,7 +157,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
     }
 
     /// @inheritdoc ITournamentRegistry
-    function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external onlyMembershipAdmin {
+    function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external onlyOwner {
         Tournament storage t = _requireTournament(tournamentId);
         address treasury = t.pbrTreasury;
         uint256 length = vaults.length;
@@ -191,7 +167,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
     }
 
     // --------------------------------------------
-    //  Season calendar — CATEGORY_THREE
+    //  Season calendar — owner
     // --------------------------------------------
 
     /**
@@ -206,7 +182,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
         bytes32 seasonId,
         uint16 seasonStartYear,
         uint32 finalRound
-    ) external onlyRole(Roles.CATEGORY_THREE) {
+    ) external onlyOwner {
         if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
         if (finalRound == 0) revert Errors.InvalidFinalRound();
 
@@ -235,7 +211,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
         bytes32 tournamentId,
         uint16 seasonStartYear,
         RoundSchedule calldata round
-    ) external onlyRole(Roles.CATEGORY_THREE) {
+    ) external onlyOwner {
         _upsertRound(tournamentId, seasonStartYear, round);
     }
 
@@ -244,7 +220,7 @@ contract TournamentRegistry is Initializable, AddressBook, AccessControl, ITourn
         bytes32 tournamentId,
         uint16 seasonStartYear,
         RoundSchedule[] calldata rounds
-    ) external onlyRole(Roles.CATEGORY_THREE) {
+    ) external onlyOwner {
         uint256 length = rounds.length;
         for (uint256 i; i < length; ++i) {
             _upsertRound(tournamentId, seasonStartYear, rounds[i]);

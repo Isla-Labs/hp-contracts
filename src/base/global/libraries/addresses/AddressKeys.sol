@@ -4,12 +4,9 @@ pragma solidity ^0.8.34;
 /// @notice Canonical `AddressProvider` name keys (`keccak256(bytes(name))`).
 /// @dev Keep in sync with `HP8453` / `HP84532` constant names.
 library AddressKeys {
-    // Governance
-    string internal constant DAO = "DAO";
-    string internal constant CONSTITUTIONAL_TIMELOCK = "CONSTITUTIONAL_TIMELOCK";
-    string internal constant MAINTENANCE_TIMELOCK = "MAINTENANCE_TIMELOCK";
-    string internal constant AUTOMATOR = "AUTOMATOR";
-    string internal constant CREATE_TOURNAMENT = "CREATE_TOURNAMENT";
+    // Access
+    string internal constant ORCHESTRATOR = "ORCHESTRATOR";
+    string internal constant DEPLOY_TOURNAMENT = "DEPLOY_TOURNAMENT";
 
     // Registries
     string internal constant TOURNAMENT_REGISTRY = "TOURNAMENT_REGISTRY";

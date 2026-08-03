@@ -11,6 +11,7 @@ library DeploymentsErrors {
     error Unauthorized();
     error AlreadySet();
     error NotConfigured();
+    error ExecutionFailed(address target, bytes reason);
     error InvalidTournamentType(TournamentType actual, TournamentType expected);
     error UnsupportedTournamentType(TournamentType tournamentType);
     error EmptyHubs();

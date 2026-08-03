@@ -13,7 +13,7 @@ import { ProxyUtils } from "../utils/ProxyUtils.sol";
  * @notice Deploy a new CvmRouter implementation, upgrade the proxy from
  *         `deployments/base-sepolia-oracle.json`, seed per-job exclusives, and
  *         write `cvmRouterImpl` back to that file.
- * @dev Env: PRIVATE_KEY (must own ProxyAdmin; typically also CATEGORY_ONE for seed).
+ * @dev Env: PRIVATE_KEY (must own ProxyAdmin; typically also Ownable owner for seed).
  *      Makefile: `make upgrade-base-sepolia-cvm-router`
  */
 contract UpgradeCvmRouter is Script, ProxyUtils, OracleDeployment {
@@ -25,7 +25,7 @@ contract UpgradeCvmRouter is Script, ProxyUtils, OracleDeployment {
         vm.startBroadcast(privateKey);
         CvmRouter impl = new CvmRouter();
         _upgradeAndCall(proxy, address(impl), "");
-        // upgradeAndCall is admin-scoped; seed as the broadcaster (Cat-1 / deployer).
+        // upgradeAndCall is admin-scoped; seed as the broadcaster (owner / deployer).
         CvmRouter(proxy).seedDefaultJobExclusives();
         vm.stopBroadcast();
 

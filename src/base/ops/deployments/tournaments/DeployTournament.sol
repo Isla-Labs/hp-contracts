@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 
 import { Hub, RoundSchedule, TournamentType } from "@types/TournamentTypes.sol";
 import { VaultData } from "@types/PlayerSetTypes.sol";
 
+import { IOrchestrator } from "@interfaces/IOrchestrator.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 
@@ -19,18 +19,11 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
 
 /**
  * @title DeployTournament
- * @notice Cat-1 orchestrator for atomic tournament bootstrap via `ConstitutionalTimelock`.
- * @dev Access:
- *        - `CATEGORY_ONE` (`ConstitutionalTimelock`): `configureFactories`, all `deploy*` entrypoints
- *          (except genesis).
- *        - `DEFAULT_ADMIN_ROLE` (Aragon DAO): role admin; `deployDomesticLeagueGenesis` when the
- *          registry has zero tournaments (day-one bootstrap without the constitutional delay).
- *
- *      After the constitutional delay, Timelock calls a typed `deploy*` entrypoint with
- *      pre-formatted calldata. This contract must also hold:
- *        - `CATEGORY_ONE` + `CATEGORY_THREE` on `TournamentRegistry`
- *        - `CATEGORY_ONE` on each `PbrFeeHub` (granted at hub initialize)
- *      New treasuries grant this contract `CATEGORY_THREE` at initialize (via factory).
+ * @notice Ownable entry API for atomic tournament bootstrap.
+ * @dev Owner is the EOA or Safe. Privileged factory / registry / hub writes are relayed
+ *      through `Orchestrator.execute` so `msg.sender` on targets is the Orchestrator
+ *      (which owns those contracts). This contract must hold `AUTHORIZED_CONTRACT` on
+ *      the Orchestrator.
  *
  *      Flows:
  *        - `DOMESTIC_LEAGUE`: deploy treasury + new fee hub, `registerHub`, create tournament
@@ -38,22 +31,20 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
  *        - `CONTINENTAL`: deploy treasury, attach under selected existing league hubs
  *        - `INTERNATIONAL`: deploy treasury, attach under all existing league hubs
  *
- *      Non-league types also append the new treasury onto each hub's destination list
- *      (`setDomesticCups` / `setContinental` / `setInternational`).
- *
- *      Deploy order (addresses):
- *        1. Deploy this contract (factories unset)
- *        2. Deploy `PbrTreasuryFactory` / `PbrFeeHubFactory` with `CREATE_TOURNAMENT = this`
- *        3. Timelock calls `configureFactories` once
+ *      Deploy order:
+ *        1. Deploy Orchestrator + registries; grant this contract `AUTHORIZED_CONTRACT`
+ *        2. Deploy factories with `orchestrator == Orchestrator`
+ *        3. Owner calls `configureFactories` once
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract DeployTournament is AccessControl {
+contract DeployTournament is Ownable {
     // --------------------------------------------
     //  Immutables / wiring
     // --------------------------------------------
 
+    IOrchestrator public immutable orchestrator;
     ITournamentRegistry public immutable tournamentRegistry;
     IPlayerSetRegistry public immutable playerSetRegistry;
 
@@ -123,43 +114,35 @@ contract DeployTournament is AccessControl {
     // --------------------------------------------
 
     /**
-     * @param constitutionalTimelock_ `ConstitutionalTimelock` — `CATEGORY_ONE`.
-     * @param dao_ Aragon DAO — `DEFAULT_ADMIN_ROLE`.
+     * @param owner_ EOA or Safe — sole caller of `deploy*` / `configureFactories`.
+     * @param orchestrator_ Canonical `Orchestrator` (this contract must be `AUTHORIZED_CONTRACT`).
      * @param tournamentRegistry_ Canonical tournament registry.
      * @param playerSetRegistry_ Canonical player set registry.
      */
     constructor(
-        address constitutionalTimelock_,
-        address dao_,
+        address owner_,
+        address orchestrator_,
         address tournamentRegistry_,
         address playerSetRegistry_
-    ) {
-        if (
-            constitutionalTimelock_ == address(0) || dao_ == address(0) || tournamentRegistry_ == address(0)
-                || playerSetRegistry_ == address(0)
-        ) {
+    ) Ownable(owner_) {
+        if (orchestrator_ == address(0) || tournamentRegistry_ == address(0) || playerSetRegistry_ == address(0)) {
             revert Errors.ZeroAddress();
         }
 
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, constitutionalTimelock_);
-
+        orchestrator = IOrchestrator(orchestrator_);
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
     }
 
     /**
-     * @notice One-shot factory wiring after factories are deployed with `CREATE_TOURNAMENT = this`.
+     * @notice One-shot factory wiring after factories are deployed with `orchestrator == Orchestrator`.
      */
-    function configureFactories(
-        address pbrTreasuryFactory_,
-        address pbrFeeHubFactory_
-    ) external onlyRole(Roles.CATEGORY_ONE) {
+    function configureFactories(address pbrTreasuryFactory_, address pbrFeeHubFactory_) external onlyOwner {
         if (factoriesConfigured) revert Errors.Unauthorized();
         if (pbrTreasuryFactory_ == address(0) || pbrFeeHubFactory_ == address(0)) revert Errors.ZeroAddress();
         if (
-            IPbrTreasuryFactory(pbrTreasuryFactory_).createTournament() != address(this)
-                || IPbrFeeHubFactory(pbrFeeHubFactory_).createTournament() != address(this)
+            IPbrTreasuryFactory(pbrTreasuryFactory_).orchestrator() != address(orchestrator)
+                || IPbrFeeHubFactory(pbrFeeHubFactory_).orchestrator() != address(orchestrator)
         ) {
             revert Errors.Unauthorized();
         }
@@ -174,30 +157,12 @@ contract DeployTournament is AccessControl {
     //  DOMESTIC_LEAGUE
     // --------------------------------------------
 
-    /**
-     * @notice Deploy treasury + fee hub, register hub, create league tournament, optional bootstrap.
-     * @dev Constitutional path — subject to the cat-1 timelock delay.
-     */
+    /// @notice Deploy treasury + fee hub, register hub, create league tournament, optional bootstrap.
     function deployDomesticLeague(DomesticLeagueParams calldata params)
         external
-        onlyRole(Roles.CATEGORY_ONE)
+        onlyOwner
         returns (DeployResult memory result)
     {
-        result = _deployDomesticLeague(params);
-    }
-
-    /**
-     * @notice Day-one league bootstrap: same as `deployDomesticLeague`, but callable by the DAO
-     *         without the constitutional delay when no tournaments exist yet.
-     * @dev Reverts if `TournamentRegistry.tournamentCount() != 0`.
-     */
-    function deployDomesticLeagueGenesis(DomesticLeagueParams calldata params)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-        returns (DeployResult memory result)
-    {
-        uint256 count = tournamentRegistry.tournamentCount();
-        if (count != 0) revert Errors.TournamentsExist(count);
         result = _deployDomesticLeague(params);
     }
 
@@ -205,12 +170,10 @@ contract DeployTournament is AccessControl {
     //  DOMESTIC_CUP
     // --------------------------------------------
 
-    /**
-     * @notice Deploy cup treasury under an existing domestic league hub; wire hub destinations.
-     */
+    /// @notice Deploy cup treasury under an existing domestic league hub; wire hub destinations.
     function deployDomesticCup(DomesticCupParams calldata params)
         external
-        onlyRole(Roles.CATEGORY_ONE)
+        onlyOwner
         returns (DeployResult memory result)
     {
         BootstrapParams calldata b = params.bootstrap;
@@ -226,19 +189,17 @@ contract DeployTournament is AccessControl {
         feeHubs[0] = Hub({ leagueId: params.leagueId, pbrFeeHub: hubAddr });
 
         _finalize(TournamentType.DOMESTIC_CUP, b, feeHubs, result.pbrTreasury);
-        _appendTreasuryToHub(IPbrFeeHub(hubAddr), TournamentType.DOMESTIC_CUP, result.pbrTreasury);
+        _appendTreasuryToHub(hubAddr, TournamentType.DOMESTIC_CUP, result.pbrTreasury);
     }
 
     // --------------------------------------------
     //  CONTINENTAL
     // --------------------------------------------
 
-    /**
-     * @notice Deploy continental treasury under selected existing league hubs; wire destinations.
-     */
+    /// @notice Deploy continental treasury under selected existing league hubs; wire destinations.
     function deployContinental(ContinentalParams calldata params)
         external
-        onlyRole(Roles.CATEGORY_ONE)
+        onlyOwner
         returns (DeployResult memory result)
     {
         BootstrapParams calldata b = params.bootstrap;
@@ -256,12 +217,10 @@ contract DeployTournament is AccessControl {
     //  INTERNATIONAL
     // --------------------------------------------
 
-    /**
-     * @notice Deploy international treasury under every registered domestic league hub.
-     */
+    /// @notice Deploy international treasury under every registered domestic league hub.
     function deployInternational(InternationalParams calldata params)
         external
-        onlyRole(Roles.CATEGORY_ONE)
+        onlyOwner
         returns (DeployResult memory result)
     {
         BootstrapParams calldata b = params.bootstrap;
@@ -311,10 +270,16 @@ contract DeployTournament is AccessControl {
         _validateBootstrap(b);
 
         result.pbrTreasury = _deployTreasury(b);
-        result.pbrFeeHub = pbrFeeHubFactory.create(b.tournamentId, result.pbrTreasury);
+        result.pbrFeeHub = abi.decode(
+            _exec(
+                address(pbrFeeHubFactory),
+                abi.encodeCall(IPbrFeeHubFactory.create, (b.tournamentId, result.pbrTreasury))
+            ),
+            (address)
+        );
 
         Hub memory hub = Hub({ leagueId: b.tournamentId, pbrFeeHub: result.pbrFeeHub });
-        tournamentRegistry.registerHub(hub);
+        _exec(address(tournamentRegistry), abi.encodeCall(ITournamentRegistry.registerHub, (hub)));
 
         Hub[] memory feeHubs = new Hub[](1);
         feeHubs[0] = hub;
@@ -358,7 +323,15 @@ contract DeployTournament is AccessControl {
     }
 
     function _deployTreasury(BootstrapParams calldata b) internal returns (address pbrTreasury) {
-        pbrTreasury = pbrTreasuryFactory.create(b.tournamentId, b.initialSeason, b.treasury.salt, b.treasury.expected);
+        pbrTreasury = abi.decode(
+            _exec(
+                address(pbrTreasuryFactory),
+                abi.encodeCall(
+                    IPbrTreasuryFactory.create, (b.tournamentId, b.initialSeason, b.treasury.salt, b.treasury.expected)
+                )
+            ),
+            (address)
+        );
     }
 
     function _finalize(
@@ -367,17 +340,26 @@ contract DeployTournament is AccessControl {
         Hub[] memory feeHubs,
         address pbrTreasury
     ) internal {
-        tournamentRegistry.createTournament(b.tournamentId, tournamentType, feeHubs, pbrTreasury);
+        _exec(
+            address(tournamentRegistry),
+            abi.encodeCall(ITournamentRegistry.createTournament, (b.tournamentId, tournamentType, feeHubs, pbrTreasury))
+        );
 
         if (b.openSeasonData.length != 0) {
             if (b.openSeasonData.length != 96) revert Errors.InvalidOpenSeasonData();
             (bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) =
                 abi.decode(b.openSeasonData, (bytes32, uint16, uint32));
-            tournamentRegistry.openSeason(b.tournamentId, seasonId, seasonStartYear, finalRound);
+            _exec(
+                address(tournamentRegistry),
+                abi.encodeCall(ITournamentRegistry.openSeason, (b.tournamentId, seasonId, seasonStartYear, finalRound))
+            );
         }
 
         if (b.rounds.length != 0) {
-            tournamentRegistry.upsertRounds(b.tournamentId, b.roundsSeasonStartYear, b.rounds);
+            _exec(
+                address(tournamentRegistry),
+                abi.encodeCall(ITournamentRegistry.upsertRounds, (b.tournamentId, b.roundsSeasonStartYear, b.rounds))
+            );
         }
 
         if (b.registeredPlayers.length != 0) {
@@ -404,17 +386,20 @@ contract DeployTournament is AccessControl {
     function _appendTreasuryToHubs(Hub[] memory feeHubs, TournamentType tournamentType, address treasury) internal {
         uint256 length = feeHubs.length;
         for (uint256 i; i < length; ++i) {
-            _appendTreasuryToHub(IPbrFeeHub(feeHubs[i].pbrFeeHub), tournamentType, treasury);
+            _appendTreasuryToHub(feeHubs[i].pbrFeeHub, tournamentType, treasury);
         }
     }
 
-    function _appendTreasuryToHub(IPbrFeeHub hub, TournamentType tournamentType, address treasury) internal {
+    function _appendTreasuryToHub(address hubAddr, TournamentType tournamentType, address treasury) internal {
+        IPbrFeeHub hub = IPbrFeeHub(hubAddr);
         if (tournamentType == TournamentType.DOMESTIC_CUP) {
-            hub.setDomesticCups(_appendAddress(hub.getDomesticCups(), treasury));
+            _exec(hubAddr, abi.encodeCall(IPbrFeeHub.setDomesticCups, (_appendAddress(hub.getDomesticCups(), treasury))));
         } else if (tournamentType == TournamentType.CONTINENTAL) {
-            hub.setContinental(_appendAddress(hub.getContinental(), treasury));
+            _exec(hubAddr, abi.encodeCall(IPbrFeeHub.setContinental, (_appendAddress(hub.getContinental(), treasury))));
         } else if (tournamentType == TournamentType.INTERNATIONAL) {
-            hub.setInternational(_appendAddress(hub.getInternational(), treasury));
+            _exec(
+                hubAddr, abi.encodeCall(IPbrFeeHub.setInternational, (_appendAddress(hub.getInternational(), treasury)))
+            );
         } else {
             revert Errors.UnsupportedTournamentType(tournamentType);
         }
@@ -443,7 +428,10 @@ contract DeployTournament is AccessControl {
             vaults[i] = vault;
         }
 
-        // SoT write on TournamentRegistry; treasury cache is synced inside that call.
-        tournamentRegistry.registerVaults(tournamentId, vaults);
+        _exec(address(tournamentRegistry), abi.encodeCall(ITournamentRegistry.registerVaults, (tournamentId, vaults)));
+    }
+
+    function _exec(address target, bytes memory data) internal returns (bytes memory) {
+        return orchestrator.execute(target, 0, data);
     }
 }

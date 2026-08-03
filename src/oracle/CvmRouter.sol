@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { Pausable } from "@openzeppelin/utils/Pausable.sol";
 
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { CvmErrors as Errors } from "@errors/oracle/CvmErrors.sol";
 import { CvmEvents as Events } from "@events/oracle/CvmEvents.sol";
 import { ICvmClient } from "@interfaces/oracle/ICvmClient.sol";
@@ -22,7 +21,7 @@ import { CvmCommitment, CvmJob, CvmRouterConfig } from "@types/oracle/CvmTypes.s
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
+contract CvmRouter is Initializable, Ownable, Pausable, ICvmRouter {
     // --------------------------------------------
     //  Constants
     // --------------------------------------------
@@ -51,28 +50,25 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
     // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() Ownable(msg.sender) {
         _disableInitializers();
     }
 
     /**
-     * @param dao_ Aragon DAO / deployer — `DEFAULT_ADMIN_ROLE`.
-     * @param constitutional_ Cat-1 / deployer — pause + config.
+     * @param owner_ Orchestrator / deployer — pause + config + coordinator swaps.
      * @param coordinator_ `CvmCoordinator` proxy used for `isOracle` / oracle set.
      * @param config_ Initial router config.
      */
     function initialize(
-        address dao_,
-        address constitutional_,
+        address owner_,
         address coordinator_,
         CvmRouterConfig calldata config_
     ) external initializer {
-        if (dao_ == address(0) || constitutional_ == address(0) || coordinator_ == address(0)) {
+        if (owner_ == address(0) || coordinator_ == address(0)) {
             revert Errors.ZeroAddress();
         }
 
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_ONE, constitutional_);
+        _transferOwnership(owner_);
 
         _coordinator = ICvmCoordinator(coordinator_);
         _setConfig(config_);
@@ -216,32 +212,32 @@ contract CvmRouter is Initializable, AccessControl, Pausable, ICvmRouter {
     //  Admin
     // --------------------------------------------
 
-    function updateConfig(CvmRouterConfig calldata config_) external onlyRole(Roles.CATEGORY_ONE) {
+    function updateConfig(CvmRouterConfig calldata config_) external onlyOwner {
         _setConfig(config_);
     }
 
     /// @notice Tune soft-assignee exclusive window for a job (must be > 0 and ≤ `requestTimeout`).
-    function setJobExclusiveSeconds(CvmJob job, uint32 exclusiveSeconds) external onlyRole(Roles.CATEGORY_ONE) {
+    function setJobExclusiveSeconds(CvmJob job, uint32 exclusiveSeconds) external onlyOwner {
         if (job == CvmJob.None) revert Errors.InvalidJob(job);
         _setJobExclusive(job, exclusiveSeconds);
     }
 
     /// @notice Seed / refresh default per-job exclusives (for upgrades that add the mapping).
-    function seedDefaultJobExclusives() external onlyRole(Roles.CATEGORY_ONE) {
+    function seedDefaultJobExclusives() external onlyOwner {
         _setDefaultJobExclusives();
     }
 
     /// @notice Point at a new coordinator proxy (rare; same-chain registry swap).
-    function setCoordinator(address coordinator_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setCoordinator(address coordinator_) external onlyOwner {
         if (coordinator_ == address(0)) revert Errors.ZeroAddress();
         _coordinator = ICvmCoordinator(coordinator_);
     }
 
-    function pause() external onlyRole(Roles.CATEGORY_ONE) {
+    function pause() external onlyOwner {
         _pause();
     }
 
-    function unpause() external onlyRole(Roles.CATEGORY_ONE) {
+    function unpause() external onlyOwner {
         _unpause();
     }
 

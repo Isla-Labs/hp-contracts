@@ -2,19 +2,19 @@ forge-std/=lib/forge-std/src/
 
 @errors/=src/base/global/libraries/errors/
 @events/=src/base/global/libraries/events/
-@roles/=src/base/global/libraries/roles/
 @types/=src/base/global/types/
 @interfaces/=src/base/global/interfaces/
 @addresses/=src/base/global/libraries/addresses/
 
 @src/=src/
 @base/=src/base/
-@markets/=src/markets/
-@vaults/=src/vaults/
-@routers/=src/routers/
-@governance/=src/governance/
 @data/=src/data/
-@stabilityeth/=src/stabilityeth/
+@deployments/=src/base/ops/deployments/
+@markets/=src/markets/
+@oracle/=src/oracle/
+@registries/=src/base/ops/registries/
+@routers/=src/routers/
+@vaults/=src/vaults/
 
 @doppler/=lib/doppler/
 @cre/=lib/chainlink-evm/contracts/cre/src/

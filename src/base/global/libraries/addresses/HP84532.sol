@@ -4,13 +4,9 @@ pragma solidity ^0.8.34;
 import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
 library HP85432 {
-    //  Aragon Multisig
-    address internal constant DAO = 0x0000000000000000000000000000000000000000;
-
-    //  Intra-repo access control (cat-1, cat-2, cat-3)
-    address internal constant CONSTITUTIONAL_TIMELOCK = 0x0000000000000000000000000000000000000000;
-    address internal constant MAINTENANCE_TIMELOCK = 0x0000000000000000000000000000000000000000;
-    address internal constant AUTOMATOR = 0x0000000000000000000000000000000000000000;
+    //  Access
+    address internal constant ORCHESTRATOR = 0x0000000000000000000000000000000000000000;
+    address internal constant DEPLOY_TOURNAMENT = 0x0000000000000000000000000000000000000000;
 
     //  Registries
     address internal constant TOURNAMENT_REGISTRY = 0x0000000000000000000000000000000000000000;
@@ -20,7 +16,6 @@ library HP85432 {
     //  Lockers
     address internal constant DOPPLER_LOCKER = 0x0000000000000000000000000000000000000000;
     address internal constant TRANSFER_LOCKER = 0x0000000000000000000000000000000000000000;
-    address internal constant CREATE_TOURNAMENT = 0x0000000000000000000000000000000000000000;
 
     //  Factories
     address internal constant PBR_FEE_HUB_FACTORY = 0x0000000000000000000000000000000000000000;
@@ -51,7 +46,7 @@ library HP85432 {
     address internal constant DOPPLER_HOOK_MIGRATOR = 0x1E40b0875DDa35f41E15cFB475403859B8c860c4;
     address internal constant REHYPE_DOPPLER_HOOK_MIGRATOR = 0x9349E5A3e6458aa65E2fB7ED67e9aD08Ae7F660D;
     address internal constant NUMERAIRE = 0x0000000000000000000000000000000000000000;
-    address internal constant INTEGRATOR = DAO;
+    address internal constant INTEGRATOR = ORCHESTRATOR;
 
     /// @dev Airlock Ownable owner — resolved at call time (not a compile-time constant).
     function airlockOwner() internal view returns (address) {

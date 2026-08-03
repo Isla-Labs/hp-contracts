@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { EnumerableSet } from "@openzeppelin/utils/structs/EnumerableSet.sol";
 
@@ -18,13 +18,13 @@ import { AttestationClaim, OracleRegistration } from "@types/oracle/CvmTypes.sol
  *      gates who may `registerOracle` / `fulfill` on Base via TEE attestation + compose policy.
  *
  *      Intended behind `TransparentUpgradeableProxy` (stable address → no CVM sealed-env churn
- *      on logic upgrades). ProxyAdmin owner = DAO / deployer initially.
+ *      on logic upgrades). Owner / ProxyAdmin = Orchestrator (or deployer initially).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  * @custom:see ./deviceRegistration.md
  */
-contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
+contract CvmCoordinator is Initializable, Ownable, ICvmCoordinator {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     // --------------------------------------------
@@ -45,24 +45,24 @@ contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
     // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() Ownable(msg.sender) {
         _disableInitializers();
     }
 
     /**
-     * @param dao_ Aragon DAO / deployer — `DEFAULT_ADMIN_ROLE` (compose policy, verifier, TTL).
+     * @param owner_ Orchestrator / deployer — compose policy, verifier, TTL.
      * @param attestationVerifier_ Optional; required before permissionless `registerOracle`.
      * @param registrationTtl_ Live registration lifetime in seconds.
      */
     function initialize(
-        address dao_,
+        address owner_,
         address attestationVerifier_,
         uint64 registrationTtl_
     ) external initializer {
-        if (dao_ == address(0)) revert Errors.ZeroAddress();
+        if (owner_ == address(0)) revert Errors.ZeroAddress();
         if (registrationTtl_ == 0) revert Errors.ZeroRegistrationTtl();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
+        _transferOwnership(owner_);
 
         _registrationTtl = registrationTtl_;
         emit Events.RegistrationTtlSet(registrationTtl_);
@@ -156,11 +156,11 @@ contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
     }
 
     // --------------------------------------------
-    //  Compose / policy governance (DAO)
+    //  Compose / policy (owner)
     // --------------------------------------------
 
     /// @inheritdoc ICvmCoordinator
-    function addComposeHash(bytes32 composeHash) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function addComposeHash(bytes32 composeHash) external onlyOwner {
         if (composeHash == bytes32(0)) revert Errors.ZeroComposeHash();
         _composeAllowed[composeHash] = true;
         emit Events.ComposeHashAdded(composeHash);
@@ -168,7 +168,7 @@ contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
     }
 
     /// @inheritdoc ICvmCoordinator
-    function removeComposeHash(bytes32 composeHash) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function removeComposeHash(bytes32 composeHash) external onlyOwner {
         if (composeHash == bytes32(0)) revert Errors.ZeroComposeHash();
         _composeAllowed[composeHash] = false;
         emit Events.ComposeHashRemoved(composeHash);
@@ -176,14 +176,14 @@ contract CvmCoordinator is Initializable, AccessControl, ICvmCoordinator {
     }
 
     /// @inheritdoc ICvmCoordinator
-    function setAttestationVerifier(address verifier) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setAttestationVerifier(address verifier) external onlyOwner {
         if (verifier == address(0)) revert Errors.ZeroAddress();
         _attestationVerifier = IAttestationVerifier(verifier);
         emit Events.AttestationVerifierSet(verifier);
     }
 
     /// @inheritdoc ICvmCoordinator
-    function setRegistrationTtl(uint64 ttl) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setRegistrationTtl(uint64 ttl) external onlyOwner {
         if (ttl == 0) revert Errors.ZeroRegistrationTtl();
         _registrationTtl = ttl;
         emit Events.RegistrationTtlSet(ttl);

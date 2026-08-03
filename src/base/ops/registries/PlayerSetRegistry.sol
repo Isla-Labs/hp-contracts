@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { AccessRoles as Roles } from "@roles/AccessRoles.sol";
 import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
 import {
@@ -25,15 +24,15 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
  * @title PlayerSetRegistry
  * @notice Canonical per-player market discovery set (`playerId` → `PlayerSet`).
  * @dev Access:
- *      - `CATEGORY_THREE` (`Automator` / `DeployTournament`): registration, status, league /
- *        optional `activeTournaments` index, and Doppler updates.
+ *      - Owner (`Orchestrator`): registration, status, league / optional `activeTournaments`
+ *        index, and Doppler updates.
  *      - Vault membership SoT is `TournamentRegistry` (not mirrored here).
  *      - Registered vaults: `updateUtilization` via `onlyVault`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayerSetRegistry {
+contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetRegistry {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -55,37 +54,24 @@ contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayer
         _;
     }
 
-    /// @dev Automator (cat-3) or MaintenanceTimelock (cat-2) for vault registry repairs.
-    modifier onlyCategoryTwoOrThree() {
-        address sender = _msgSender();
-        if (!hasRole(Roles.CATEGORY_TWO, sender) && !hasRole(Roles.CATEGORY_THREE, sender)) {
-            revert Errors.NotAuthorized();
-        }
-        _;
-    }
-
     // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) {
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
         _disableInitializers();
     }
 
-    /// @notice Resolves TournamentRegistry / DAO / Automator from `AddressProvider` once.
+    /// @notice Transfers ownership to `Orchestrator` and resolves `TournamentRegistry` from `AddressProvider` once.
     function initialize() external initializer {
+        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
         tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-        address automator_ = _getAddress(_addressKey(Addresses.AUTOMATOR));
-        address dao_ = _getAddress(_addressKey(Addresses.DAO));
-
-        _grantRole(DEFAULT_ADMIN_ROLE, dao_);
-        _grantRole(Roles.CATEGORY_THREE, automator_);
     }
 
     // --------------------------------------------
-    //  Registration (CATEGORY_THREE)
+    //  Registration (owner)
     // --------------------------------------------
 
     /**
@@ -97,7 +83,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayer
         TokenData calldata tokenData,
         TournamentData calldata tournamentData,
         DopplerData calldata dopplerData
-    ) external onlyRole(Roles.CATEGORY_THREE) {
+    ) external onlyOwner {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
         if (tokenData.token == address(0)) revert Errors.ZeroAddress();
         if (
@@ -130,7 +116,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayer
     /**
      * @notice Attaches vault + stToken after `PlayerVault` deployment.
      */
-    function addVaultData(bytes32 playerId, VaultData calldata vaultData) external onlyRole(Roles.CATEGORY_THREE) {
+    function addVaultData(bytes32 playerId, VaultData calldata vaultData) external onlyOwner {
         PlayerSet storage set = _requirePlayer(playerId);
         if (set.vaultData.playerVault != address(0)) revert Errors.VaultDataAlreadySet(playerId);
         if (vaultData.playerVault == address(0) || vaultData.stToken == address(0)) revert Errors.ZeroAddress();
@@ -150,7 +136,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayer
     function addAdvancedTradeData(
         bytes32 playerId,
         AdvancedTradeData calldata data
-    ) external onlyRole(Roles.CATEGORY_THREE) {
+    ) external onlyOwner {
         PlayerSet storage set = _requirePlayer(playerId);
         if (set.advancedTradeData.advancedTradeVault != address(0)) {
             revert Errors.AdvancedTradeDataAlreadySet(playerId);
@@ -162,7 +148,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayer
     }
 
     /// @notice Updates Doppler fields after migration / hook replacement
-    function setDopplerData(bytes32 playerId, DopplerData calldata data) external onlyRole(Roles.CATEGORY_THREE) {
+    function setDopplerData(bytes32 playerId, DopplerData calldata data) external onlyOwner {
         _requirePlayer(playerId);
         if (data.hookDoppler == address(0) || data.hookMigrator == address(0) || data.feeRouter == address(0)) {
             revert Errors.ZeroAddress();
@@ -184,24 +170,24 @@ contract PlayerSetRegistry is Initializable, AddressBook, AccessControl, IPlayer
         emit Events.VaultDataUpdated(playerId, set.vaultData.playerVault, set.vaultData.stToken, isUtilized);
     }
 
-    function setStatus(bytes32 playerId, PlayerStatus status) external onlyCategoryTwoOrThree {
+    function setStatus(bytes32 playerId, PlayerStatus status) external onlyOwner {
         _requirePlayer(playerId);
         _playerSets[playerId].status = status;
         emit Events.StatusUpdated(playerId, status);
     }
 
-    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyCategoryTwoOrThree {
+    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyOwner {
         _requirePlayer(playerId);
         _playerSets[playerId].tournamentData.leagueId = leagueId;
         emit Events.LeagueIdUpdated(playerId, leagueId);
     }
 
-    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyCategoryTwoOrThree {
+    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyOwner {
         _requirePlayer(playerId);
         _addActiveTournament(playerId, tournamentId);
     }
 
-    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyCategoryTwoOrThree {
+    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyOwner {
         _requirePlayer(playerId);
         _removeActiveTournament(playerId, tournamentId);
     }

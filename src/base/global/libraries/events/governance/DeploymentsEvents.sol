@@ -15,13 +15,10 @@ library DeploymentsEvents {
 
     event FactoriesConfigured(address pbrTreasuryFactory, address pbrFeeHubFactory);
 
-    /// @notice Sole writer for `enqueueEligible` (`Automator`).
-    event AutomatorSet(address indexed automator);
-
-    /// @notice Minutes/metadata source for enqueue (`EligibilityVerifier`).
+    /// @notice Enqueue writer + metadata source (`EligibilityVerifier`).
     event EligibilityVerifierSet(address indexed eligibilityVerifier);
 
-    /// @notice Waiting-room intake via Automator (`added` new ids this call).
+    /// @notice Waiting-room intake (`added` new ids this call).
     event EligiblePlayersEnqueued(uint256 added, uint256 pendingTotal);
 
     //  DopplerConfig

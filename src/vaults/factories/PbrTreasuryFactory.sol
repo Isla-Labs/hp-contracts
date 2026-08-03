@@ -16,12 +16,12 @@ import { PbrTreasury } from "@vaults/PbrTreasury.sol";
 /**
  * @title PbrTreasuryFactory
  * @notice Deploys per-tournament `PbrTreasury` beacon proxies via CreateX CREATE3.
- * @dev Beacon ownership (logic upgrades) is assigned to `ConstitutionalTimelock`.
+ * @dev Beacon ownership (logic upgrades) is assigned to `Orchestrator`.
  *      CREATE3 addresses depend only on CreateX + this factory's guarded salt (not initcode), so
  *      vanity prefixes (e.g. `0x99…`) can be mined offline against `computeCreate3Address`.
  *      Prefer permissioned salts: `address(this) || 0x00 || entropy11` via `makeSalt`.
- *      `create` is restricted to `CREATE_TOURNAMENT` (cat-1 orchestrator via ConstitutionalTimelock).
- *      Protocol addresses are resolved once from `AddressProvider` in the factory constructor.
+ *      `create` is restricted to `Orchestrator`. Protocol addresses are resolved once from
+ *      `AddressProvider` in the factory constructor.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -31,36 +31,15 @@ contract PbrTreasuryFactory is AddressBook, IPbrTreasuryFactory {
 
     UpgradeableBeacon public immutable beacon;
 
-    /// @notice Granted `CATEGORY_THREE` on each treasury
-    address public immutable automator;
-
-    /// @notice Granted `CATEGORY_TWO` on each treasury
-    address public immutable maintenanceTimelock;
-
-    /// @notice Owns the beacon (logic upgrades)
-    address public immutable constitutionalTimelock;
-
-    /// @notice Granted `DEFAULT_ADMIN_ROLE` on each treasury
-    address public immutable dao;
-
-    /// @notice Sole caller of `create`; granted `CATEGORY_ONE` on each treasury
-    address public immutable createTournament;
-
-    address public immutable tournamentRegistry;
-    address public immutable playerSetRegistry;
+    /// @notice Owns the beacon (logic upgrades); sole caller of `create`
+    address public immutable orchestrator;
 
     /**
-     * @param addressProvider_ Canonical `AddressProvider` — resolves governance + registry deps.
+     * @param addressProvider_ Canonical `AddressProvider` — resolves orchestrator.
      */
     constructor(address addressProvider_) AddressBook(addressProvider_) {
-        automator = _getAddress(_addressKey(Addresses.AUTOMATOR));
-        maintenanceTimelock = _getAddress(_addressKey(Addresses.MAINTENANCE_TIMELOCK));
-        constitutionalTimelock = _getAddress(_addressKey(Addresses.CONSTITUTIONAL_TIMELOCK));
-        dao = _getAddress(_addressKey(Addresses.DAO));
-        createTournament = _getAddress(_addressKey(Addresses.CREATE_TOURNAMENT));
-        tournamentRegistry = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
-        playerSetRegistry = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
-        beacon = new UpgradeableBeacon(address(new PbrTreasury(addressProvider_)), constitutionalTimelock);
+        orchestrator = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
+        beacon = new UpgradeableBeacon(address(new PbrTreasury(addressProvider_)), orchestrator);
     }
 
     /**
@@ -74,7 +53,7 @@ contract PbrTreasuryFactory is AddressBook, IPbrTreasuryFactory {
         bytes32 salt,
         address expected
     ) external returns (address pbrTreasury) {
-        if (msg.sender != createTournament) revert Errors.Unauthorized();
+        if (msg.sender != orchestrator) revert Errors.Unauthorized();
         if (tournamentId == bytes32(0)) revert Errors.ZeroId();
         if (initialSeason == 0) revert Errors.ZeroSeason();
         if (expected == address(0)) revert Errors.ZeroAddress();

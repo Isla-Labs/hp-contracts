@@ -25,7 +25,7 @@ import { ProxyUtils } from "../utils/ProxyUtils.sol";
  *
  *      Env:
  *        PRIVATE_KEY, DAO_ADDRESS, CONSTITUTIONAL_ADDRESS
- *        USE_MOCK_VERIFIER (default true)
+ *        USE_MOCK_VERIFIER (default false — Automata DCAP; set true for local/unit bring-up)
  *        REGISTRATION_TTL (default 1 day)
  *        MAX_QUOTE_AGE (default 1 hour)
  *        COMPOSE_HASH (optional immediate allowlist)
@@ -37,7 +37,7 @@ contract DeployOracle is Script, ProxyUtils {
         address dao = vm.envOr("DAO_ADDRESS", deployer);
         address constitutional = vm.envOr("CONSTITUTIONAL_ADDRESS", deployer);
 
-        bool useMock = vm.envOr("USE_MOCK_VERIFIER", true);
+        bool useMock = vm.envOr("USE_MOCK_VERIFIER", false);
         uint64 ttl = uint64(vm.envOr("REGISTRATION_TTL", uint256(1 days)));
         uint64 maxQuoteAge = uint64(vm.envOr("MAX_QUOTE_AGE", uint256(1 hours)));
 

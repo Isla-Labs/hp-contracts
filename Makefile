@@ -95,6 +95,19 @@ oracle-sepolia-add-compose:
 		cast send "$$COORD" "addComposeHash(bytes32)" "$(COMPOSE_HASH)" \
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
 
+# Point coordinator at AutomataAttestationVerifier (or any IAttestationVerifier).
+# Usage: make oracle-sepolia-set-verifier VERIFIER=0x…
+# Default: Automata verifier already deployed on Base Sepolia (DCAP = HP84532.AUTOMATA_DCAP_ATTESTATION).
+oracle-sepolia-set-verifier:
+	@VERIFIER="$(or $(VERIFIER),0xcA6AD7614f81C0803014cDddD2a1C13149996834)"; \
+		test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1); \
+		COORD=$$(sed -n 's/.*"cvmCoordinator": "\([^"]*\)".*/\1/p' deployments/base-sepolia-oracle.json | head -1); \
+		test -n "$$COORD" || (echo "could not parse cvmCoordinator" && exit 1); \
+		echo "setAttestationVerifier $$COORD $$VERIFIER"; \
+		cast send "$$COORD" "setAttestationVerifier(address)" "$$VERIFIER" \
+			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL); \
+		echo "onchain:" $$(cast call "$$COORD" "attestationVerifier()(address)" --rpc-url $(BASE_SEPOLIA_RPC_URL))
+
 # Tighten / loosen registration TTL (default deploy was 7d; prefer 1d with 4h re-attest).
 # Usage: make oracle-sepolia-set-ttl TTL=86400
 oracle-sepolia-set-ttl:
@@ -156,5 +169,5 @@ fmt-check:
 	deploy-base-core deploy-base-factories deploy-base-data \
 	deploy-base-sepolia-core deploy-base-sepolia-factories deploy-base-sepolia-data \
 	deploy-base-sepolia-oracle upgrade-base-sepolia-cvm-coordinator upgrade-base-sepolia-cvm-router \
-	oracle-sepolia-add-compose oracle-sepolia-remove-compose oracle-sepolia-set-ttl deploy-base-sepolia-test-data \
+	oracle-sepolia-add-compose oracle-sepolia-remove-compose oracle-sepolia-set-verifier oracle-sepolia-set-ttl deploy-base-sepolia-test-data \
 	install build test coverage fmt fmt-check

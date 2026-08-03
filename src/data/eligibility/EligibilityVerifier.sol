@@ -8,13 +8,11 @@ import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { IEligibilityStore } from "@interfaces/data/IEligibilityStore.sol";
-import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { LifecycleReason } from "@types/governance/LifecycleTypes.sol";
-import { EligibilityGroups as LockerEligibilityGroups } from "@types/governance/DopplerTypes.sol";
 import { PlayerStatus, Position } from "@types/PlayerSetTypes.sol";
 import { EligibilityEvents as Events } from "@events/data/EligibilityEvents.sol";
 
@@ -245,10 +243,6 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
         return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
     }
 
-    function _dopplerLocker() internal view returns (IDopplerLocker) {
-        return IDopplerLocker(_getAddress(_addressKey(Addresses.DOPPLER_LOCKER)));
-    }
-
     function _transferLocker() internal view returns (ITransferLocker) {
         return ITransferLocker(_getAddress(_addressKey(Addresses.TRANSFER_LOCKER)));
     }
@@ -435,8 +429,10 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
     }
 
     function _enqueueEligible(EligibilityGroups memory groups) private {
-        // Identical layout to locker `EligibilityGroups` (separate type modules).
-        _dopplerLocker().enqueueEligible(abi.decode(abi.encode(groups), (LockerEligibilityGroups)));
+        // TODO(eligibility-2): flatten deploy cohorts into parallel `(playerIds, leagueIds)`
+        // and call `IDopplerLocker.enqueueEligible(playerIds, leagueIds)`. League calendar
+        // HPID is required per player; cohort-only groups no longer match the locker ABI.
+        groups;
     }
 
     function _enqueueLifecycle(bytes32[] memory ids, LifecycleReason reason, uint32[] memory effectiveMins) private {

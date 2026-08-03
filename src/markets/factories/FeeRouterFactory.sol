@@ -40,19 +40,18 @@ contract FeeRouterFactory is AddressBook {
     /**
      * @notice Deploys a BeaconProxy FeeRouter for `playerId` and initializes per-market state.
      * @param playerId Player identity associated with the FeeRouter.
-     * @param atFunding Optional ATFunding for the 11% fee share (zero = 100% PBR until set).
-     * @param pbrFeeHub League `PbrFeeHub` for the 89% PBR share (zero = unsupported even-split).
+     * @param pbrFeeHub League `PbrFeeHub` (zero = unsupported even-split).
      * @return feeRouter Address of the newly deployed BeaconProxy.
      */
-    function create(bytes32 playerId, address atFunding, address pbrFeeHub) external returns (address feeRouter) {
+    function create(bytes32 playerId, address pbrFeeHub) external returns (address feeRouter) {
         if (msg.sender != orchestrator) revert Errors.Unauthorized();
         if (playerId == bytes32(0)) revert Errors.ZeroId();
 
-        bytes memory initData = abi.encodeCall(FeeRouter.initialize, (playerId, atFunding, pbrFeeHub));
+        bytes memory initData = abi.encodeCall(FeeRouter.initialize, (playerId, pbrFeeHub));
 
         feeRouter = address(new BeaconProxy(address(beacon), initData));
 
-        emit Events.FeeRouterCreated(playerId, feeRouter, pbrFeeHub, atFunding);
+        emit Events.FeeRouterCreated(playerId, feeRouter, pbrFeeHub);
     }
 
     /// @notice Current FeeRouter implementation pointed to by the shared beacon

@@ -19,9 +19,20 @@ library DeploymentsErrors {
     error TournamentsExist(uint256 count);
     error VaultMissing(bytes32 playerId);
     error InvalidOpenSeasonData();
-    error AddressMismatch(address actual, address expected);
     error SaltMineExhausted(uint256 maxAttempts);
     error InvalidDN404Unit();
+
+    //  DopplerLocker
+    error LengthMismatch(uint256 left, uint256 right);
+    error AlreadyQueued(bytes32 playerId);
+    error NotQueued(bytes32 playerId);
+    error BadQueueStatus(bytes32 playerId, uint8 actual);
+    error MetadataNotSet(bytes32 playerId);
+    error EmptyName();
+    error EmptySymbol();
+    error OracleInFlight(bytes32 requestId);
+    error UnknownOracleRequest(bytes32 requestId);
+    error NothingReady();
 
     //  DopplerConfig
     error InvalidLaunchSupply();

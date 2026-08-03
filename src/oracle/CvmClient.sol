@@ -46,11 +46,11 @@ abstract contract CvmClient is ICvmClient {
      * @notice Open a CVM job through the router.
      * @param job Allowlisted script the CVM must run.
      * @param args ABI-encoded public args for that job (no secrets).
-     * @param callbackGasLimit Gas available for `_fulfillRequest` on callback.
      * @return requestId Correlator for the pending request.
+     * @dev Callback gas is router-global `maxCallbackGasLimit`.
      */
-    function _sendRequest(CvmJob job, bytes memory args, uint32 callbackGasLimit) internal returns (bytes32 requestId) {
-        requestId = i_router.sendRequest(job, args, callbackGasLimit);
+    function _sendRequest(CvmJob job, bytes memory args) internal returns (bytes32 requestId) {
+        requestId = i_router.sendRequest(job, args);
         emit RequestSent(requestId);
     }
 

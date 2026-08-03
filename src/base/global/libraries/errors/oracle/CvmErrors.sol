@@ -18,7 +18,6 @@ library CvmErrors {
     error RequestTimedOut(bytes32 requestId);
     error RequestNotTimedOut(bytes32 requestId);
     error DuplicateRequestId(bytes32 requestId);
-    error CallbackGasLimitTooHigh(uint32 limit, uint32 max);
     error AlreadyOracle(address transmitter);
     error NotOracle(address transmitter);
     error AttestationVerifierNotSet();

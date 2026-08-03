@@ -8,14 +8,11 @@ library MarketsEvents {
     //  FeeRouter Events
     // --------------------------------------------
 
-    event FeeRouterCreated(
-        bytes32 indexed playerId, address indexed feeRouter, address indexed pbrFeeHub, address atFunding
-    );
+    event FeeRouterCreated(bytes32 indexed playerId, address indexed feeRouter, address indexed pbrFeeHub);
 
     event PbrFeeHubUpdated(bytes32 indexed playerId, address indexed previousHub, address indexed newHub);
     event FeesRelayed(bytes32 indexed playerId, address indexed to, uint256 amount);
     event FeesQueued(bytes32 indexed playerId, address indexed to, uint256 amount);
-    event AtFundingUpdated(bytes32 indexed playerId, address indexed previousFunding, address indexed newFunding);
     event TokenRescued(address indexed token, address indexed to, uint256 amount);
     event MinRelayUpdated(bytes32 indexed playerId, uint256 previous, uint256 minRelay);
 

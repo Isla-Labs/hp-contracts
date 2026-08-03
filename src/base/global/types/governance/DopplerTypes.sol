@@ -30,7 +30,9 @@ enum EligibilityBucket {
     NewTransfer
 }
 
-/// @notice Deploy cohorts for `DopplerLocker.enqueueEligible` (lifecycle arrays ignored there).
+/// @notice Deploy / lifecycle cohorts from the legacy EligibilityVerifier classify pass.
+/// @dev DopplerLocker now takes parallel `(playerIds, leagueIds)`; these groups remain for
+///      the verifier return type until eligibility-2 flattens intake.
 struct EligibilityGroups {
     bytes32[] goalkeepers;
     bytes32[] under21;

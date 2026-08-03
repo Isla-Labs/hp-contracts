@@ -15,16 +15,12 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 
 /**
  * @title FeeRouter
- * @notice Per-market fee relay: ETH → 89% PBR (`PbrFeeHub`) + 11% FR (`atFunding`).
+ * @notice Per-market fee relay: ETH → PBR (`PbrFeeHub`).
  * @dev Deployed behind `BeaconProxy` instances (one per market). Logic upgrades are atomic via
  *      a shared `UpgradeableBeacon`. Per-market state lives in each proxy; `tournamentRegistry`
  *      is immutable on the implementation and shared by all proxies.
  *
- *      Access: `Orchestrator` (owner) for `setPbrFeeHub`, `setAtFunding`, `setMinRelay`, `rescueToken`.
- *
- *      Fee split:
- *      - If `atFunding == address(0)`, 100% of fees take the PBR route.
- *      - Otherwise 89:11 PBR:FR (remainder from rounding goes to PBR).
+ *      Access: `Orchestrator` (owner) for `setPbrFeeHub`, `setMinRelay`, `rescueToken`.
  *
  *      Relay threshold:
  *      - On `receive`, ETH accrues until `balance >= minRelay` (default at init: 0.0001 ether),
@@ -32,7 +28,7 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
  *      - `forward` and destination updates always attempt a full-balance relay (bypass gate).
  *
  *      PBR routing:
- *      - `pbrFeeHub != 0`: all PBR to that league hub.
+ *      - `pbrFeeHub != 0`: all fees to that league hub.
  *      - `pbrFeeHub == 0` (unsupported / no league): split evenly across all registered
  *        domestic hubs from `TournamentRegistry.getAllDomesticPbrFeeHubs()`.
  *
@@ -44,20 +40,25 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
+    // --------------------------------------------
+    //  Config
+    // --------------------------------------------
+
     /// @notice Registry used to enumerate domestic PBR fee hubs when unsupported
     ITournamentRegistry public tournamentRegistry;
 
     /// @notice Player identity associated with this FeeRouter proxy
     bytes32 public playerId;
 
-    /// @notice Destination for relayed FR fees; zero routes 100% via PBR
-    address public atFunding;
-
-    /// @notice League `PbrFeeHub` for PBR fees; zero = unsupported (even-split across all hubs)
+    /// @notice League `PbrFeeHub` for PBR fees; zero = inactive player (even-split across all hubs)
     address public pbrFeeHub;
 
     /// @notice Minimum ETH balance before auto-relay on `receive` (default 0.0001 ether at init)
     uint256 public minRelay;
+
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -68,10 +69,9 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
     /**
      * @notice Initializes per-market proxy storage. Called once via BeaconProxy constructor data.
      * @param playerId_ Player identity associated with this FeeRouter.
-     * @param atFunding_ Optional ATFunding for the 11% FR share (zero = all fees via PBR).
      * @param pbrFeeHub_ Initial league `PbrFeeHub` (zero = unsupported / OOF even-split).
      */
-    function initialize(bytes32 playerId_, address atFunding_, address pbrFeeHub_) external initializer {
+    function initialize(bytes32 playerId_, address pbrFeeHub_) external initializer {
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
 
         _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
@@ -83,13 +83,14 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
 
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
 
-        if (atFunding_ != address(0)) {
-            _setAtFunding(atFunding_);
-        }
         _setPbrFeeHub(pbrFeeHub_);
     }
 
-    /// @notice Accepts ETH and best-effort relays fees to PBR and (optionally) FR destinations
+    // --------------------------------------------
+    //  Receive / relay
+    // --------------------------------------------
+
+    /// @notice Accepts ETH and best-effort relays fees to the PBR destination(s)
     /// @dev Never reverts on destination failure so Rehype buyback transfers cannot be bricked.
     ///      Accrues until `balance >= minRelay`, then relays the full balance.
     receive() external payable nonReentrant {
@@ -104,24 +105,9 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
         _relay(bal);
     }
 
-    /// @dev If `atFunding` is unset, 100% takes the PBR route. Otherwise 89:11 PBR:FR.
-    ///      Remainder from rounding goes to PBR. Failed legs stay queued on this contract.
+    /// @dev Routes fees to `pbrFeeHub`, or even-splits across domestic hubs when unset.
+    ///      Failed legs stay queued on this contract.
     function _relay(uint256 amount) internal {
-        if (amount == 0) return;
-
-        if (atFunding == address(0)) {
-            _relayPbr(amount);
-            return;
-        }
-
-        uint256 frAmount = (amount * 11) / 100;
-        uint256 pbrAmount = amount - frAmount;
-
-        _send(atFunding, frAmount);
-        _relayPbr(pbrAmount);
-    }
-
-    function _relayPbr(uint256 amount) internal {
         if (amount == 0) return;
 
         // Unsupported / no league: split evenly across all domestic fee hubs
@@ -164,6 +150,10 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
         }
     }
 
+    // --------------------------------------------
+    //  Recover
+    // --------------------------------------------
+
     /**
      * @notice Relays the full ETH balance held by this contract (bypasses `minRelay`).
      * @dev Permissionless sweeper for accrued dust below threshold, failed relays, or hub updates.
@@ -171,6 +161,10 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
     function forward() external nonReentrant {
         _relay(address(this).balance);
     }
+
+    // --------------------------------------------
+    //  Admin
+    // --------------------------------------------
 
     /**
      * @notice Recovers accidental ERC20 balances (e.g. player-token dust).
@@ -195,26 +189,16 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
         _tryRelay();
     }
 
+    // --------------------------------------------
+    //  Player transfers
+    // --------------------------------------------
+
     /**
      * @notice Updates the league `PbrFeeHub` and sweeps any queued ETH.
      * @dev Pass zero when the market is unsupported / has no league.
      */
     function setPbrFeeHub(address newHub) external onlyOwner nonReentrant {
         _setPbrFeeHub(newHub);
-    }
-
-    /**
-     * @notice Sets or clears the ATFunding destination for the 11% FR share.
-     * @dev Pass zero to disable FR (100% PBR).
-     */
-    function setAtFunding(address newFunding) external onlyOwner nonReentrant {
-        address previous = atFunding;
-        if (newFunding == address(0)) {
-            atFunding = address(0);
-            emit Events.AtFundingUpdated(playerId, previous, address(0));
-        } else {
-            _setAtFunding(newFunding);
-        }
         _relay(address(this).balance);
     }
 
@@ -227,14 +211,5 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
         address previous = pbrFeeHub;
         pbrFeeHub = newHub;
         emit Events.PbrFeeHubUpdated(playerId, previous, newHub);
-    }
-
-    function _setAtFunding(address newFunding) internal {
-        if (newFunding == address(this)) revert Errors.InvalidDestination();
-        if (newFunding.code.length == 0) revert Errors.DestinationNotContract();
-
-        address previous = atFunding;
-        atFunding = newFunding;
-        emit Events.AtFundingUpdated(playerId, previous, newFunding);
     }
 }

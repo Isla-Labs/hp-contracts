@@ -109,17 +109,11 @@ contract CvmRouter is Initializable, Ownable, Pausable, ICvmRouter {
     // --------------------------------------------
 
     /// @inheritdoc ICvmRouter
-    function sendRequest(
-        CvmJob job,
-        bytes calldata args,
-        uint32 callbackGasLimit
-    ) external whenNotPaused returns (bytes32 requestId) {
+    function sendRequest(CvmJob job, bytes calldata args) external whenNotPaused returns (bytes32 requestId) {
         if (job == CvmJob.None) revert Errors.InvalidJob(job);
 
         CvmRouterConfig memory config = _config;
-        if (callbackGasLimit > config.maxCallbackGasLimit) {
-            revert Errors.CallbackGasLimitTooHigh(callbackGasLimit, config.maxCallbackGasLimit);
-        }
+        uint32 callbackGasLimit = config.maxCallbackGasLimit;
 
         uint32 exclusiveSeconds = _jobExclusiveSeconds[job];
         if (exclusiveSeconds == 0 || exclusiveSeconds > config.requestTimeout) {

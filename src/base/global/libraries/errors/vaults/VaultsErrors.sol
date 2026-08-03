@@ -54,7 +54,6 @@ library VaultsErrors {
     //  Factory Errors
     // --------------------------------------------
 
-    error AddressMismatch(address actual, address expected);
     error ZeroSalt();
     error InvalidSalt();
 }

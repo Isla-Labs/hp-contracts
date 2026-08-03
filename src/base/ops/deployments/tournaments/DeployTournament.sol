@@ -57,16 +57,10 @@ contract DeployTournament is Ownable {
     //  Params
     // --------------------------------------------
 
-    /// @notice CREATE3 salt + predicted address for `PbrTreasuryFactory.create`.
-    struct TreasuryDeploy {
-        bytes32 salt;
-        address expected;
-    }
-
     /**
      * @param tournamentId Stable tournament id.
      * @param initialSeason Season written into `PbrTreasury.initialize`.
-     * @param treasury CREATE3 params for the new `PbrTreasury`.
+     * @param treasurySalt CreateX salt for `PbrTreasuryFactory.create` (mine offchain for `0x99…`).
      * @param openSeasonData `abi.encode(bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound)`; empty skips.
      * @param roundsSeasonStartYear Season key for `upsertRounds` (ignored when `rounds` empty).
      * @param rounds Optional calendar rows; empty skips.
@@ -75,7 +69,7 @@ contract DeployTournament is Ownable {
     struct BootstrapParams {
         bytes32 tournamentId;
         uint16 initialSeason;
-        TreasuryDeploy treasury;
+        bytes32 treasurySalt;
         bytes openSeasonData;
         uint16 roundsSeasonStartYear;
         RoundSchedule[] rounds;
@@ -290,8 +284,7 @@ contract DeployTournament is Ownable {
         if (!factoriesConfigured) revert Errors.NotConfigured();
         if (b.tournamentId == bytes32(0)) revert Errors.ZeroId();
         if (b.initialSeason == 0) revert Errors.ZeroSeason();
-        if (b.treasury.salt == bytes32(0)) revert Errors.ZeroSalt();
-        if (b.treasury.expected == address(0)) revert Errors.ZeroAddress();
+        if (b.treasurySalt == bytes32(0)) revert Errors.ZeroSalt();
     }
 
     function _simulateBootstrap(BootstrapParams calldata b) internal view {
@@ -308,11 +301,6 @@ contract DeployTournament is Ownable {
 
         if (b.rounds.length != 0 && b.roundsSeasonStartYear == 0) revert Errors.ZeroSeason();
 
-        address predicted = pbrTreasuryFactory.computeCreate3Address(b.treasury.salt);
-        if (predicted != b.treasury.expected) {
-            revert Errors.AddressMismatch(predicted, b.treasury.expected);
-        }
-
         uint256 length = b.registeredPlayers.length;
         for (uint256 i; i < length; ++i) {
             bytes32 playerId = b.registeredPlayers[i];
@@ -326,9 +314,7 @@ contract DeployTournament is Ownable {
         pbrTreasury = abi.decode(
             _exec(
                 address(pbrTreasuryFactory),
-                abi.encodeCall(
-                    IPbrTreasuryFactory.create, (b.tournamentId, b.initialSeason, b.treasury.salt, b.treasury.expected)
-                )
+                abi.encodeCall(IPbrTreasuryFactory.create, (b.tournamentId, b.initialSeason, b.treasurySalt))
             ),
             (address)
         );

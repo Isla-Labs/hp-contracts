@@ -79,9 +79,8 @@ contract TestData is Oracle {
 
     /**
      * @param router_ Live `CvmRouter` (Base Sepolia: see `deployments/base-sepolia-oracle.json`).
-     * @param fulfillGasLimit_ Callback gas for `_fulfillRequest` (e.g. 300_000).
      */
-    constructor(address router_, uint32 fulfillGasLimit_) Oracle(router_, CvmJob.VanitySalts, fulfillGasLimit_) { }
+    constructor(address router_) Oracle(router_) { }
 
     /**
      * @notice Mine PlayerToken (`0x22`) + PlayerVault (`0x42`) salts.
@@ -156,6 +155,7 @@ contract TestData is Oracle {
         address treasuryFactory_
     ) private returns (bytes32 requestId) {
         requestId = _sendOracleRequest(
+            CvmJob.VanitySalts,
             abi.encode(kind, seed_, tokenFactory_, tokenInitCodeHash_, vaultFactory_, treasuryFactory_)
         );
         emit SaltsRequested(

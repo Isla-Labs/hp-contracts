@@ -46,10 +46,8 @@ contract PlayerVaultFactory is AddressBook {
      * @notice Deploy a vanity-capable vault + stToken pair and initialize the vault.
      * @param baseName PlayerToken name from Doppler (stToken becomes `Staked {baseName}`).
      * @param baseSymbol PlayerToken symbol from Doppler (stToken becomes `st{baseSymbol}`).
-     * @param vaultSalt CreateX salt for the `BeaconProxy` (mine for desired prefix).
-     * @param expectedVault Address from `computeCreate3Address(vaultSalt)`.
+     * @param vaultSalt CreateX salt for the `BeaconProxy` (mine offchain for `0x42…` via CVM VanitySalts).
      * @param stTokenSalt CreateX salt for the `StakedToken`.
-     * @param expectedStToken Address from `computeCreate3Address(stTokenSalt)`.
      */
     function create(
         bytes32 playerId,
@@ -57,27 +55,21 @@ contract PlayerVaultFactory is AddressBook {
         string calldata baseName,
         string calldata baseSymbol,
         bytes32 vaultSalt,
-        address expectedVault,
-        bytes32 stTokenSalt,
-        address expectedStToken
+        bytes32 stTokenSalt
     ) external returns (address playerVault, address stToken) {
         if (msg.sender != orchestrator) revert Errors.Unauthorized();
         if (playerId == bytes32(0)) revert Errors.ZeroId();
-        if (playerToken == address(0) || expectedVault == address(0) || expectedStToken == address(0)) {
-            revert Errors.ZeroAddress();
-        }
+        if (playerToken == address(0)) revert Errors.ZeroAddress();
         if (vaultSalt == bytes32(0) || stTokenSalt == bytes32(0)) revert Errors.ZeroSalt();
 
         bytes memory vaultInitCode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), ""));
         playerVault = CREATE_X.deployCreate3(vaultSalt, vaultInitCode);
-        if (playerVault != expectedVault) revert Errors.AddressMismatch(playerVault, expectedVault);
 
         string memory stName = string.concat("Staked ", baseName);
         string memory stSymbol = string.concat("st", baseSymbol);
         bytes memory stInitCode =
             abi.encodePacked(type(StakedToken).creationCode, abi.encode(stName, stSymbol, playerVault));
         stToken = CREATE_X.deployCreate3(stTokenSalt, stInitCode);
-        if (stToken != expectedStToken) revert Errors.AddressMismatch(stToken, expectedStToken);
 
         PlayerVault(playerVault).initialize(playerId, playerToken, stToken);
 

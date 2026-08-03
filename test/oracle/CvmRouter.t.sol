@@ -19,11 +19,11 @@ contract MockCvmConsumer is CvmClient {
     constructor(address router_) CvmClient(router_) { }
 
     function request(bytes calldata args) external returns (bytes32) {
-        return _sendRequest(CvmJob.TestFetch, args, 300_000);
+        return _sendRequest(CvmJob.TestFetch, args);
     }
 
     function requestJob(CvmJob job, bytes calldata args) external returns (bytes32) {
-        return _sendRequest(job, args, 300_000);
+        return _sendRequest(job, args);
     }
 
     function _fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {

@@ -11,8 +11,10 @@ contract DeployCoreStack is DeployCore {
         address deployer = vm.addr(privateKey);
         address owner = vm.envOr("OWNER_ADDRESS", vm.envAddress("DAO_ADDRESS"));
 
+        address cvmRouter = vm.envAddress("CVM_ROUTER");
+
         vm.startBroadcast(privateKey);
-        d = _deployCore(owner, deployer);
+        d = _deployCore(owner, deployer, cvmRouter);
         vm.stopBroadcast();
     }
 }

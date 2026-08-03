@@ -61,7 +61,7 @@ struct CvmCommitment {
 
 /// @notice Router runtime configuration (global; exclusive windows are per-job).
 struct CvmRouterConfig {
-    /// @notice Upper bound for `callbackGasLimit` on new requests.
+    /// @notice Callback gas stipend applied globally.
     uint32 maxCallbackGasLimit;
     /// @notice Request lifetime in seconds from `sendRequest`.
     uint32 requestTimeout;

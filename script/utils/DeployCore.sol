@@ -42,9 +42,13 @@ abstract contract DeployCore is ProxyUtils {
         address playerSetRegistryImpl;
     }
 
-    function _deployCore(address owner, address deployer) internal returns (CoreDeployment memory d) {
+    function _deployCore(address owner, address deployer, address cvmRouter)
+        internal
+        returns (CoreDeployment memory d)
+    {
         if (owner == address(0)) revert("OWNER_ADDRESS required");
         if (deployer == address(0)) revert("deployer required");
+        if (cvmRouter == address(0)) revert("CVM_ROUTER required");
 
         // --------------------------------------------
         //  1) AddressProvider (+ temporary deployer ownership)
@@ -76,7 +80,7 @@ abstract contract DeployCore is ProxyUtils {
             console.log("OWNER != deployer: grant DeployTournament AUTHORIZED_CONTRACT on Orchestrator");
         }
 
-        d.dopplerLocker = address(new DopplerLocker(d.orchestrator));
+        d.dopplerLocker = address(new DopplerLocker(d.orchestrator, cvmRouter, 24 hours, 5 minutes));
         d.transferLocker = address(new TransferLocker(d.orchestrator, d.playerSetRegistry, d.tournamentRegistry));
 
         // --------------------------------------------

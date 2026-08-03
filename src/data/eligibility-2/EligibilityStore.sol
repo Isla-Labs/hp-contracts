@@ -32,9 +32,6 @@ contract EligibilityStore is Oracle, RateLimit {
     //  Constants
     // --------------------------------------------
 
-    /// @notice Default callback gas for squad fulfills (router max should be ≥ this).
-    uint32 public constant DEFAULT_FULFILL_GAS = 5_000_000;
-
     /// @notice Default cooldown for `fetchSquadsLatest`.
     uint256 public constant DEFAULT_LATEST_COOLDOWN = 1 hours;
 
@@ -56,7 +53,7 @@ contract EligibilityStore is Oracle, RateLimit {
     error PlayerPageOverflow(uint16 playerOffset, uint256 pageLen, uint16 playerTotal);
     error ZeroBirthDate(bytes32 playerId);
     error ZeroClubId();
-    
+
     // --------------------------------------------
     //  Events
     // --------------------------------------------
@@ -95,13 +92,9 @@ contract EligibilityStore is Oracle, RateLimit {
 
     /**
      * @param router_ Live `CvmRouter` proxy.
-     * @param fulfillGasLimit_ Callback gas (use `DEFAULT_FULFILL_GAS` / 5_000_000).
      * @param latestCooldown_ Min seconds between `fetchSquadsLatest` calls.
      */
-    constructor(address router_, uint32 fulfillGasLimit_, uint256 latestCooldown_)
-        Oracle(router_, CvmJob.SquadSync, fulfillGasLimit_)
-        RateLimit(latestCooldown_)
-    { }
+    constructor(address router_, uint256 latestCooldown_) Oracle(router_) RateLimit(latestCooldown_) { }
 
     // --------------------------------------------
     //  Views
@@ -245,11 +238,9 @@ contract EligibilityStore is Oracle, RateLimit {
         );
 
         if (kind == SyncKind.Latest) {
-            requestId = _sendOracleRequest(args);
+            requestId = _sendOracleRequest(CvmJob.SquadSync, args);
         } else if (kind == SyncKind.Historical) {
-            // Oracle's fixed job is SquadSync; historical uses the sibling job explicitly.
-            requestId = _sendRequest(CvmJob.HistoricalSquadSync, args, fulfillGasLimit);
-            lastRequestId = requestId;
+            requestId = _sendOracleRequest(CvmJob.HistoricalSquadSync, args);
         } else {
             revert NoActiveSync();
         }

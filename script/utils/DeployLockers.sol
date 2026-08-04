@@ -13,8 +13,9 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployLockers
- * @notice Step 7: DopplerLocker + TransferLocker (TUP); register on AddressProvider.
+ * @notice DopplerLocker + TransferLocker (TUP); register on AddressProvider; initialize.
  * @dev ProxyAdmin stays with deployer until DeployHandoff.
+ *      Impls take AddressProvider; `initialize` resolves Orchestrator (+ registries for TransferLocker).
  */
 abstract contract DeployLockers is AddressProviderOps, ProxyUtils {
     struct LockerDeployment {
@@ -27,12 +28,12 @@ abstract contract DeployLockers is AddressProviderOps, ProxyUtils {
 
     function _deployLockers(address deployer) internal returns (LockerDeployment memory d) {
         if (deployer == address(0)) revert("deployer required");
-        _requireAddressProvider();
 
-        address orchestrator = _requireName(Keys.ORCHESTRATOR);
-        address cvmRouter = _requireName(Keys.CVM_ROUTER);
-        address playerSetRegistry = _requireName(Keys.PLAYER_SET_REGISTRY);
-        address tournamentRegistry = _requireName(Keys.TOURNAMENT_REGISTRY);
+        address addressProvider = address(_requireAddressProvider());
+        _requireName(Keys.ORCHESTRATOR);
+        _requireName(Keys.CVM_ROUTER);
+        _requireName(Keys.PLAYER_SET_REGISTRY);
+        _requireName(Keys.TOURNAMENT_REGISTRY);
 
         InitGuard guard = new InitGuard();
         d.initGuard = address(guard);
@@ -40,20 +41,14 @@ abstract contract DeployLockers is AddressProviderOps, ProxyUtils {
         d.dopplerLocker = _deployInitGuardProxy(guard, deployer);
         d.transferLocker = _deployInitGuardProxy(guard, deployer);
 
-        d.dopplerLockerImpl = address(new DopplerLocker(cvmRouter, 5 minutes));
-        d.transferLockerImpl = address(new TransferLocker(playerSetRegistry, tournamentRegistry));
+        d.dopplerLockerImpl = address(new DopplerLocker(addressProvider, 5 minutes));
+        d.transferLockerImpl = address(new TransferLocker(addressProvider));
 
         _registerName(deployer, Keys.DOPPLER_LOCKER, d.dopplerLocker);
         _registerName(deployer, Keys.TRANSFER_LOCKER, d.transferLocker);
 
-        _upgradeAndCall(
-            d.dopplerLocker,
-            d.dopplerLockerImpl,
-            abi.encodeCall(DopplerLocker.initialize, (orchestrator, 24 hours))
-        );
-        _upgradeAndCall(
-            d.transferLocker, d.transferLockerImpl, abi.encodeCall(TransferLocker.initialize, (orchestrator))
-        );
+        _upgradeAndCall(d.dopplerLocker, d.dopplerLockerImpl, abi.encodeCall(DopplerLocker.initialize, (24 hours)));
+        _upgradeAndCall(d.transferLocker, d.transferLockerImpl, abi.encodeCall(TransferLocker.initialize, ()));
 
         console.log("=== DeployLockers (proxies) ===");
         console.log("DopplerLocker", d.dopplerLocker);

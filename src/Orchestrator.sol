@@ -10,7 +10,8 @@ import { IOrchestrator } from "@interfaces/IOrchestrator.sol";
  * @title Orchestrator
  * @notice Privileged call relay for protocol contracts that set this address as `owner`.
  * @dev Access:
- *        - `DEFAULT_ADMIN_ROLE` — EOA / Safe multisig. Role admin + may `execute`.
+ *        - `DEFAULT_ADMIN_ROLE` — EOA at bootstrap, Safe multisig in production. Role admin +
+ *          may `execute`. Transfer via `transferDefaultAdmin` (atomic grant + revoke).
  *        - `AUTHORIZED_CONTRACT` — modules (e.g. `DeployTournament`, future data keepers)
  *          that may submit calls through this contract.
  *
@@ -24,6 +25,9 @@ contract Orchestrator is AccessControl, IOrchestrator {
     /// @notice Modules allowed to relay calls (in addition to `DEFAULT_ADMIN_ROLE`).
     bytes32 public constant AUTHORIZED_CONTRACT = keccak256("AUTHORIZED_CONTRACT");
 
+    /// @notice Emitted when `DEFAULT_ADMIN_ROLE` moves from `previousAdmin` to `newAdmin`.
+    event DefaultAdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+
     /**
      * @param admin_ EOA or Safe — `DEFAULT_ADMIN_ROLE`.
      */
@@ -35,6 +39,21 @@ contract Orchestrator is AccessControl, IOrchestrator {
     // --------------------------------------------
     //  Role admin helpers
     // --------------------------------------------
+
+    /**
+     * @notice Atomically hand `DEFAULT_ADMIN_ROLE` to `newAdmin` (EOA → Safe).
+     * @dev Grants the role to `newAdmin` then revokes it from `msg.sender`. Prefer this over
+     *      raw `grantRole` / `renounceRole` so there is never a window with two admins or zero.
+     */
+    function transferDefaultAdmin(address newAdmin) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newAdmin == address(0)) revert Errors.ZeroAddress();
+        if (newAdmin == msg.sender) revert Errors.Unauthorized();
+
+        address previous = msg.sender;
+        _grantRole(DEFAULT_ADMIN_ROLE, newAdmin);
+        _revokeRole(DEFAULT_ADMIN_ROLE, previous);
+        emit DefaultAdminTransferred(previous, newAdmin);
+    }
 
     /// @notice Grant `AUTHORIZED_CONTRACT` to a module (e.g. `DeployTournament`).
     function addAuthorizedContract(address account) external onlyRole(DEFAULT_ADMIN_ROLE) {

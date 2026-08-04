@@ -42,7 +42,6 @@ library VaultsErrors {
     error NoSnapshot(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber);
     error AlreadyClaimed();
     error UnknownTournamentTreasury(bytes32 tournamentId);
-    error InvalidBoostBps(uint16 bps);
 
     // --------------------------------------------
     //  StakedToken Errors

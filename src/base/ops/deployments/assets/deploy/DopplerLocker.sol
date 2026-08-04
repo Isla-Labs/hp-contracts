@@ -3,13 +3,16 @@ pragma solidity ^0.8.34;
 
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { Oracle } from "@base/abstract/Oracle.sol";
+import { RateLimit } from "@base/abstract/RateLimit.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { MineSalt } from "@base/global/libraries/MineSalt.sol";
 import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
-import { MineSalt } from "@base/global/libraries/MineSalt.sol";
-import { Oracle } from "@base/abstract/Oracle.sol";
-import { RateLimit } from "@base/abstract/RateLimit.sol";
 import { CvmJob, VanityDeployKind } from "@types/oracle/CvmTypes.sol";
+import { AddressProvider } from "@src/AddressProvider.sol";
 
 import { DopplerConfig } from "@deployments/assets/deploy/config/DopplerConfig.sol";
 
@@ -35,7 +38,7 @@ import { DopplerConfig } from "@deployments/assets/deploy/config/DopplerConfig.s
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract DopplerLocker is Initializable, DopplerConfig, Oracle, RateLimit, IDopplerLocker {
+contract DopplerLocker is Initializable, AddressBook, DopplerConfig, Oracle, RateLimit, IDopplerLocker {
     // -------------------------------------------------------------------------
     //  Types
     // -------------------------------------------------------------------------
@@ -122,13 +125,15 @@ contract DopplerLocker is Initializable, DopplerConfig, Oracle, RateLimit, IDopp
     // -------------------------------------------------------------------------
 
     /**
-     * @param cvmRouter_ Live `CvmRouter` (immutable on implementation).
+     * @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
      * @param deployCooldown_ `deployQueue` rate-limit (immutable on implementation).
+     * @dev `CVM_ROUTER` must already be registered on AddressProvider (oracle set first).
      * @custom:oz-upgrades-unsafe-allow constructor
      */
-    constructor(address cvmRouter_, uint256 deployCooldown_)
+    constructor(address addressProvider_, uint256 deployCooldown_)
+        AddressBook(addressProvider_)
         DopplerConfig()
-        Oracle(cvmRouter_)
+        Oracle(_cvmRouter(addressProvider_))
         RateLimit(deployCooldown_)
     {
         _disableInitializers();
@@ -136,14 +141,20 @@ contract DopplerLocker is Initializable, DopplerConfig, Oracle, RateLimit, IDopp
 
     /**
      * @notice Proxy init: ownership → Orchestrator, default Doppler config, queue wait.
-     * @param orchestrator_ `Orchestrator` — Ownable owner.
      * @param queueWait_ Review window (use `DEFAULT_QUEUE_WAIT`).
+     * @dev `ORCHESTRATOR` must already be registered on AddressProvider.
      */
-    function initialize(address orchestrator_, uint256 queueWait_) external initializer {
+    function initialize(uint256 queueWait_) external initializer {
         if (queueWait_ == 0) revert Errors.NotConfigured();
-        __DopplerConfig_init(orchestrator_);
+        __DopplerConfig_init(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
         queueWait = queueWait_;
         maxDeployBatch = DEFAULT_MAX_DEPLOY_BATCH;
+    }
+
+    /// @dev Resolve immutable CVM router at impl deploy (AddressBook not yet usable in base ctor list).
+    function _cvmRouter(address addressProvider_) private view returns (address router) {
+        router = AddressProvider(payable(addressProvider_)).get(keccak256(bytes(Addresses.CVM_ROUTER)));
+        if (router == address(0)) revert Errors.ZeroAddress();
     }
 
     // -------------------------------------------------------------------------

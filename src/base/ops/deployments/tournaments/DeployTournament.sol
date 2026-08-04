@@ -10,11 +10,17 @@ import { AddressKeys as Addresses } from "@base/global/libraries/addresses/Addre
 import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 
-import { Hub, TournamentType } from "@types/TournamentTypes.sol";
+import {
+    Hub,
+    TournamentType,
+    BootstrapSeason,
+    BootstrapParams,
+    DeployParams,
+    DeployResult
+} from "@types/TournamentTypes.sol";
 
 import { IOrchestrator } from "@interfaces/IOrchestrator.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
-import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 
 import { IPbrTreasuryFactory } from "@interfaces/vaults/factories/IPbrTreasuryFactory.sol";
 import { IPbrFeeHubFactory } from "@interfaces/markets/factories/IPbrFeeHubFactory.sol";
@@ -23,10 +29,11 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
 /**
  * @title DeployTournament
  * @notice Ownable entry API for atomic tournament bootstrap (upgradeable singleton).
- * @dev Owner is the EOA or Safe. Privileged factory / registry / hub writes are relayed
- *      through `Orchestrator.execute` so `msg.sender` on targets is the Orchestrator
- *      (which owns those contracts). This contract (proxy) must hold `AUTHORIZED_CONTRACT`
- *      on the Orchestrator.
+ * @dev Owner is the Orchestrator (same as registries / factories). Callers with
+ *      `DEFAULT_ADMIN_ROLE` (EOA now, Safe later) invoke `deploy` via
+ *      `Orchestrator.execute`. Inner factory / registry / hub writes also relay through
+ *      `Orchestrator.execute` so targets see `msg.sender == Orchestrator`. This proxy must
+ *      hold `AUTHORIZED_CONTRACT` on the Orchestrator for those nested relays.
  *
  *      Unified `deploy` / `simulateDeploy` branch on `DeployParams.tournamentType`:
  *        - `DOMESTIC_LEAGUE`: deploy treasury + new fee hub, `registerHub`, create tournament
@@ -37,22 +44,20 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
  *      Season identity stubs (`BootstrapSeason`) open via `TournamentRegistry.openSeason`;
  *      RoundManager later owns `setFinalRound` + `upsertRounds`.
  *
- *      Deploy order:
- *        1. Deploy Orchestrator + registries + this proxy; grant `AUTHORIZED_CONTRACT`
- *        2. Deploy factories with `orchestrator == Orchestrator`
- *        3. Owner calls `configureFactories` once
+ *      Protocol deploy order:
+ *        1. Deploy AddressProvider
+ *        2. Deploy Oracle set
+ *        3. Deploy all other contracts as upgradeable proxies
+ *        4. Register all addresses on AddressProvider
+ *        5. Initialize all contracts (resolve deps from AP + transfer ownership to Orchestrator)
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract DeployTournament is Initializable, AddressBook, Ownable {
-    // --------------------------------------------
-    //  Wiring (set in initialize)
-    // --------------------------------------------
 
     IOrchestrator public orchestrator;
     ITournamentRegistry public tournamentRegistry;
-    IPlayerSetRegistry public playerSetRegistry;
 
     IPbrTreasuryFactory public pbrTreasuryFactory;
     IPbrFeeHubFactory public pbrFeeHubFactory;
@@ -60,49 +65,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     bool public factoriesConfigured;
 
     // --------------------------------------------
-    //  Params
-    // --------------------------------------------
-
-    /// @notice Season stub opened at deploy; calendar filled later by RoundManager.
-    struct BootstrapSeason {
-        bytes32 seasonId;
-        uint16 seasonStartYear;
-    }
-
-    /**
-     * @param tournamentId Stable tournament id.
-     * @param initialSeason Season written into `PbrTreasury.initialize`.
-     * @param treasurySalt CreateX salt for `PbrTreasuryFactory.create` (mine offchain for `0x99…`).
-     * @param seasons Optional season stubs (`openSeason`); empty skips.
-     */
-    struct BootstrapParams {
-        bytes32 tournamentId;
-        uint16 initialSeason;
-        bytes32 treasurySalt;
-        BootstrapSeason[] seasons;
-    }
-
-    /**
-     * @param tournamentType Deployment branch selector.
-     * @param bootstrap Shared treasury / season stub params.
-     * @param leagueIds Type-specific hub context:
-     *        - `DOMESTIC_LEAGUE` / `INTERNATIONAL`: ignored (pass empty)
-     *        - `DOMESTIC_CUP`: exactly one existing domestic `leagueId`
-     *        - `CONTINENTAL`: one or more existing domestic `leagueId`s
-     */
-    struct DeployParams {
-        TournamentType tournamentType;
-        BootstrapParams bootstrap;
-        bytes32[] leagueIds;
-    }
-
-    struct DeployResult {
-        address pbrTreasury;
-        address pbrFeeHub; // set for DOMESTIC_LEAGUE only; zero otherwise
-    }
-
-    // --------------------------------------------
-    //  Constructor / initialize / configure
+    //  Constructor / initialize
     // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
@@ -112,36 +75,19 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     }
 
     /**
-     * @notice Resolve Orchestrator + registries from AddressProvider; set deploy owner (EOA/Safe).
-     * @dev AddressProvider names for ORCHESTRATOR / registries must already be registered.
+     * @notice Resolve deps from AddressProvider; transfer ownership to Orchestrator.
+     * @dev AddressProvider names for ORCHESTRATOR / TOURNAMENT_REGISTRY / factories must already
+     *      be registered. Sets `factoriesConfigured` so `deploy` may proceed.
      */
-    function initialize(address owner_) external initializer {
-        if (owner_ == address(0)) revert Errors.ZeroAddress();
-
+    function initialize() external initializer {
         orchestrator = IOrchestrator(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
         tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+        pbrTreasuryFactory = IPbrTreasuryFactory(_getAddress(_addressKey(Addresses.PBR_TREASURY_FACTORY)));
+        pbrFeeHubFactory = IPbrFeeHubFactory(_getAddress(_addressKey(Addresses.PBR_FEE_HUB_FACTORY)));
 
-        _transferOwnership(owner_);
-    }
-
-    /**
-     * @notice One-shot factory wiring after factories are deployed with `orchestrator == Orchestrator`.
-     */
-    function configureFactories(address pbrTreasuryFactory_, address pbrFeeHubFactory_) external onlyOwner {
-        if (factoriesConfigured) revert Errors.Unauthorized();
-        if (pbrTreasuryFactory_ == address(0) || pbrFeeHubFactory_ == address(0)) revert Errors.ZeroAddress();
-        if (
-            IPbrTreasuryFactory(pbrTreasuryFactory_).orchestrator() != address(orchestrator)
-                || IPbrFeeHubFactory(pbrFeeHubFactory_).orchestrator() != address(orchestrator)
-        ) {
-            revert Errors.Unauthorized();
-        }
-
-        pbrTreasuryFactory = IPbrTreasuryFactory(pbrTreasuryFactory_);
-        pbrFeeHubFactory = IPbrFeeHubFactory(pbrFeeHubFactory_);
         factoriesConfigured = true;
-        emit Events.FactoriesConfigured(pbrTreasuryFactory_, pbrFeeHubFactory_);
+
+        _transferOwnership(address(orchestrator));
     }
 
     // --------------------------------------------

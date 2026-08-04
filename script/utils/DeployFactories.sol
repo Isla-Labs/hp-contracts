@@ -16,8 +16,9 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployFactories
- * @notice Step 8: upgradeable market + vault beacon factories; configure DeployTournament; register on AP.
+ * @notice Upgradeable market + vault beacon factories; register on AP; initialize DeployTournament.
  * @dev InitGuard TUP per factory; ProxyAdmin stays with deployer until DeployHandoff.
+ *      DeployTournament initialize runs here so factory names already exist on AddressProvider.
  */
 abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
     struct FactoryDeployment {
@@ -29,6 +30,7 @@ abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
         address pbrFeeHubFactoryImpl;
         address pbrTreasuryFactoryImpl;
         address playerVaultFactoryImpl;
+        address deployTournamentImpl;
         address initGuard;
     }
 
@@ -38,8 +40,6 @@ abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
         address addressProvider = address(_requireAddressProvider());
         address deployTournament = _requireName(Keys.DEPLOY_TOURNAMENT);
         _requireName(Keys.ORCHESTRATOR);
-
-        address owner = _ownerOrDeployer(deployer);
 
         InitGuard guard = new InitGuard();
         f.initGuard = address(guard);
@@ -69,16 +69,16 @@ abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
         );
         _upgradeAndCall(f.pbrFeeHubFactory, f.pbrFeeHubFactoryImpl, abi.encodeCall(PbrFeeHubFactory.initialize, ()));
 
-        if (deployer == owner) {
-            DeployTournament(deployTournament).configureFactories(f.pbrTreasuryFactory, f.pbrFeeHubFactory);
-        } else {
-            console.log("OWNER != deployer: call DeployTournament.configureFactories(treasury, feeHub)");
-        }
+        // DeployTournament resolves factories from AP — initialize only after the names above exist.
+        // Ownership transfers to Orchestrator inside initialize().
+        f.deployTournamentImpl = address(new DeployTournament(addressProvider));
+        _upgradeAndCall(deployTournament, f.deployTournamentImpl, abi.encodeCall(DeployTournament.initialize, ()));
 
         console.log("=== DeployFactories (proxies) ===");
         console.log("FeeRouterFactory", f.feeRouterFactory);
         console.log("PlayerVaultFactory", f.playerVaultFactory);
         console.log("PbrTreasuryFactory", f.pbrTreasuryFactory);
         console.log("PbrFeeHubFactory", f.pbrFeeHubFactory);
+        console.log("DeployTournament (impl)", f.deployTournamentImpl);
     }
 }

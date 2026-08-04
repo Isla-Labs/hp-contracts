@@ -30,17 +30,11 @@ library VaultsEvents {
     event Staked(address indexed user, uint256 amount, uint256 newTotalStaked);
     event Unstaked(address indexed user, uint256 amount, uint256 newTotalStaked);
     event SnapshotTaken(
-        bytes32 indexed tournamentId,
-        uint16 indexed seasonId,
-        uint32 roundNumber,
-        uint256 snapId,
-        uint256 totalSupply,
-        uint256 effectiveSupply
+        bytes32 indexed tournamentId, uint16 indexed seasonId, uint32 roundNumber, uint256 snapId, uint256 totalSupply
     );
     event Claimed(
         address indexed user, bytes32 indexed tournamentId, uint16 indexed seasonId, uint32 roundNumber, uint256 payout
     );
-    event BoostSynced(address indexed user, uint16 boostBps, uint256 totalEffectiveStaked);
 
     // --------------------------------------------
     //  StakedToken Events

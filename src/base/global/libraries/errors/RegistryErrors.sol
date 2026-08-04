@@ -13,7 +13,6 @@ library RegistryErrors {
     error Exists();
     error NotFound();
     error LengthMismatch();
-    error InvalidReferralTier(uint8 tier, uint8 maxTier);
 
     // --------------------------------------------
     //  PlayerSetRegistry Errors

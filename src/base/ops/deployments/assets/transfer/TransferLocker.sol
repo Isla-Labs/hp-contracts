@@ -4,6 +4,8 @@ pragma solidity ^0.8.34;
 import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { LifecycleErrors as Errors } from "@errors/governance/LifecycleErrors.sol";
 import { LifecycleEvents as Events } from "@events/governance/LifecycleEvents.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
@@ -21,7 +23,7 @@ interface IFeeRouterHub {
  * @title TransferLocker
  * @notice Waiting room for soft-inactivity / reactivation candidates (mirrors DopplerLocker).
  * @dev Flow:
- *      0) EligibilityVerifier (or Orchestrator owner) enqueues continuity failures, league-leavers,
+ *      0) EligibilityVerifier (or Orchestrator admin) enqueues continuity failures, league-leavers,
  *         cross-league moves (`ChangedLeague`), or reactivations.
  *      1) Offchain / manual review (webhook + email — TBD) confirms or rejects.
  *      2) Confirmed deactivate → owner → `setStatus(INACTIVE)` (not wired yet).
@@ -30,15 +32,24 @@ interface IFeeRouterHub {
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TransferLocker is Initializable, Ownable, ITransferLocker {
-    /// @notice Canonical player market index (implementation immutable).
-    IPlayerSetRegistry public immutable playerSetRegistry;
+contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker {
 
-    /// @notice Domestic hub + tournament treasury topology (implementation immutable).
-    ITournamentRegistry public immutable tournamentRegistry;
+    // --------------------------------------------
+    //  Config
+    // --------------------------------------------
+
+    /// @notice Canonical player market index (resolved in `initialize`).
+    IPlayerSetRegistry public playerSetRegistry;
+
+    /// @notice Domestic hub + tournament treasury topology (resolved in `initialize`).
+    ITournamentRegistry public tournamentRegistry;
 
     /// @notice Enqueue writer (set once); owner may also enqueue.
     address public eligibilityVerifier;
+
+    // --------------------------------------------
+    //  Storage
+    // --------------------------------------------
 
     PendingLifecycle[] private _pending;
     /// @dev ContinuityUnderThreshold / LeftLeague / ChangedLeague — pending review.
@@ -46,23 +57,29 @@ contract TransferLocker is Initializable, Ownable, ITransferLocker {
     /// @dev Reactivate — pending restore-from-INACTIVE review.
     mapping(bytes32 playerId => bool) private _queuedReactivate;
 
-    /**
-     * @param playerSetRegistry_ Canonical `PlayerSetRegistry` proxy.
-     * @param tournamentRegistry_ Canonical `TournamentRegistry` proxy.
-     * @custom:oz-upgrades-unsafe-allow constructor
-     */
-    constructor(address playerSetRegistry_, address tournamentRegistry_) Ownable(msg.sender) {
-        if (playerSetRegistry_ == address(0) || tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
-        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
-        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
+
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
         _disableInitializers();
     }
 
-    /// @notice Proxy init: ownership → Orchestrator.
-    function initialize(address orchestrator_) external initializer {
-        if (orchestrator_ == address(0)) revert Errors.ZeroAddress();
-        _transferOwnership(orchestrator_);
+    /**
+     * @notice Resolve registries from AddressProvider; ownership → Orchestrator.
+     * @dev `PLAYER_SET_REGISTRY` / `TOURNAMENT_REGISTRY` / `ORCHESTRATOR` must already be registered.
+     */
+    function initialize() external initializer {
+        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
     }
+
+    // --------------------------------------------
+    //  Admin
+    // --------------------------------------------
 
     /// @notice One-time wire: EligibilityVerifier may call `enqueueLifecycle`.
     function setEligibilityVerifier(address eligibilityVerifier_) external onlyOwner {
@@ -72,42 +89,9 @@ contract TransferLocker is Initializable, Ownable, ITransferLocker {
         emit Events.EligibilityVerifierSet(eligibilityVerifier_);
     }
 
-    /// @inheritdoc ITransferLocker
-    function enqueueLifecycle(
-        bytes32[] calldata playerIds,
-        LifecycleReason reason,
-        uint32[] calldata effectiveMins
-    ) external {
-        if (msg.sender != owner() && msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
-
-        uint256 length = playerIds.length;
-        if (effectiveMins.length != 0 && effectiveMins.length != length) {
-            revert Errors.LengthMismatch(length, effectiveMins.length);
-        }
-
-        bool isReactivate = reason == LifecycleReason.Reactivate;
-        uint256 added;
-        for (uint256 i; i < length; ++i) {
-            bytes32 playerId = playerIds[i];
-            if (playerId == bytes32(0)) continue;
-
-            if (isReactivate) {
-                if (_queuedReactivate[playerId]) continue;
-                _queuedReactivate[playerId] = true;
-            } else {
-                if (_queuedDeactivate[playerId]) continue;
-                _queuedDeactivate[playerId] = true;
-            }
-
-            uint32 mins = effectiveMins.length == 0 ? 0 : effectiveMins[i];
-            _pending.push(PendingLifecycle({ playerId: playerId, reason: reason, effectiveMins: mins }));
-            unchecked {
-                ++added;
-            }
-        }
-
-        emit Events.LifecyclePlayersEnqueued(reason, added, _pending.length);
-    }
+    // --------------------------------------------
+    //  Views
+    // --------------------------------------------
 
     /// @inheritdoc ITransferLocker
     function pendingCount() external view returns (uint256) {
@@ -147,9 +131,50 @@ contract TransferLocker is Initializable, Ownable, ITransferLocker {
         _requireFeeTopologyConsistent(playerId);
     }
 
-    // -------------------------------------------------------------------------
-    //  Confirm — manual / gated (NOT public yet)
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  Queue start
+    // --------------------------------------------
+
+    /// @inheritdoc ITransferLocker
+    function enqueueLifecycle(
+        bytes32[] calldata playerIds,
+        LifecycleReason reason,
+        uint32[] calldata effectiveMins
+    ) external {
+        if (msg.sender != owner() && msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
+
+        uint256 length = playerIds.length;
+        if (effectiveMins.length != 0 && effectiveMins.length != length) {
+            revert Errors.LengthMismatch(length, effectiveMins.length);
+        }
+
+        bool isReactivate = reason == LifecycleReason.Reactivate;
+        uint256 added;
+        for (uint256 i; i < length; ++i) {
+            bytes32 playerId = playerIds[i];
+            if (playerId == bytes32(0)) continue;
+
+            if (isReactivate) {
+                if (_queuedReactivate[playerId]) continue;
+                _queuedReactivate[playerId] = true;
+            } else {
+                if (_queuedDeactivate[playerId]) continue;
+                _queuedDeactivate[playerId] = true;
+            }
+
+            uint32 mins = effectiveMins.length == 0 ? 0 : effectiveMins[i];
+            _pending.push(PendingLifecycle({ playerId: playerId, reason: reason, effectiveMins: mins }));
+            unchecked {
+                ++added;
+            }
+        }
+
+        emit Events.LifecyclePlayersEnqueued(reason, added, _pending.length);
+    }
+
+    // --------------------------------------------
+    //  Queue end
+    // --------------------------------------------
 
     function confirmInactive( /* playerId */ ) external {
         // gated: manual review + owner setStatus(INACTIVE)
@@ -160,9 +185,9 @@ contract TransferLocker is Initializable, Ownable, ITransferLocker {
         _requireFeeTopologyConsistent(playerId);
     }
 
-    // -------------------------------------------------------------------------
-    //  Fee topology
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  Internals
+    // --------------------------------------------
 
     function _requireFeeTopologyConsistent(bytes32 playerId) internal view {
         PlayerSet memory set = playerSetRegistry.getPlayerSet(playerId);

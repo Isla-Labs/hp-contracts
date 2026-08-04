@@ -71,14 +71,11 @@ contract DeployLockersStack is DeployLockers {
     }
 }
 
-/// @notice Base Sepolia — market / vault factories.
+/// @notice Base Sepolia — market / vault factories (+ DeployTournament initialize).
 contract DeployFactoriesStack is DeployFactories {
     function run() external returns (FactoryDeployment memory f) {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(privateKey);
-        if (!vm.envExists("OWNER_ADDRESS") && !vm.envExists("DAO_ADDRESS")) {
-            vm.setEnv("OWNER_ADDRESS", vm.toString(deployer));
-        }
 
         vm.startBroadcast(privateKey);
         f = _deployFactories(deployer);

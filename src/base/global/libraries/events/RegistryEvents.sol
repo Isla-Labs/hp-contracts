@@ -38,11 +38,4 @@ library RegistryEvents {
     event DomesticSeasonOpened(bytes32 indexed leagueId, bytes32 indexed seasonId, uint16 indexed seasonStartYear);
     event VaultRegistered(bytes32 indexed tournamentId, address indexed vault);
     event VaultUnregistered(bytes32 indexed tournamentId, address indexed vault);
-
-    // --------------------------------------------
-    //  ReferralRegistry Events
-    // --------------------------------------------
-
-    event ReferralTierUpdated(address indexed account, uint8 tier, uint16 boostBps);
-    event ReferralBoostsEnabledUpdated(bool enabled);
 }

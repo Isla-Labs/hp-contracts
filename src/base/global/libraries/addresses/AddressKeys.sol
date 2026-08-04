@@ -23,6 +23,12 @@ library AddressKeys {
     string internal constant PBR_SETTLE = "PBR_SETTLE";
     string internal constant ROUND_MANAGER = "ROUND_MANAGER";
 
+    // Factories
+    string internal constant FEE_ROUTER_FACTORY = "FEE_ROUTER_FACTORY";
+    string internal constant PBR_FEE_HUB_FACTORY = "PBR_FEE_HUB_FACTORY";
+    string internal constant PBR_TREASURY_FACTORY = "PBR_TREASURY_FACTORY";
+    string internal constant PLAYER_VAULT_FACTORY = "PLAYER_VAULT_FACTORY";
+
     // Automata DCAP (TEE quote verification)
     string internal constant AUTOMATA_DCAP_ATTESTATION = "AUTOMATA_DCAP_ATTESTATION";
     string internal constant AUTOMATA_PCCS_ROUTER = "AUTOMATA_PCCS_ROUTER";

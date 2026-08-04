@@ -11,6 +11,8 @@ import { MockAttestationVerifier } from "@src/oracle/attestation/MockAttestation
 import { CvmRouterConfig } from "@types/oracle/CvmTypes.sol";
 import { HP85432 } from "@addresses/HP84532.sol";
 
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
+import { AddressProviderOps } from "../utils/AddressProviderOps.sol";
 import { ProxyUtils } from "../utils/ProxyUtils.sol";
 
 /**
@@ -20,17 +22,19 @@ import { ProxyUtils } from "../utils/ProxyUtils.sol";
  *      + request bus only — stable proxy addresses so CVM sealed env need not change on upgrades.
  *
  *      ProxyAdmin owner = OWNER/deployer initially.
+ *      If ADDRESS_PROVIDER is set and owned by deployer, registers CVM_COORDINATOR + CVM_ROUTER.
  *
  *      Makefile: `make deploy-base-sepolia-oracle`
  *
  *      Env:
  *        PRIVATE_KEY, OWNER_ADDRESS (fallback DAO_ADDRESS)
+ *        ADDRESS_PROVIDER (optional — auto-register CVM names)
  *        USE_MOCK_VERIFIER (default false — Automata DCAP; set true for local/unit bring-up)
  *        REGISTRATION_TTL (default 1 day)
  *        MAX_QUOTE_AGE (default 1 hour)
  *        COMPOSE_HASH (optional immediate allowlist)
  */
-contract DeployOracle is Script, ProxyUtils {
+contract DeployOracle is Script, ProxyUtils, AddressProviderOps {
     function run() external {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(privateKey);
@@ -78,6 +82,9 @@ contract DeployOracle is Script, ProxyUtils {
             abi.encodeCall(CvmRouter.initialize, (owner, coordinatorProxy, routerConfig))
         );
 
+        _tryRegisterName(deployer, Keys.CVM_COORDINATOR, coordinatorProxy);
+        _tryRegisterName(deployer, Keys.CVM_ROUTER, routerProxy);
+
         vm.stopBroadcast();
 
         console2.log("InitGuard", address(guard));
@@ -88,6 +95,9 @@ contract DeployOracle is Script, ProxyUtils {
         console2.log("CvmRouter impl", routerImpl);
         console2.log("ProxyAdmin owner", owner);
         console2.log("useMockVerifier", useMock);
+        if (_addressProviderOrZero() == address(0)) {
+            console2.log("ADDRESS_PROVIDER unset - register CVM_* later via staging script:set-address");
+        }
 
         string memory json = string.concat(
             "{\n",

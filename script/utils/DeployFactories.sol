@@ -2,23 +2,22 @@
 pragma solidity ^0.8.34;
 
 import { console2 as console } from "forge-std/console2.sol";
-import { Script } from "forge-std/Script.sol";
 
+import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { DeployTournament } from "@deployments/tournaments/DeployTournament.sol";
 import { FeeRouterFactory } from "@markets/factories/FeeRouterFactory.sol";
 import { PbrFeeHubFactory } from "@markets/factories/PbrFeeHubFactory.sol";
 import { PbrTreasuryFactory } from "@vaults/factories/PbrTreasuryFactory.sol";
 import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 
+import { AddressProviderOps } from "./AddressProviderOps.sol";
+
 /**
  * @title DeployFactories
- * @notice Market + vault beacon factories; wires `DeployTournament.configureFactories`.
- * @dev Non-upgradeable factories resolve AddressProvider slots in their constructors, so Core
- *      must already have registered `ORCHESTRATOR` + registry names.
- *      `configureFactories` is `onlyOwner` on DeployTournament — owner (EOA/Safe) must call it
- *      (or `OWNER_ADDRESS == deployer` for solo bootstrap).
+ * @notice Step 8: market + vault beacon factories; configure DeployTournament; register on AP.
+ * @dev Direct `ap.setName` while deployer still owns AddressProvider (pre-handoff).
  */
-abstract contract DeployFactories is Script {
+abstract contract DeployFactories is AddressProviderOps {
     struct FactoryDeployment {
         address feeRouterFactory;
         address pbrFeeHubFactory;
@@ -26,39 +25,33 @@ abstract contract DeployFactories is Script {
         address playerVaultFactory;
     }
 
-    struct CoreAddresses {
-        address owner;
-        address addressProvider;
-        address deployTournament;
-    }
-
-    function _loadCoreAddresses() internal view returns (CoreAddresses memory c) {
-        c.owner = vm.envOr("OWNER_ADDRESS", vm.envOr("DAO_ADDRESS", address(0)));
-        c.addressProvider = vm.envAddress("ADDRESS_PROVIDER");
-        c.deployTournament = vm.envOr("DEPLOY_TOURNAMENT", address(0));
-    }
-
     function _deployFactories(address deployer) internal returns (FactoryDeployment memory f) {
-        CoreAddresses memory c = _loadCoreAddresses();
         if (deployer == address(0)) revert("deployer required");
-        if (c.addressProvider == address(0)) revert("ADDRESS_PROVIDER required");
-        if (c.deployTournament == address(0)) revert("DEPLOY_TOURNAMENT required");
 
-        f.feeRouterFactory = address(new FeeRouterFactory(c.addressProvider));
-        f.playerVaultFactory = address(new PlayerVaultFactory(c.addressProvider));
-        f.pbrTreasuryFactory = address(new PbrTreasuryFactory(c.addressProvider));
-        f.pbrFeeHubFactory = address(new PbrFeeHubFactory(c.addressProvider));
+        address addressProvider = address(_requireAddressProvider());
+        address deployTournament = _requireName(Keys.DEPLOY_TOURNAMENT);
+        _requireName(Keys.ORCHESTRATOR);
 
-        if (deployer == c.owner) {
-            DeployTournament(c.deployTournament).configureFactories(f.pbrTreasuryFactory, f.pbrFeeHubFactory);
+        address owner = _ownerOrDeployer(deployer);
+
+        f.feeRouterFactory = address(new FeeRouterFactory(addressProvider));
+        f.playerVaultFactory = address(new PlayerVaultFactory(addressProvider));
+        f.pbrTreasuryFactory = address(new PbrTreasuryFactory(addressProvider));
+        f.pbrFeeHubFactory = address(new PbrFeeHubFactory(addressProvider));
+
+        if (deployer == owner) {
+            DeployTournament(deployTournament).configureFactories(f.pbrTreasuryFactory, f.pbrFeeHubFactory);
+            _registerName(deployer, Keys.FEE_ROUTER_FACTORY, f.feeRouterFactory);
+            _registerName(deployer, Keys.PLAYER_VAULT_FACTORY, f.playerVaultFactory);
+            _registerName(deployer, Keys.PBR_TREASURY_FACTORY, f.pbrTreasuryFactory);
+            _registerName(deployer, Keys.PBR_FEE_HUB_FACTORY, f.pbrFeeHubFactory);
         } else {
-            console.log("OWNER != deployer: call DeployTournament.configureFactories from the Safe/EOA owner");
+            console.log("OWNER != deployer: from the Safe/EOA owner call:");
+            console.log("  1) DeployTournament.configureFactories(treasuryFactory, feeHubFactory)");
+            console.log("  2) AddressProvider.setName for each factory (or Orchestrator.execute after handoff)");
         }
 
-        _logFactories(f);
-    }
-
-    function _logFactories(FactoryDeployment memory f) internal pure {
+        console.log("=== DeployFactories ===");
         console.log("FeeRouterFactory", f.feeRouterFactory);
         console.log("PlayerVaultFactory", f.playerVaultFactory);
         console.log("PbrTreasuryFactory", f.pbrTreasuryFactory);

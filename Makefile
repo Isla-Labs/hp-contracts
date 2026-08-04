@@ -6,18 +6,32 @@ generate-history:
 	@bun run ./deployments/cli.ts --output history
 
 # ---------------------------------------------------------------------------
-# Base mainnet
+# Base mainnet — sequential isolated deploys
 # ---------------------------------------------------------------------------
 
-deploy-base-core:
-	@forge script script/DeployBase/DeployBase.s.sol:DeployCoreStack \
+deploy-base-address-provider:
+	@forge script script/DeployBase/DeployAddressProvider.s.sol:DeployAddressProvider \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
 	$(MAKE) generate-history
 
-deploy-base-factories:
-	@forge script script/DeployBase/DeployBase.s.sol:DeployFactoriesStack \
+deploy-base-orchestrator:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployOrchestratorStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-registries:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployRegistriesStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-deploy-tournament:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployDeployTournamentStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
@@ -30,34 +44,32 @@ deploy-base-data:
 		--broadcast --slow
 	$(MAKE) generate-history
 
+deploy-base-lockers:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployLockersStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-factories:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployFactoriesStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-handoff:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployHandoffStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
 # ---------------------------------------------------------------------------
-# Base Sepolia
+# Base Sepolia — sequential isolated deploys
 # ---------------------------------------------------------------------------
 
-deploy-base-sepolia-core:
-	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployCoreStack \
-		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
-		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--broadcast --slow
-	$(MAKE) generate-history
-
-deploy-base-sepolia-factories:
-	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployFactoriesStack \
-		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
-		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--broadcast --slow
-	$(MAKE) generate-history
-
-deploy-base-sepolia-data:
-	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployDataStack \
-		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
-		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--broadcast --slow
-	$(MAKE) generate-history
-
-# CVM oracle bus (upgradeable TUP proxies; MockAttestationVerifier by default).
-# ProxyAdmin owner = OWNER_ADDRESS (defaults to deployer). Optional: COMPOSE_HASH=0x…
-# at deploy, or run oracle-sepolia-add-compose after Phala prints the real hash.
+# 1) Oracle (registers CVM_* on AP when ADDRESS_PROVIDER set + owned by deployer)
 deploy-base-sepolia-oracle:
 	@forge script script/oracle/DeployOracle.s.sol:DeployOracle \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
@@ -66,8 +78,71 @@ deploy-base-sepolia-oracle:
 	@echo "Wrote deployments/base-sepolia-oracle.json"
 	@echo "Next: allowlist Phala compose_hash via make oracle-sepolia-add-compose COMPOSE_HASH=0x…"
 
+# 2) AddressProvider — paste ADDRESS_PROVIDER into .env (+ staging book)
+deploy-base-sepolia-address-provider:
+	@forge script script/DeployBase/DeployAddressProvider.s.sol:DeployAddressProvider \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 3) Orchestrator
+deploy-base-sepolia-orchestrator:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployOrchestratorStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 4) Registries
+deploy-base-sepolia-registries:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployRegistriesStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 5) DeployTournament
+deploy-base-sepolia-deploy-tournament:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployDeployTournamentStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 6) Data (RoundManager)
+deploy-base-sepolia-data:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployDataStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 7) Lockers
+deploy-base-sepolia-lockers:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployLockersStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 8) Factories
+deploy-base-sepolia-factories:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployFactoriesStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 9) Handoff AP + ProxyAdmins → Orchestrator
+deploy-base-sepolia-handoff:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployHandoffStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
 # Upgrade coordinator logic in place (stable proxy from deployments/base-sepolia-oracle.json).
-# Writes cvmCoordinatorImpl back to that file.
 upgrade-base-sepolia-cvm-coordinator:
 	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json" && exit 1)
 	@forge script script/oracle/UpgradeCvmCoordinator.s.sol:UpgradeCvmCoordinator \
@@ -75,8 +150,6 @@ upgrade-base-sepolia-cvm-coordinator:
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
 
-# Upgrade router logic in place (stable proxy from deployments/base-sepolia-oracle.json).
-# Seeds default per-job exclusives, writes cvmRouterImpl back to that file.
 upgrade-base-sepolia-cvm-router:
 	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json" && exit 1)
 	@forge script script/oracle/UpgradeCvmRouter.s.sol:UpgradeCvmRouter \
@@ -84,8 +157,6 @@ upgrade-base-sepolia-cvm-router:
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
 
-# Sync Phala CVM compose_hash onto the Sepolia coordinator attestation policy.
-# Requires: COMPOSE_HASH=0x…64 hex chars, and deployments/base-sepolia-oracle.json
 oracle-sepolia-add-compose:
 	@test -n "$(COMPOSE_HASH)" || (echo "COMPOSE_HASH=0x… required" && exit 1)
 	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1)
@@ -95,9 +166,6 @@ oracle-sepolia-add-compose:
 		cast send "$$COORD" "addComposeHash(bytes32)" "$(COMPOSE_HASH)" \
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
 
-# Point coordinator at AutomataAttestationVerifier (or any IAttestationVerifier).
-# Usage: make oracle-sepolia-set-verifier VERIFIER=0x…
-# Default: Automata verifier already deployed on Base Sepolia (DCAP = HP84532.AUTOMATA_DCAP_ATTESTATION).
 oracle-sepolia-set-verifier:
 	@VERIFIER="$(or $(VERIFIER),0xcA6AD7614f81C0803014cDddD2a1C13149996834)"; \
 		test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1); \
@@ -108,9 +176,6 @@ oracle-sepolia-set-verifier:
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL); \
 		echo "onchain:" $$(cast call "$$COORD" "attestationVerifier()(address)" --rpc-url $(BASE_SEPOLIA_RPC_URL))
 
-# Push canonical CvmRouterConfig to the live Sepolia proxy (no upgrade).
-# Defaults: maxCallbackGasLimit=5M, requestTimeout=1h, gasForCallExactCheck=5000.
-# Requires CATEGORY_ONE key. Usage: make oracle-sepolia-set-config
 oracle-sepolia-set-config:
 	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1)
 	@ROUTER=$$(sed -n 's/.*"cvmRouter": "\([^"]*\)".*/\1/p' deployments/base-sepolia-oracle.json | head -1); \
@@ -120,8 +185,6 @@ oracle-sepolia-set-config:
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL); \
 		echo "onchain:" $$(cast call "$$ROUTER" "getConfig()(uint32,uint32,uint16)" --rpc-url $(BASE_SEPOLIA_RPC_URL))
 
-# Tighten / loosen registration TTL (default deploy was 7d; prefer 1d with 4h re-attest).
-# Usage: make oracle-sepolia-set-ttl TTL=86400
 oracle-sepolia-set-ttl:
 	@test -n "$(TTL)" || (echo "TTL=<seconds> required (e.g. 86400)" && exit 1)
 	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1)
@@ -131,7 +194,6 @@ oracle-sepolia-set-ttl:
 		cast send "$$COORD" "setRegistrationTtl(uint64)" "$(TTL)" \
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
 
-# Drop a compose hash from local attestation policy (instant isOracle revoke).
 oracle-sepolia-remove-compose:
 	@test -n "$(COMPOSE_HASH)" || (echo "COMPOSE_HASH=0x… required" && exit 1)
 	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1)
@@ -141,11 +203,6 @@ oracle-sepolia-remove-compose:
 		cast send "$$COORD" "removeComposeHash(bytes32)" "$(COMPOSE_HASH)" \
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
 
-# Deploy TestData consumer against the live Sepolia CvmRouter.
-# → deployments/base-sepolia-test-data.json
-# Smoke (after CVM image understands CvmJob.TestFetch):
-#   cast send $(jq -r .testData deployments/base-sepolia-test-data.json) \
-#     "request(string)" "hello" --private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
 deploy-base-sepolia-test-data:
 	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy oracle first" && exit 1)
 	@ROUTER=$${CVM_ROUTER:-$$(sed -n 's/.*"cvmRouter": "\([^"]*\)".*/\1/p' deployments/base-sepolia-oracle.json | head -1)}; \
@@ -178,8 +235,12 @@ fmt-check:
 	forge fmt --check
 
 .PHONY: generate-history \
-	deploy-base-core deploy-base-factories deploy-base-data \
-	deploy-base-sepolia-core deploy-base-sepolia-factories deploy-base-sepolia-data \
-	deploy-base-sepolia-oracle upgrade-base-sepolia-cvm-coordinator upgrade-base-sepolia-cvm-router \
-	oracle-sepolia-add-compose oracle-sepolia-remove-compose oracle-sepolia-set-verifier oracle-sepolia-set-config oracle-sepolia-set-ttl deploy-base-sepolia-test-data \
+	deploy-base-address-provider deploy-base-orchestrator deploy-base-registries \
+	deploy-base-deploy-tournament deploy-base-data deploy-base-lockers deploy-base-factories deploy-base-handoff \
+	deploy-base-sepolia-oracle deploy-base-sepolia-address-provider deploy-base-sepolia-orchestrator \
+	deploy-base-sepolia-registries deploy-base-sepolia-deploy-tournament deploy-base-sepolia-data \
+	deploy-base-sepolia-lockers deploy-base-sepolia-factories deploy-base-sepolia-handoff \
+	upgrade-base-sepolia-cvm-coordinator upgrade-base-sepolia-cvm-router \
+	oracle-sepolia-add-compose oracle-sepolia-remove-compose oracle-sepolia-set-verifier \
+	oracle-sepolia-set-config oracle-sepolia-set-ttl deploy-base-sepolia-test-data \
 	install build test coverage fmt fmt-check

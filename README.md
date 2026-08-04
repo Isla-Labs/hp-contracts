@@ -74,16 +74,22 @@ Latest deployments can be found [here](./Deployments.md) and historical deployme
 
 ## Deployment Instructions
 
-Three Foundry scripts (Base / Base Sepolia). Copy `.env.example` → `.env`, then:
+Isolated Foundry steps (Base / Base Sepolia). Copy `.env.example` → `.env`. Only `ADDRESS_PROVIDER` is the env address pointer; each step registers its names onchain. Deployer owns AddressProvider until handoff.
 
 ```bash
-make deploy-base-sepolia-core        # access, lockers, DeployTournament, registries
-# paste logged addresses into .env (CONSTITUTIONAL_TIMELOCK, AUTOMATOR, …)
-make deploy-base-sepolia-factories   # FeeRouter / PlayerVault / PbrTreasury / PbrFeeHub factories
-make deploy-base-sepolia-data        # EligibilityVerifier, FixtureCommitment, RoundManager
+make deploy-base-sepolia-oracle              # CvmCoordinator + CvmRouter (setName CVM_* if AP already set)
+make deploy-base-sepolia-address-provider    # paste ADDRESS_PROVIDER into .env (+ staging book)
+# if oracle ran first: npm run script:set-address -- CVM_ROUTER=0x… CVM_COORDINATOR=0x…  (from staging/)
+make deploy-base-sepolia-orchestrator
+make deploy-base-sepolia-registries
+make deploy-base-sepolia-deploy-tournament
+make deploy-base-sepolia-data                # RoundManager
+make deploy-base-sepolia-lockers
+make deploy-base-sepolia-factories
+make deploy-base-sepolia-handoff             # AP + ProxyAdmins → Orchestrator
 ```
 
-Upgradeable singletons use `InitGuard` → `TransparentUpgradeableProxy` → `ProxyAdmin` owned by `ConstitutionalTimelock`. Per-market FeeRouter / PlayerVault and per-tournament hub / treasury deploys happen later via DopplerLocker / DeployTournament flows (not these scripts).
+Upgradeable protocol singletons use `InitGuard` → TUP; ProxyAdmins move to Orchestrator at handoff. Oracle ProxyAdmins stay with OWNER. Per-market FeeRouter / PlayerVault and per-tournament hub / treasury deploys happen later via DopplerLocker / DeployTournament flows.
 
 ## Blueprint
 
@@ -106,8 +112,8 @@ src
 ├─ markets/         — FeeRouter, PbrFeeHub (+ factories)
 └─ vaults/          — PbrTreasury, PlayerVault, StakedToken (+ factories)
 script/
-├─ DeployBase/      — DeployCoreStack / DeployFactoriesStack / DeployDataStack
-└─ utils/           — DeployCore, DeployFactories, DeployData, ProxyUtils
+├─ DeployBase/      — AddressProvider + sequential stacks (Orchestrator → handoff)
+└─ utils/           — DeployOrchestrator, DeployRegistries, DeployData, DeployLockers, …
 test/
 deployments/        — history logs + cli.ts
 ```

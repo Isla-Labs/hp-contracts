@@ -21,6 +21,7 @@ library AddressKeys {
     string internal constant PPM_VERIFIER = "PPM_VERIFIER";
     string internal constant CRE_FORWARDER = "CRE_FORWARDER";
     string internal constant PBR_SETTLE = "PBR_SETTLE";
+    string internal constant ROUND_MANAGER = "ROUND_MANAGER";
 
     // Automata DCAP (TEE quote verification)
     string internal constant AUTOMATA_DCAP_ATTESTATION = "AUTOMATA_DCAP_ATTESTATION";

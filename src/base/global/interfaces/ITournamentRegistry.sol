@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Hub, RoundSchedule, Season, TournamentType } from "@types/TournamentTypes.sol";
+import { Hub, Season, TournamentType } from "@types/TournamentTypes.sol";
 
 /**
  * @title ITournamentRegistry
- * @notice Cross-contract surface for tournament topology, calendars, and vault membership SoT.
+ * @notice Cross-contract surface for tournament topology, season identity, and vault membership SoT.
+ * @dev Round calendars (`finalRound` / `RoundSchedule`) live on `IRoundManager`.
  */
 interface ITournamentRegistry {
     // --------------------------------------------
@@ -40,18 +41,11 @@ interface ITournamentRegistry {
     function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external;
 
     // --------------------------------------------
-    //  Season calendar — owner (Orchestrator)
+    //  Season identity — owner (Orchestrator)
     // --------------------------------------------
 
-    /// @notice Open a season stub. `finalRound` may be 0 until RoundManager calls `setFinalRound`.
-    function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) external;
-
-    /// @notice Set / replace `finalRound` before `upsertRound(s)` (RoundManager). Reverts if `finalRound == 0`.
-    function setFinalRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound) external;
-
-    function upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round) external;
-
-    function upsertRounds(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule[] calldata rounds) external;
+    /// @notice Open a season identity stub. RoundManager owns the calendar afterwards.
+    function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear) external;
 
     // --------------------------------------------
     //  Views
@@ -72,8 +66,6 @@ interface ITournamentRegistry {
 
     function getRegisteredVaults(bytes32 tournamentId) external view returns (address[] memory);
 
-    function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32);
-
     function getSeasonId(bytes32 tournamentId, uint16 seasonStartYear) external view returns (bytes32);
 
     function getSeason(bytes32 tournamentId, uint16 seasonStartYear) external view returns (Season memory);
@@ -89,16 +81,4 @@ interface ITournamentRegistry {
         external
         view
         returns (bytes32[] memory seasonIds, uint16[] memory seasonStartYears);
-
-    function getRound(
-        bytes32 tournamentId,
-        uint16 seasonStartYear,
-        uint32 roundNumber
-    ) external view returns (RoundSchedule memory);
-
-    function isRoundPublished(
-        bytes32 tournamentId,
-        uint16 seasonStartYear,
-        uint32 roundNumber
-    ) external view returns (bool);
 }

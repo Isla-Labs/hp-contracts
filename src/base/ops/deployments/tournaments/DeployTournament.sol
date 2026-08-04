@@ -34,8 +34,8 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
  *        - `CONTINENTAL`: deploy treasury, attach under selected league hubs (`leagueIds`)
  *        - `INTERNATIONAL`: deploy treasury, attach under all existing league hubs
  *
- *      Season stubs (`BootstrapSeason`) open with `finalRound = 0`; RoundManager later calls
- *      `setFinalRound` + `upsertRounds`.
+ *      Season identity stubs (`BootstrapSeason`) open via `TournamentRegistry.openSeason`;
+ *      RoundManager later owns `setFinalRound` + `upsertRounds`.
  *
  *      Deploy order:
  *        1. Deploy Orchestrator + registries + this proxy; grant `AUTHORIZED_CONTRACT`
@@ -73,7 +73,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
      * @param tournamentId Stable tournament id.
      * @param initialSeason Season written into `PbrTreasury.initialize`.
      * @param treasurySalt CreateX salt for `PbrTreasuryFactory.create` (mine offchain for `0x99…`).
-     * @param seasons Optional season stubs (`openSeason` with `finalRound = 0`); empty skips.
+     * @param seasons Optional season stubs (`openSeason`); empty skips.
      */
     struct BootstrapParams {
         bytes32 tournamentId;
@@ -273,7 +273,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
             if (s.seasonId == bytes32(0) || s.seasonStartYear == 0) revert Errors.ZeroId();
             _exec(
                 address(tournamentRegistry),
-                abi.encodeCall(ITournamentRegistry.openSeason, (b.tournamentId, s.seasonId, s.seasonStartYear, uint32(0)))
+                abi.encodeCall(ITournamentRegistry.openSeason, (b.tournamentId, s.seasonId, s.seasonStartYear))
             );
         }
 

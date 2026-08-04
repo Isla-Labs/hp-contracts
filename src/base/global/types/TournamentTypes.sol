@@ -15,7 +15,7 @@ struct Tournament {
     Hub[] feeHubs; // list of PbrFeeHub contracts that distribute fees to this tournament
     bytes32 tournamentId;
     address pbrTreasury;
-    Season[] seasons;
+    Season[] seasons; // identity stubs; round calendar SoT is `RoundManager`
 }
 
 struct Hub {
@@ -24,16 +24,18 @@ struct Hub {
 }
 
 // --------------------------------------------
-//  Season calendar per tournament
+//  Season identity per tournament (TournamentRegistry)
 // --------------------------------------------
 
+/// @notice Season identity only — `finalRound` / rounds live in `RoundManager`.
 struct Season {
     bytes32 seasonId;
     uint16 seasonStartYear;
-    uint32 finalRound;
-    uint32 roundCount;
-    RoundSchedule[] rounds;
 }
+
+// --------------------------------------------
+//  Round calendar (RoundManager)
+// --------------------------------------------
 
 struct RoundSchedule {
     uint32 roundNumber;

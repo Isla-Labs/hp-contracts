@@ -8,14 +8,14 @@ import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
-import { Hub, Season, Tournament, TournamentType, RoundSchedule } from "@types/TournamentTypes.sol";
+import { Hub, Season, Tournament, TournamentType } from "@types/TournamentTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 
 /**
  * @title TournamentRegistry
- * @notice Canonical tournament topology, season calendars, and vault membership SoT.
+ * @notice Canonical tournament topology, season identity, and vault membership SoT.
  * @dev Examples:
  *        - `EPL`: DOMESTIC_LEAGUE, feeHubs = [{EPL, hub}], treasury = EPL pot
  *        - `FACUP`: DOMESTIC_CUP, feeHubs = [{EPL, hub}], treasury = FA Cup pot
@@ -23,8 +23,9 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
  *
  *      Access:
  *      - Owner (`Orchestrator`): `registerHub`, tournament create, `linkHub`, vault membership,
- *        and season calendar.
+ *        and season identity (`openSeason`).
  *
+ *      Round calendars (`finalRound` / `RoundSchedule`) live on `RoundManager`.
  *      Vault membership is the SoT here; each write syncs a local cache on the tournament's
  *      `PbrTreasury` so crank paths never re-read this registry for the vault set.
  *
@@ -167,22 +168,17 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     }
 
     // --------------------------------------------
-    //  Season calendar — owner
+    //  Season identity — owner
     // --------------------------------------------
 
     /**
-     * @notice Opens a season calendar for `tournamentId`.
+     * @notice Opens a season identity stub for `tournamentId`.
+     * @dev RoundManager owns `finalRound` / rounds after this.
      * @param tournamentId Tournament HPID.
      * @param seasonId Season HPID.
      * @param seasonStartYear Local season key (e.g. 2025 for 2025/26).
-     * @param finalRound Highest round number, or `0` for a stub (RoundManager calls `setFinalRound` before upserts).
      */
-    function openSeason(
-        bytes32 tournamentId,
-        bytes32 seasonId,
-        uint16 seasonStartYear,
-        uint32 finalRound
-    ) external onlyOwner {
+    function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear) external onlyOwner {
         if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
 
         Tournament storage t = _requireTournament(tournamentId);
@@ -190,50 +186,10 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
             revert Errors.SeasonExists(tournamentId, seasonStartYear);
         }
 
-        t.seasons
-            .push(
-                Season({
-                    seasonId: seasonId,
-                    seasonStartYear: seasonStartYear,
-                    finalRound: finalRound,
-                    roundCount: 0,
-                    rounds: new RoundSchedule[](0)
-                })
-            );
-        emit Events.SeasonOpened(tournamentId, seasonId, seasonStartYear, finalRound);
+        t.seasons.push(Season({ seasonId: seasonId, seasonStartYear: seasonStartYear }));
+        emit Events.SeasonOpened(tournamentId, seasonId, seasonStartYear);
         if (t.tournamentType == TournamentType.DOMESTIC_LEAGUE) {
-            emit Events.DomesticSeasonOpened(tournamentId, seasonId, seasonStartYear, finalRound);
-        }
-    }
-
-    /**
-     * @notice Sets `finalRound` on an existing season (RoundManager). Must be non-zero.
-     * @dev Call before `upsertRound(s)` — upserts reject rounds above `finalRound`.
-     */
-    function setFinalRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound) external onlyOwner {
-        if (finalRound == 0) revert Errors.InvalidFinalRound();
-        Season storage season = _requireSeason(tournamentId, seasonStartYear);
-        season.finalRound = finalRound;
-        emit Events.FinalRoundSet(tournamentId, season.seasonId, seasonStartYear, finalRound);
-    }
-
-    function upsertRound(
-        bytes32 tournamentId,
-        uint16 seasonStartYear,
-        RoundSchedule calldata round
-    ) external onlyOwner {
-        _upsertRound(tournamentId, seasonStartYear, round);
-    }
-
-    /// @notice Bulk `upsertRound` for calendar bootstrap / matchweek ingest.
-    function upsertRounds(
-        bytes32 tournamentId,
-        uint16 seasonStartYear,
-        RoundSchedule[] calldata rounds
-    ) external onlyOwner {
-        uint256 length = rounds.length;
-        for (uint256 i; i < length; ++i) {
-            _upsertRound(tournamentId, seasonStartYear, rounds[i]);
+            emit Events.DomesticSeasonOpened(tournamentId, seasonId, seasonStartYear);
         }
     }
 
@@ -304,10 +260,6 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     function getRegisteredVaults(bytes32 tournamentId) external view returns (address[] memory) {
         _requireTournament(tournamentId);
         return _registeredVaults[tournamentId];
-    }
-
-    function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32) {
-        return _requireSeason(tournamentId, seasonStartYear).finalRound;
     }
 
     /// @notice StatsPerform tournament calendar UUID (`tmcl`) for a season.
@@ -406,71 +358,9 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         _sortSeasonsOldestFirst(seasonIds, seasonStartYears, count);
     }
 
-    function getRound(
-        bytes32 tournamentId,
-        uint16 seasonStartYear,
-        uint32 roundNumber
-    ) external view returns (RoundSchedule memory) {
-        Season storage season = _requireSeason(tournamentId, seasonStartYear);
-        uint256 rIndex = _roundIndex(season, roundNumber);
-        if (rIndex == type(uint256).max) revert Errors.RoundNotFound(tournamentId, seasonStartYear, roundNumber);
-        return season.rounds[rIndex];
-    }
-
-    /// @notice True when the round exists with a valid time range and at least one fixture.
-    function isRoundPublished(
-        bytes32 tournamentId,
-        uint16 seasonStartYear,
-        uint32 roundNumber
-    ) external view returns (bool) {
-        Tournament storage t = _tournaments[tournamentId];
-        if (t.tournamentId == bytes32(0)) return false;
-
-        uint256 sIndex = _seasonIndex(t, seasonStartYear);
-        if (sIndex == type(uint256).max) return false;
-
-        Season storage season = t.seasons[sIndex];
-        uint256 rIndex = _roundIndex(season, roundNumber);
-        if (rIndex == type(uint256).max) return false;
-
-        RoundSchedule storage round = season.rounds[rIndex];
-        return round.startTime != 0 && round.endTime > round.startTime && round.fixtureIds.length > 0;
-    }
-
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
-
-    function _upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round) internal {
-        Tournament storage t = _requireTournament(tournamentId);
-        uint256 sIndex = _seasonIndex(t, seasonStartYear);
-        if (sIndex == type(uint256).max) revert Errors.SeasonNotFound(tournamentId, seasonStartYear);
-
-        Season storage season = t.seasons[sIndex];
-        if (round.roundNumber == 0 || round.roundNumber > season.finalRound) {
-            revert Errors.InvalidRoundNumber(round.roundNumber, season.finalRound);
-        }
-        if (round.endTime <= round.startTime) revert Errors.InvalidTimeRange(round.startTime, round.endTime);
-
-        uint256 rIndex = _roundIndex(season, round.roundNumber);
-        if (rIndex == type(uint256).max) {
-            season.rounds.push(round);
-            unchecked {
-                ++season.roundCount;
-            }
-        } else {
-            RoundSchedule storage stored = season.rounds[rIndex];
-            stored.startTime = round.startTime;
-            stored.endTime = round.endTime;
-            delete stored.fixtureIds;
-            uint256 n = round.fixtureIds.length;
-            for (uint256 i; i < n; ++i) {
-                stored.fixtureIds.push(round.fixtureIds[i]);
-            }
-        }
-
-        emit Events.RoundUpserted(tournamentId, seasonStartYear, round.roundNumber);
-    }
 
     function _linkHub(Tournament storage t, bytes32 tournamentId, Hub calldata hub) internal {
         if (hub.leagueId == bytes32(0)) revert Errors.ZeroId();
@@ -560,14 +450,6 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         uint256 length = t.seasons.length;
         for (uint256 i; i < length; ++i) {
             if (t.seasons[i].seasonStartYear == seasonStartYear) return i;
-        }
-        return type(uint256).max;
-    }
-
-    function _roundIndex(Season storage season, uint32 roundNumber) internal view returns (uint256) {
-        uint256 length = season.rounds.length;
-        for (uint256 i; i < length; ++i) {
-            if (season.rounds[i].roundNumber == roundNumber) return i;
         }
         return type(uint256).max;
     }

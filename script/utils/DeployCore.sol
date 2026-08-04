@@ -15,17 +15,18 @@ import { Orchestrator } from "@src/Orchestrator.sol";
 import { AddressProvider } from "@src/AddressProvider.sol";
 import { TournamentRegistry } from "@registries/TournamentRegistry.sol";
 import { PlayerSetRegistry } from "@registries/PlayerSetRegistry.sol";
+import { RoundManager } from "@data/matchweeks/RoundManager.sol";
 
 import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployCore
- * @notice Bootstrap: AddressProvider, Orchestrator, DeployTournament, lockers, registries.
+ * @notice Bootstrap: AddressProvider, Orchestrator, DeployTournament, lockers, registries, RoundManager.
  * @dev AddressBook upgradeables follow:
  *        1) Deploy AddressProvider (temporary owner = deployer)
- *        2) Deploy proxies + implementations (registries + DeployTournament)
+ *        2) Deploy proxies + implementations (registries + RoundManager + DeployTournament)
  *        3) Deploy Orchestrator; authorize DT proxy; register names
- *        4) Initialize proxies (DT owner = EOA/Safe; registries owner = Orchestrator)
+ *        4) Initialize proxies (DT owner = EOA/Safe; others owner = Orchestrator)
  *        5) Transfer AddressProvider + ProxyAdmins to Orchestrator
  */
 abstract contract DeployCore is ProxyUtils {
@@ -39,8 +40,10 @@ abstract contract DeployCore is ProxyUtils {
         address deployTournamentImpl;
         address tournamentRegistry;
         address playerSetRegistry;
+        address roundManager;
         address tournamentRegistryImpl;
         address playerSetRegistryImpl;
+        address roundManagerImpl;
     }
 
     function _deployCore(address owner, address deployer, address cvmRouter)
@@ -67,10 +70,12 @@ abstract contract DeployCore is ProxyUtils {
 
         d.tournamentRegistry = _deployInitGuardProxy(guard, deployer);
         d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
+        d.roundManager = _deployInitGuardProxy(guard, deployer);
         d.deployTournament = _deployInitGuardProxy(guard, deployer);
 
         d.tournamentRegistryImpl = address(new TournamentRegistry(d.addressProvider));
         d.playerSetRegistryImpl = address(new PlayerSetRegistry(d.addressProvider));
+        d.roundManagerImpl = address(new RoundManager(d.addressProvider));
         d.deployTournamentImpl = address(new DeployTournament(d.addressProvider));
 
         d.orchestrator = address(new Orchestrator(owner));
@@ -92,6 +97,7 @@ abstract contract DeployCore is ProxyUtils {
         ap.setName(Keys.DEPLOY_TOURNAMENT, d.deployTournament);
         ap.setName(Keys.TOURNAMENT_REGISTRY, d.tournamentRegistry);
         ap.setName(Keys.PLAYER_SET_REGISTRY, d.playerSetRegistry);
+        ap.setName(Keys.ROUND_MANAGER, d.roundManager);
         ap.setName(Keys.DOPPLER_LOCKER, d.dopplerLocker);
         ap.setName(Keys.TRANSFER_LOCKER, d.transferLocker);
 
@@ -103,6 +109,7 @@ abstract contract DeployCore is ProxyUtils {
             d.tournamentRegistry, d.tournamentRegistryImpl, abi.encodeCall(TournamentRegistry.initialize, ())
         );
         _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, abi.encodeCall(PlayerSetRegistry.initialize, ()));
+        _upgradeAndCall(d.roundManager, d.roundManagerImpl, abi.encodeCall(RoundManager.initialize, ()));
         _upgradeAndCall(
             d.deployTournament, d.deployTournamentImpl, abi.encodeCall(DeployTournament.initialize, (owner))
         );
@@ -114,6 +121,7 @@ abstract contract DeployCore is ProxyUtils {
         Ownable(d.addressProvider).transferOwnership(d.orchestrator);
         _transferProxyAdmin(d.tournamentRegistry, d.orchestrator);
         _transferProxyAdmin(d.playerSetRegistry, d.orchestrator);
+        _transferProxyAdmin(d.roundManager, d.orchestrator);
         _transferProxyAdmin(d.deployTournament, d.orchestrator);
 
         _logCore(d);
@@ -129,5 +137,6 @@ abstract contract DeployCore is ProxyUtils {
         console.log("DeployTournament (impl)", d.deployTournamentImpl);
         console.log("TournamentRegistry (proxy)", d.tournamentRegistry);
         console.log("PlayerSetRegistry (proxy)", d.playerSetRegistry);
+        console.log("RoundManager (proxy)", d.roundManager);
     }
 }

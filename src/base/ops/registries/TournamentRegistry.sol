@@ -175,7 +175,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
      * @param tournamentId Tournament HPID.
      * @param seasonId Season HPID.
      * @param seasonStartYear Local season key (e.g. 2025 for 2025/26).
-     * @param finalRound Highest round number for the season.
+     * @param finalRound Highest round number, or `0` for a stub (RoundManager calls `setFinalRound` before upserts).
      */
     function openSeason(
         bytes32 tournamentId,
@@ -184,7 +184,6 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         uint32 finalRound
     ) external onlyOwner {
         if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
-        if (finalRound == 0) revert Errors.InvalidFinalRound();
 
         Tournament storage t = _requireTournament(tournamentId);
         if (_seasonIndex(t, seasonStartYear) != type(uint256).max) {
@@ -205,6 +204,17 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         if (t.tournamentType == TournamentType.DOMESTIC_LEAGUE) {
             emit Events.DomesticSeasonOpened(tournamentId, seasonId, seasonStartYear, finalRound);
         }
+    }
+
+    /**
+     * @notice Sets `finalRound` on an existing season (RoundManager). Must be non-zero.
+     * @dev Call before `upsertRound(s)` — upserts reject rounds above `finalRound`.
+     */
+    function setFinalRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound) external onlyOwner {
+        if (finalRound == 0) revert Errors.InvalidFinalRound();
+        Season storage season = _requireSeason(tournamentId, seasonStartYear);
+        season.finalRound = finalRound;
+        emit Events.FinalRoundSet(tournamentId, season.seasonId, seasonStartYear, finalRound);
     }
 
     function upsertRound(

@@ -2,12 +2,15 @@
 pragma solidity ^0.8.34;
 
 import { Ownable } from "@openzeppelin/access/Ownable.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+
+import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 
 import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 
-import { Hub, RoundSchedule, TournamentType } from "@types/TournamentTypes.sol";
-import { VaultData } from "@types/PlayerSetTypes.sol";
+import { Hub, TournamentType } from "@types/TournamentTypes.sol";
 
 import { IOrchestrator } from "@interfaces/IOrchestrator.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
@@ -19,34 +22,37 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
 
 /**
  * @title DeployTournament
- * @notice Ownable entry API for atomic tournament bootstrap.
+ * @notice Ownable entry API for atomic tournament bootstrap (upgradeable singleton).
  * @dev Owner is the EOA or Safe. Privileged factory / registry / hub writes are relayed
  *      through `Orchestrator.execute` so `msg.sender` on targets is the Orchestrator
- *      (which owns those contracts). This contract must hold `AUTHORIZED_CONTRACT` on
- *      the Orchestrator.
+ *      (which owns those contracts). This contract (proxy) must hold `AUTHORIZED_CONTRACT`
+ *      on the Orchestrator.
  *
- *      Flows:
+ *      Unified `deploy` / `simulateDeploy` branch on `DeployParams.tournamentType`:
  *        - `DOMESTIC_LEAGUE`: deploy treasury + new fee hub, `registerHub`, create tournament
- *        - `DOMESTIC_CUP`: deploy treasury, attach under one existing league hub
- *        - `CONTINENTAL`: deploy treasury, attach under selected existing league hubs
+ *        - `DOMESTIC_CUP`: deploy treasury, attach under one existing league hub (`leagueIds[0]`)
+ *        - `CONTINENTAL`: deploy treasury, attach under selected league hubs (`leagueIds`)
  *        - `INTERNATIONAL`: deploy treasury, attach under all existing league hubs
  *
+ *      Season stubs (`BootstrapSeason`) open with `finalRound = 0`; RoundManager later calls
+ *      `setFinalRound` + `upsertRounds`.
+ *
  *      Deploy order:
- *        1. Deploy Orchestrator + registries; grant this contract `AUTHORIZED_CONTRACT`
+ *        1. Deploy Orchestrator + registries + this proxy; grant `AUTHORIZED_CONTRACT`
  *        2. Deploy factories with `orchestrator == Orchestrator`
  *        3. Owner calls `configureFactories` once
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract DeployTournament is Ownable {
+contract DeployTournament is Initializable, AddressBook, Ownable {
     // --------------------------------------------
-    //  Immutables / wiring
+    //  Wiring (set in initialize)
     // --------------------------------------------
 
-    IOrchestrator public immutable orchestrator;
-    ITournamentRegistry public immutable tournamentRegistry;
-    IPlayerSetRegistry public immutable playerSetRegistry;
+    IOrchestrator public orchestrator;
+    ITournamentRegistry public tournamentRegistry;
+    IPlayerSetRegistry public playerSetRegistry;
 
     IPbrTreasuryFactory public pbrTreasuryFactory;
     IPbrFeeHubFactory public pbrFeeHubFactory;
@@ -57,45 +63,37 @@ contract DeployTournament is Ownable {
     //  Params
     // --------------------------------------------
 
+    /// @notice Season stub opened at deploy; calendar filled later by RoundManager.
+    struct BootstrapSeason {
+        bytes32 seasonId;
+        uint16 seasonStartYear;
+    }
+
     /**
      * @param tournamentId Stable tournament id.
      * @param initialSeason Season written into `PbrTreasury.initialize`.
      * @param treasurySalt CreateX salt for `PbrTreasuryFactory.create` (mine offchain for `0x99…`).
-     * @param openSeasonData `abi.encode(bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound)`; empty skips.
-     * @param roundsSeasonStartYear Season key for `upsertRounds` (ignored when `rounds` empty).
-     * @param rounds Optional calendar rows; empty skips.
-     * @param registeredPlayers Optional playerIds to register vaults (+ sync active flags).
+     * @param seasons Optional season stubs (`openSeason` with `finalRound = 0`); empty skips.
      */
     struct BootstrapParams {
         bytes32 tournamentId;
         uint16 initialSeason;
         bytes32 treasurySalt;
-        bytes openSeasonData;
-        uint16 roundsSeasonStartYear;
-        RoundSchedule[] rounds;
-        bytes32[] registeredPlayers;
+        BootstrapSeason[] seasons;
     }
 
-    /// @dev `DOMESTIC_LEAGUE` — deploys a new hub; `tournamentId` is also the `leagueId`.
-    struct DomesticLeagueParams {
-        BootstrapParams bootstrap;
-    }
-
-    /// @dev `DOMESTIC_CUP` — attaches under one existing domestic league hub.
-    struct DomesticCupParams {
-        BootstrapParams bootstrap;
-        bytes32 leagueId;
-    }
-
-    /// @dev `CONTINENTAL` — attaches under selected existing domestic league hubs.
-    struct ContinentalParams {
+    /**
+     * @param tournamentType Deployment branch selector.
+     * @param bootstrap Shared treasury / season stub params.
+     * @param leagueIds Type-specific hub context:
+     *        - `DOMESTIC_LEAGUE` / `INTERNATIONAL`: ignored (pass empty)
+     *        - `DOMESTIC_CUP`: exactly one existing domestic `leagueId`
+     *        - `CONTINENTAL`: one or more existing domestic `leagueId`s
+     */
+    struct DeployParams {
+        TournamentType tournamentType;
         BootstrapParams bootstrap;
         bytes32[] leagueIds;
-    }
-
-    /// @dev `INTERNATIONAL` — attaches under every registered domestic league hub.
-    struct InternationalParams {
-        BootstrapParams bootstrap;
     }
 
     struct DeployResult {
@@ -104,28 +102,27 @@ contract DeployTournament is Ownable {
     }
 
     // --------------------------------------------
-    //  Constructor / configure
+    //  Constructor / initialize / configure
     // --------------------------------------------
 
-    /**
-     * @param owner_ EOA or Safe — sole caller of `deploy*` / `configureFactories`.
-     * @param orchestrator_ Canonical `Orchestrator` (this contract must be `AUTHORIZED_CONTRACT`).
-     * @param tournamentRegistry_ Canonical tournament registry.
-     * @param playerSetRegistry_ Canonical player set registry.
-     */
-    constructor(
-        address owner_,
-        address orchestrator_,
-        address tournamentRegistry_,
-        address playerSetRegistry_
-    ) Ownable(owner_) {
-        if (orchestrator_ == address(0) || tournamentRegistry_ == address(0) || playerSetRegistry_ == address(0)) {
-            revert Errors.ZeroAddress();
-        }
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
+        _disableInitializers();
+    }
 
-        orchestrator = IOrchestrator(orchestrator_);
-        tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
-        playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
+    /**
+     * @notice Resolve Orchestrator + registries from AddressProvider; set deploy owner (EOA/Safe).
+     * @dev AddressProvider names for ORCHESTRATOR / registries must already be registered.
+     */
+    function initialize(address owner_) external initializer {
+        if (owner_ == address(0)) revert Errors.ZeroAddress();
+
+        orchestrator = IOrchestrator(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
+        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+
+        _transferOwnership(owner_);
     }
 
     /**
@@ -148,167 +145,95 @@ contract DeployTournament is Ownable {
     }
 
     // --------------------------------------------
-    //  DOMESTIC_LEAGUE
+    //  Unified deploy
     // --------------------------------------------
 
-    /// @notice Deploy treasury + fee hub, register hub, create league tournament, optional bootstrap.
-    function deployDomesticLeague(DomesticLeagueParams calldata params)
-        external
-        onlyOwner
-        returns (DeployResult memory result)
-    {
-        result = _deployDomesticLeague(params);
+    /// @notice Deploy a tournament of `params.tournamentType` (treasury + hub wiring + season stubs).
+    function deploy(DeployParams calldata params) external onlyOwner returns (DeployResult memory result) {
+        result = _deploy(params);
     }
 
-    // --------------------------------------------
-    //  DOMESTIC_CUP
-    // --------------------------------------------
-
-    /// @notice Deploy cup treasury under an existing domestic league hub; wire hub destinations.
-    function deployDomesticCup(DomesticCupParams calldata params)
-        external
-        onlyOwner
-        returns (DeployResult memory result)
-    {
-        BootstrapParams calldata b = params.bootstrap;
-        _validateBootstrap(b);
-        if (params.leagueId == bytes32(0)) revert Errors.ZeroId();
-
-        address hubAddr = tournamentRegistry.pbrFeeHubOf(params.leagueId);
-        if (hubAddr == address(0)) revert Errors.HubNotRegistered(params.leagueId);
-
-        result.pbrTreasury = _deployTreasury(b);
-
-        Hub[] memory feeHubs = new Hub[](1);
-        feeHubs[0] = Hub({ leagueId: params.leagueId, pbrFeeHub: hubAddr });
-
-        _finalize(TournamentType.DOMESTIC_CUP, b, feeHubs, result.pbrTreasury);
-        _appendTreasuryToHub(hubAddr, TournamentType.DOMESTIC_CUP, result.pbrTreasury);
-    }
-
-    // --------------------------------------------
-    //  CONTINENTAL
-    // --------------------------------------------
-
-    /// @notice Deploy continental treasury under selected existing league hubs; wire destinations.
-    function deployContinental(ContinentalParams calldata params)
-        external
-        onlyOwner
-        returns (DeployResult memory result)
-    {
-        BootstrapParams calldata b = params.bootstrap;
-        _validateBootstrap(b);
-        if (params.leagueIds.length == 0) revert Errors.EmptyHubs();
-
-        result.pbrTreasury = _deployTreasury(b);
-
-        Hub[] memory feeHubs = _resolveHubs(params.leagueIds);
-        _finalize(TournamentType.CONTINENTAL, b, feeHubs, result.pbrTreasury);
-        _appendTreasuryToHubs(feeHubs, TournamentType.CONTINENTAL, result.pbrTreasury);
-    }
-
-    // --------------------------------------------
-    //  INTERNATIONAL
-    // --------------------------------------------
-
-    /// @notice Deploy international treasury under every registered domestic league hub.
-    function deployInternational(InternationalParams calldata params)
-        external
-        onlyOwner
-        returns (DeployResult memory result)
-    {
-        BootstrapParams calldata b = params.bootstrap;
-        _validateBootstrap(b);
-
-        Hub[] memory feeHubs = tournamentRegistry.getAllDomesticHubs();
-        if (feeHubs.length == 0) revert Errors.EmptyHubs();
-
-        result.pbrTreasury = _deployTreasury(b);
-        _finalize(TournamentType.INTERNATIONAL, b, feeHubs, result.pbrTreasury);
-        _appendTreasuryToHubs(feeHubs, TournamentType.INTERNATIONAL, result.pbrTreasury);
-    }
-
-    // --------------------------------------------
-    //  Simulate (dry-run)
-    // --------------------------------------------
-
-    function simulateDeployDomesticLeague(DomesticLeagueParams calldata params) external view {
-        _simulateBootstrap(params.bootstrap);
-    }
-
-    function simulateDeployDomesticCup(DomesticCupParams calldata params) external view {
-        _simulateBootstrap(params.bootstrap);
-        if (params.leagueId == bytes32(0)) revert Errors.ZeroId();
-        if (tournamentRegistry.pbrFeeHubOf(params.leagueId) == address(0)) {
-            revert Errors.HubNotRegistered(params.leagueId);
-        }
-    }
-
-    function simulateDeployContinental(ContinentalParams calldata params) external view {
-        _simulateBootstrap(params.bootstrap);
-        if (params.leagueIds.length == 0) revert Errors.EmptyHubs();
-        _resolveHubs(params.leagueIds);
-    }
-
-    function simulateDeployInternational(InternationalParams calldata params) external view {
-        _simulateBootstrap(params.bootstrap);
-        if (tournamentRegistry.getAllDomesticHubs().length == 0) revert Errors.EmptyHubs();
+    /// @notice Dry-run validation for `deploy` (reverts on invalid params / missing hubs).
+    function simulateDeploy(DeployParams calldata params) external view {
+        _simulate(params);
     }
 
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
 
-    function _deployDomesticLeague(DomesticLeagueParams calldata params) internal returns (DeployResult memory result) {
+    /// @dev Shared pipeline: validate → treasury → fee hubs → create + seasons → (optional) hub attach.
+    function _deploy(DeployParams calldata params) internal returns (DeployResult memory result) {
         BootstrapParams calldata b = params.bootstrap;
         _validateBootstrap(b);
 
+        TournamentType t = params.tournamentType;
         result.pbrTreasury = _deployTreasury(b);
-        result.pbrFeeHub = abi.decode(
-            _exec(
-                address(pbrFeeHubFactory),
-                abi.encodeCall(IPbrFeeHubFactory.create, (b.tournamentId, result.pbrTreasury))
-            ),
-            (address)
-        );
 
-        Hub memory hub = Hub({ leagueId: b.tournamentId, pbrFeeHub: result.pbrFeeHub });
-        _exec(address(tournamentRegistry), abi.encodeCall(ITournamentRegistry.registerHub, (hub)));
-
-        Hub[] memory feeHubs = new Hub[](1);
-        feeHubs[0] = hub;
-        _finalize(TournamentType.DOMESTIC_LEAGUE, b, feeHubs, result.pbrTreasury);
-    }
-
-    function _validateBootstrap(BootstrapParams calldata b) internal view {
-        if (!factoriesConfigured) revert Errors.NotConfigured();
-        if (b.tournamentId == bytes32(0)) revert Errors.ZeroId();
-        if (b.initialSeason == 0) revert Errors.ZeroSeason();
-        if (b.treasurySalt == bytes32(0)) revert Errors.ZeroSalt();
-    }
-
-    function _simulateBootstrap(BootstrapParams calldata b) internal view {
-        _validateBootstrap(b);
-
-        if (b.openSeasonData.length != 0) {
-            if (b.openSeasonData.length != 96) revert Errors.InvalidOpenSeasonData();
-            (bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) =
-                abi.decode(b.openSeasonData, (bytes32, uint16, uint32));
-            if (seasonId == bytes32(0) || seasonStartYear == 0 || finalRound == 0) {
-                revert Errors.InvalidOpenSeasonData();
-            }
+        Hub[] memory feeHubs;
+        if (t == TournamentType.DOMESTIC_LEAGUE) {
+            result.pbrFeeHub = _createAndRegisterHub(b.tournamentId, result.pbrTreasury);
+            feeHubs = _singleHub(b.tournamentId, result.pbrFeeHub);
+        } else {
+            feeHubs = _feeHubsFor(t, params.leagueIds);
         }
 
-        if (b.rounds.length != 0 && b.roundsSeasonStartYear == 0) revert Errors.ZeroSeason();
+        _finalize(t, b, feeHubs, result.pbrTreasury);
 
-        uint256 length = b.registeredPlayers.length;
+        // Existing hubs receive the new treasury as a fee destination (league owns its hub already).
+        if (t != TournamentType.DOMESTIC_LEAGUE) {
+            _appendTreasuryToHubs(feeHubs, t, result.pbrTreasury);
+        }
+    }
+
+    function _simulate(DeployParams calldata params) internal view {
+        _simulateBootstrap(params.bootstrap);
+        if (params.tournamentType == TournamentType.DOMESTIC_LEAGUE) return;
+        _feeHubsFor(params.tournamentType, params.leagueIds);
+    }
+
+    // --------------------------------------------
+    //  Hub resolution
+    // --------------------------------------------
+
+    /// @notice Resolve fee-hub context for non-league types (also used by `simulateDeploy`).
+    function _feeHubsFor(TournamentType t, bytes32[] calldata leagueIds) internal view returns (Hub[] memory feeHubs) {
+        if (t == TournamentType.DOMESTIC_CUP) {
+            if (leagueIds.length != 1) revert Errors.EmptyHubs();
+            return _resolveHubs(leagueIds);
+        }
+        if (t == TournamentType.CONTINENTAL) {
+            if (leagueIds.length == 0) revert Errors.EmptyHubs();
+            return _resolveHubs(leagueIds);
+        }
+        if (t == TournamentType.INTERNATIONAL) {
+            feeHubs = tournamentRegistry.getAllDomesticHubs();
+            if (feeHubs.length == 0) revert Errors.EmptyHubs();
+            return feeHubs;
+        }
+        revert Errors.UnsupportedTournamentType(t);
+    }
+
+    function _resolveHubs(bytes32[] calldata leagueIds) internal view returns (Hub[] memory feeHubs) {
+        uint256 length = leagueIds.length;
+        feeHubs = new Hub[](length);
         for (uint256 i; i < length; ++i) {
-            bytes32 playerId = b.registeredPlayers[i];
-            if (playerId == bytes32(0)) revert Errors.ZeroId();
-            VaultData memory vaultData = playerSetRegistry.getVaultData(playerId);
-            if (vaultData.playerVault == address(0)) revert Errors.VaultMissing(playerId);
+            bytes32 leagueId = leagueIds[i];
+            if (leagueId == bytes32(0)) revert Errors.ZeroId();
+            address hubAddr = tournamentRegistry.pbrFeeHubOf(leagueId);
+            if (hubAddr == address(0)) revert Errors.HubNotRegistered(leagueId);
+            feeHubs[i] = Hub({ leagueId: leagueId, pbrFeeHub: hubAddr });
         }
     }
+
+    function _singleHub(bytes32 leagueId, address hubAddr) internal pure returns (Hub[] memory feeHubs) {
+        feeHubs = new Hub[](1);
+        feeHubs[0] = Hub({ leagueId: leagueId, pbrFeeHub: hubAddr });
+    }
+
+    // --------------------------------------------
+    //  Factory / registry writes
+    // --------------------------------------------
 
     function _deployTreasury(BootstrapParams calldata b) internal returns (address pbrTreasury) {
         pbrTreasury = abi.decode(
@@ -317,6 +242,17 @@ contract DeployTournament is Ownable {
                 abi.encodeCall(IPbrTreasuryFactory.create, (b.tournamentId, b.initialSeason, b.treasurySalt))
             ),
             (address)
+        );
+    }
+
+    function _createAndRegisterHub(bytes32 leagueId, address pbrTreasury) internal returns (address hubAddr) {
+        hubAddr = abi.decode(
+            _exec(address(pbrFeeHubFactory), abi.encodeCall(IPbrFeeHubFactory.create, (leagueId, pbrTreasury))),
+            (address)
+        );
+        _exec(
+            address(tournamentRegistry),
+            abi.encodeCall(ITournamentRegistry.registerHub, (Hub({ leagueId: leagueId, pbrFeeHub: hubAddr })))
         );
     }
 
@@ -331,42 +267,19 @@ contract DeployTournament is Ownable {
             abi.encodeCall(ITournamentRegistry.createTournament, (b.tournamentId, tournamentType, feeHubs, pbrTreasury))
         );
 
-        if (b.openSeasonData.length != 0) {
-            if (b.openSeasonData.length != 96) revert Errors.InvalidOpenSeasonData();
-            (bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) =
-                abi.decode(b.openSeasonData, (bytes32, uint16, uint32));
+        uint256 length = b.seasons.length;
+        for (uint256 i; i < length; ++i) {
+            BootstrapSeason calldata s = b.seasons[i];
+            if (s.seasonId == bytes32(0) || s.seasonStartYear == 0) revert Errors.ZeroId();
             _exec(
                 address(tournamentRegistry),
-                abi.encodeCall(ITournamentRegistry.openSeason, (b.tournamentId, seasonId, seasonStartYear, finalRound))
+                abi.encodeCall(ITournamentRegistry.openSeason, (b.tournamentId, s.seasonId, s.seasonStartYear, uint32(0)))
             );
-        }
-
-        if (b.rounds.length != 0) {
-            _exec(
-                address(tournamentRegistry),
-                abi.encodeCall(ITournamentRegistry.upsertRounds, (b.tournamentId, b.roundsSeasonStartYear, b.rounds))
-            );
-        }
-
-        if (b.registeredPlayers.length != 0) {
-            _registerPlayers(b.tournamentId, b.registeredPlayers);
         }
 
         emit Events.TournamentDeployed(
-            b.tournamentId, tournamentType, pbrTreasury, b.initialSeason, feeHubs.length, b.registeredPlayers.length
+            b.tournamentId, tournamentType, pbrTreasury, b.initialSeason, feeHubs.length, length
         );
-    }
-
-    function _resolveHubs(bytes32[] calldata leagueIds) internal view returns (Hub[] memory feeHubs) {
-        uint256 length = leagueIds.length;
-        feeHubs = new Hub[](length);
-        for (uint256 i; i < length; ++i) {
-            bytes32 leagueId = leagueIds[i];
-            if (leagueId == bytes32(0)) revert Errors.ZeroId();
-            address hubAddr = tournamentRegistry.pbrFeeHubOf(leagueId);
-            if (hubAddr == address(0)) revert Errors.HubNotRegistered(leagueId);
-            feeHubs[i] = Hub({ leagueId: leagueId, pbrFeeHub: hubAddr });
-        }
     }
 
     function _appendTreasuryToHubs(Hub[] memory feeHubs, TournamentType tournamentType, address treasury) internal {
@@ -391,6 +304,31 @@ contract DeployTournament is Ownable {
         }
     }
 
+    // --------------------------------------------
+    //  Validation helpers
+    // --------------------------------------------
+
+    function _validateBootstrap(BootstrapParams calldata b) internal view {
+        if (!factoriesConfigured) revert Errors.NotConfigured();
+        if (b.tournamentId == bytes32(0)) revert Errors.ZeroId();
+        if (b.initialSeason == 0) revert Errors.ZeroSeason();
+        if (b.treasurySalt == bytes32(0)) revert Errors.ZeroSalt();
+    }
+
+    function _simulateBootstrap(BootstrapParams calldata b) internal view {
+        _validateBootstrap(b);
+
+        uint256 length = b.seasons.length;
+        for (uint256 i; i < length; ++i) {
+            BootstrapSeason calldata s = b.seasons[i];
+            if (s.seasonId == bytes32(0) || s.seasonStartYear == 0) revert Errors.ZeroId();
+        }
+    }
+
+    // --------------------------------------------
+    //  Low-level
+    // --------------------------------------------
+
     function _appendAddress(address[] memory existing, address added) internal pure returns (address[] memory next) {
         uint256 length = existing.length;
         next = new address[](length + 1);
@@ -398,23 +336,6 @@ contract DeployTournament is Ownable {
             next[i] = existing[i];
         }
         next[length] = added;
-    }
-
-    function _registerPlayers(bytes32 tournamentId, bytes32[] calldata playerIds) internal {
-        uint256 length = playerIds.length;
-        address[] memory vaults = new address[](length);
-
-        for (uint256 i; i < length; ++i) {
-            bytes32 playerId = playerIds[i];
-            if (playerId == bytes32(0)) revert Errors.ZeroId();
-
-            VaultData memory vaultData = playerSetRegistry.getVaultData(playerId);
-            address vault = vaultData.playerVault;
-            if (vault == address(0)) revert Errors.VaultMissing(playerId);
-            vaults[i] = vault;
-        }
-
-        _exec(address(tournamentRegistry), abi.encodeCall(ITournamentRegistry.registerVaults, (tournamentId, vaults)));
     }
 
     function _exec(address target, bytes memory data) internal returns (bytes memory) {

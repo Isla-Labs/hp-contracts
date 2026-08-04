@@ -43,7 +43,11 @@ interface ITournamentRegistry {
     //  Season calendar — owner (Orchestrator)
     // --------------------------------------------
 
+    /// @notice Open a season stub. `finalRound` may be 0 until RoundManager calls `setFinalRound`.
     function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) external;
+
+    /// @notice Set / replace `finalRound` before `upsertRound(s)` (RoundManager). Reverts if `finalRound == 0`.
+    function setFinalRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound) external;
 
     function upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round) external;
 

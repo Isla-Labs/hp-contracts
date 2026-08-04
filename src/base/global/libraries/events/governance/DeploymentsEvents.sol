@@ -10,7 +10,7 @@ library DeploymentsEvents {
         address indexed pbrTreasury,
         uint16 initialSeason,
         uint256 hubCount,
-        uint256 registeredPlayers
+        uint256 seasonCount
     );
 
     event FactoriesConfigured(address pbrTreasuryFactory, address pbrFeeHubFactory);

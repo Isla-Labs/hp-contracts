@@ -23,9 +23,9 @@ import { ProxyUtils } from "./ProxyUtils.sol";
  * @notice Bootstrap: AddressProvider, Orchestrator, DeployTournament, lockers, registries.
  * @dev AddressBook upgradeables follow:
  *        1) Deploy AddressProvider (temporary owner = deployer)
- *        2) Deploy proxies + implementations
- *        3) Deploy Orchestrator + DeployTournament; authorize DT; register names
- *        4) Initialize proxies (resolve Orchestrator as owner)
+ *        2) Deploy proxies + implementations (registries + DeployTournament)
+ *        3) Deploy Orchestrator; authorize DT proxy; register names
+ *        4) Initialize proxies (DT owner = EOA/Safe; registries owner = Orchestrator)
  *        5) Transfer AddressProvider + ProxyAdmins to Orchestrator
  */
 abstract contract DeployCore is ProxyUtils {
@@ -36,6 +36,7 @@ abstract contract DeployCore is ProxyUtils {
         address dopplerLocker;
         address orchestrator;
         address deployTournament;
+        address deployTournamentImpl;
         address tournamentRegistry;
         address playerSetRegistry;
         address tournamentRegistryImpl;
@@ -66,13 +67,13 @@ abstract contract DeployCore is ProxyUtils {
 
         d.tournamentRegistry = _deployInitGuardProxy(guard, deployer);
         d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
+        d.deployTournament = _deployInitGuardProxy(guard, deployer);
 
         d.tournamentRegistryImpl = address(new TournamentRegistry(d.addressProvider));
         d.playerSetRegistryImpl = address(new PlayerSetRegistry(d.addressProvider));
+        d.deployTournamentImpl = address(new DeployTournament(d.addressProvider));
 
         d.orchestrator = address(new Orchestrator(owner));
-        d.deployTournament =
-            address(new DeployTournament(owner, d.orchestrator, d.tournamentRegistry, d.playerSetRegistry));
 
         if (deployer == owner) {
             Orchestrator(d.orchestrator).addAuthorizedContract(d.deployTournament);
@@ -102,6 +103,9 @@ abstract contract DeployCore is ProxyUtils {
             d.tournamentRegistry, d.tournamentRegistryImpl, abi.encodeCall(TournamentRegistry.initialize, ())
         );
         _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, abi.encodeCall(PlayerSetRegistry.initialize, ()));
+        _upgradeAndCall(
+            d.deployTournament, d.deployTournamentImpl, abi.encodeCall(DeployTournament.initialize, (owner))
+        );
 
         // --------------------------------------------
         //  5) Hand ownership to Orchestrator
@@ -110,6 +114,7 @@ abstract contract DeployCore is ProxyUtils {
         Ownable(d.addressProvider).transferOwnership(d.orchestrator);
         _transferProxyAdmin(d.tournamentRegistry, d.orchestrator);
         _transferProxyAdmin(d.playerSetRegistry, d.orchestrator);
+        _transferProxyAdmin(d.deployTournament, d.orchestrator);
 
         _logCore(d);
     }
@@ -120,7 +125,8 @@ abstract contract DeployCore is ProxyUtils {
         console.log("TransferLocker", d.transferLocker);
         console.log("DopplerLocker", d.dopplerLocker);
         console.log("Orchestrator", d.orchestrator);
-        console.log("DeployTournament", d.deployTournament);
+        console.log("DeployTournament (proxy)", d.deployTournament);
+        console.log("DeployTournament (impl)", d.deployTournamentImpl);
         console.log("TournamentRegistry (proxy)", d.tournamentRegistry);
         console.log("PlayerSetRegistry (proxy)", d.playerSetRegistry);
     }

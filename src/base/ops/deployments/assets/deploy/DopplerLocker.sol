@@ -496,6 +496,8 @@ contract DopplerLocker is DopplerConfig, Oracle, RateLimit, IDopplerLocker {
             e.vaultPredicted
         );
         // Status stays `DeployReady` until the deploy slice marks `Deployed`.
+
+        // Execute here or execute in the oracle?
     }
 
     // -------------------------------------------------------------------------

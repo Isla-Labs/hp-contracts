@@ -3,6 +3,8 @@ pragma solidity ^0.8.34;
 
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
@@ -14,25 +16,28 @@ import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
 /**
  * @title PbrFeeHubFactory
  * @notice Deploys per-domestic-league `PbrFeeHub` beacon proxies (FeeRouter destinations).
- * @dev Beacon ownership (logic upgrades) is assigned to `Orchestrator`. Hubs store treasury
- *      destinations locally; default weights: 90/9/1 top-level, 89% domestic league share.
- *      `create` is restricted to `Orchestrator`. Protocol addresses are resolved once from
- *      `AddressProvider` in the factory constructor.
+ * @dev Upgradeable factory (InitGuard TUP). Beacon ownership → Orchestrator.
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrFeeHubFactory is AddressBook, IPbrFeeHubFactory {
-    UpgradeableBeacon public immutable beacon;
+contract PbrFeeHubFactory is Initializable, AddressBook, Ownable, IPbrFeeHubFactory {
+    UpgradeableBeacon public beacon;
 
     /// @notice Owns the beacon (logic upgrades); sole caller of `create`
-    address public immutable orchestrator;
+    address public orchestrator;
 
-    /**
-     * @param addressProvider_ Canonical `AddressProvider` — resolves orchestrator.
-     */
-    constructor(address addressProvider_) AddressBook(addressProvider_) {
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
+        _disableInitializers();
+    }
+
+    /// @notice Resolve Orchestrator, deploy shared PbrFeeHub beacon.
+    function initialize() external initializer {
         orchestrator = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
-        beacon = new UpgradeableBeacon(address(new PbrFeeHub(addressProvider_)), orchestrator);
+        beacon = new UpgradeableBeacon(address(new PbrFeeHub(address(addressProvider))), orchestrator);
+        _transferOwnership(orchestrator);
     }
 
     /**

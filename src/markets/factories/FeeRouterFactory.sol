@@ -3,6 +3,8 @@ pragma solidity ^0.8.34;
 
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
@@ -13,28 +15,30 @@ import { FeeRouter } from "@markets/FeeRouter.sol";
 /**
  * @title FeeRouterFactory
  * @notice Deploys per-market `BeaconProxy` FeeRouters sharing one `UpgradeableBeacon`.
- * @dev Beacon ownership (logic upgrades) is assigned to `Orchestrator`. Each `create`
- *      call deploys a thin proxy with player-specific storage via `FeeRouter.initialize`.
- *      `create` is restricted to `Orchestrator`. Protocol addresses are resolved once from
- *      `AddressProvider` in the factory constructor.
+ * @dev Upgradeable factory (InitGuard TUP). Beacon ownership → Orchestrator.
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract FeeRouterFactory is AddressBook {
+contract FeeRouterFactory is Initializable, AddressBook, Ownable {
     /// @notice Shared beacon; upgrade to change logic for every market FeeRouter
-    UpgradeableBeacon public immutable beacon;
+    UpgradeableBeacon public beacon;
 
     /// @notice Owns the beacon (logic upgrades); sole caller of `create`
-    address public immutable orchestrator;
+    address public orchestrator;
 
-    /**
-     * @param addressProvider_ Canonical `AddressProvider` — resolves orchestrator.
-     */
-    constructor(address addressProvider_) AddressBook(addressProvider_) {
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
+        _disableInitializers();
+    }
+
+    /// @notice Resolve Orchestrator, deploy shared FeeRouter beacon.
+    function initialize() external initializer {
         orchestrator = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
-
-        address impl = address(new FeeRouter(addressProvider_));
+        address impl = address(new FeeRouter(address(addressProvider)));
         beacon = new UpgradeableBeacon(impl, orchestrator);
+        _transferOwnership(orchestrator);
     }
 
     /**

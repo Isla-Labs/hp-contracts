@@ -2,6 +2,7 @@
 pragma solidity ^0.8.34;
 
 import { Ownable } from "@openzeppelin/access/Ownable.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { LifecycleErrors as Errors } from "@errors/governance/LifecycleErrors.sol";
 import { LifecycleEvents as Events } from "@events/governance/LifecycleEvents.sol";
@@ -29,11 +30,11 @@ interface IFeeRouterHub {
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TransferLocker is Ownable, ITransferLocker {
-    /// @notice Canonical player market index.
+contract TransferLocker is Initializable, Ownable, ITransferLocker {
+    /// @notice Canonical player market index (implementation immutable).
     IPlayerSetRegistry public immutable playerSetRegistry;
 
-    /// @notice Domestic hub + tournament treasury topology.
+    /// @notice Domestic hub + tournament treasury topology (implementation immutable).
     ITournamentRegistry public immutable tournamentRegistry;
 
     /// @notice Enqueue writer (set once); owner may also enqueue.
@@ -46,14 +47,21 @@ contract TransferLocker is Ownable, ITransferLocker {
     mapping(bytes32 playerId => bool) private _queuedReactivate;
 
     /**
-     * @param orchestrator_ `Orchestrator` — Ownable owner.
      * @param playerSetRegistry_ Canonical `PlayerSetRegistry` proxy.
      * @param tournamentRegistry_ Canonical `TournamentRegistry` proxy.
+     * @custom:oz-upgrades-unsafe-allow constructor
      */
-    constructor(address orchestrator_, address playerSetRegistry_, address tournamentRegistry_) Ownable(orchestrator_) {
+    constructor(address playerSetRegistry_, address tournamentRegistry_) Ownable(msg.sender) {
         if (playerSetRegistry_ == address(0) || tournamentRegistry_ == address(0)) revert Errors.ZeroAddress();
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
+        _disableInitializers();
+    }
+
+    /// @notice Proxy init: ownership → Orchestrator.
+    function initialize(address orchestrator_) external initializer {
+        if (orchestrator_ == address(0)) revert Errors.ZeroAddress();
+        _transferOwnership(orchestrator_);
     }
 
     /// @notice One-time wire: EligibilityVerifier may call `enqueueLifecycle`.

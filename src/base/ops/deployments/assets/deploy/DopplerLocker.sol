@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+
 import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
@@ -33,7 +35,7 @@ import { DopplerConfig } from "@deployments/assets/deploy/config/DopplerConfig.s
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract DopplerLocker is DopplerConfig, Oracle, RateLimit, IDopplerLocker {
+contract DopplerLocker is Initializable, DopplerConfig, Oracle, RateLimit, IDopplerLocker {
     // -------------------------------------------------------------------------
     //  Types
     // -------------------------------------------------------------------------
@@ -120,17 +122,26 @@ contract DopplerLocker is DopplerConfig, Oracle, RateLimit, IDopplerLocker {
     // -------------------------------------------------------------------------
 
     /**
-     * @param orchestrator_ `Orchestrator` — Ownable owner.
-     * @param cvmRouter_ Live `CvmRouter`.
-     * @param queueWait_ Review window (use `DEFAULT_QUEUE_WAIT`).
-     * @param deployCooldown_ `deployQueue` rate-limit (`DEFAULT_DEPLOY_COOLDOWN`).
+     * @param cvmRouter_ Live `CvmRouter` (immutable on implementation).
+     * @param deployCooldown_ `deployQueue` rate-limit (immutable on implementation).
+     * @custom:oz-upgrades-unsafe-allow constructor
      */
-    constructor(address orchestrator_, address cvmRouter_, uint256 queueWait_, uint256 deployCooldown_)
-        DopplerConfig(orchestrator_)
+    constructor(address cvmRouter_, uint256 deployCooldown_)
+        DopplerConfig()
         Oracle(cvmRouter_)
         RateLimit(deployCooldown_)
     {
+        _disableInitializers();
+    }
+
+    /**
+     * @notice Proxy init: ownership → Orchestrator, default Doppler config, queue wait.
+     * @param orchestrator_ `Orchestrator` — Ownable owner.
+     * @param queueWait_ Review window (use `DEFAULT_QUEUE_WAIT`).
+     */
+    function initialize(address orchestrator_, uint256 queueWait_) external initializer {
         if (queueWait_ == 0) revert Errors.NotConfigured();
+        __DopplerConfig_init(orchestrator_);
         queueWait = queueWait_;
         maxDeployBatch = DEFAULT_MAX_DEPLOY_BATCH;
     }

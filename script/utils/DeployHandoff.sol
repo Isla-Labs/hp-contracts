@@ -34,7 +34,9 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         _warnIfMissing(Keys.DOPPLER_LOCKER);
         _warnIfMissing(Keys.TRANSFER_LOCKER);
         _warnIfMissing(Keys.FEE_ROUTER_FACTORY);
+        _warnIfMissing(Keys.PLAYER_VAULT_FACTORY);
         _warnIfMissing(Keys.PBR_TREASURY_FACTORY);
+        _warnIfMissing(Keys.PBR_FEE_HUB_FACTORY);
 
         Ownable(address(ap)).transferOwnership(orchestrator);
         _transferProxyAdmin(tournamentRegistry, orchestrator);
@@ -42,9 +44,22 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         _transferProxyAdmin(deployTournament, orchestrator);
         _transferProxyAdmin(roundManager, orchestrator);
 
+        _transferProxyAdminIfSet(Keys.DOPPLER_LOCKER, orchestrator);
+        _transferProxyAdminIfSet(Keys.TRANSFER_LOCKER, orchestrator);
+        _transferProxyAdminIfSet(Keys.FEE_ROUTER_FACTORY, orchestrator);
+        _transferProxyAdminIfSet(Keys.PLAYER_VAULT_FACTORY, orchestrator);
+        _transferProxyAdminIfSet(Keys.PBR_TREASURY_FACTORY, orchestrator);
+        _transferProxyAdminIfSet(Keys.PBR_FEE_HUB_FACTORY, orchestrator);
+
         console.log("=== DeployHandoff ===");
         console.log("AddressProvider owner -> Orchestrator", orchestrator);
-        console.log("ProxyAdmins transferred for registries / DeployTournament / RoundManager");
+        console.log("ProxyAdmins transferred for registries / DT / RoundManager / lockers / factories");
+    }
+
+    function _transferProxyAdminIfSet(string memory name, address newOwner) internal {
+        address proxy = _requireAddressProvider().getByName(name);
+        if (proxy == address(0)) return;
+        _transferProxyAdmin(proxy, newOwner);
     }
 
     function _warnIfMissing(string memory name) internal {

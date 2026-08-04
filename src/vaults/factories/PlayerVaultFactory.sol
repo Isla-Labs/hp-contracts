@@ -3,6 +3,8 @@ pragma solidity ^0.8.34;
 
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
+import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { ICreateX } from "@createx/ICreateX.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
@@ -16,37 +18,37 @@ import { StakedToken } from "@vaults/StakedToken.sol";
 /**
  * @title PlayerVaultFactory
  * @notice Deploys per-market `PlayerVault` beacon proxies + bound `StakedToken`s via CreateX CREATE3.
- * @dev Beacon ownership (logic upgrades) is assigned to `Orchestrator`.
- *      CREATE3 addresses depend only on CreateX + this factory's guarded salt (not initcode), so
- *      vanity prefixes (e.g. `0x42…` vault / stToken) can be mined offline against `computeCreate3Address`.
- *      Prefer permissioned salts: `address(this) || 0x00 || entropy11` via `makeSalt`.
- *      `create` is restricted to `Orchestrator` to prevent salt sniping.
- *      Protocol addresses are resolved once from `AddressProvider` in the factory constructor.
+ * @dev Upgradeable factory (InitGuard TUP). CREATE3 salts are permissioned to the proxy address.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerVaultFactory is AddressBook {
+contract PlayerVaultFactory is Initializable, AddressBook, Ownable {
     ICreateX public constant CREATE_X = ICreateX(CreateXAddresses.CREATE_X);
 
-    UpgradeableBeacon public immutable beacon;
+    UpgradeableBeacon public beacon;
 
     /// @notice Owns the beacon (logic upgrades); sole caller of `create`
-    address public immutable orchestrator;
+    address public orchestrator;
 
-    /**
-     * @param addressProvider_ Canonical `AddressProvider` — resolves orchestrator.
-     */
-    constructor(address addressProvider_) AddressBook(addressProvider_) {
+    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
+        _disableInitializers();
+    }
+
+    /// @notice Resolve Orchestrator, deploy shared PlayerVault beacon.
+    function initialize() external initializer {
         orchestrator = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
-        beacon = new UpgradeableBeacon(address(new PlayerVault(addressProvider_)), orchestrator);
+        beacon = new UpgradeableBeacon(address(new PlayerVault(address(addressProvider))), orchestrator);
+        _transferOwnership(orchestrator);
     }
 
     /**
      * @notice Deploy a vanity-capable vault + stToken pair and initialize the vault.
      * @param baseName PlayerToken name from Doppler (stToken becomes `Staked {baseName}`).
      * @param baseSymbol PlayerToken symbol from Doppler (stToken becomes `st{baseSymbol}`).
-     * @param vaultSalt CreateX salt for the `BeaconProxy` (mine offchain for `0x42…` via CVM VanitySalts).
+     * @param vaultSalt CreateX salt for the `BeaconProxy` (mine offchain for `0x42…`).
      * @param stTokenSalt CreateX salt for the `StakedToken`.
      */
     function create(
@@ -76,10 +78,6 @@ contract PlayerVaultFactory is AddressBook {
         emit Events.PlayerVaultCreated(playerId, playerVault, stToken);
     }
 
-    // --------------------------------------------
-    //  Salt / address helpers (for vanity mining)
-    // --------------------------------------------
-
     /**
      * @notice Builds a CreateX salt permissioned to this factory: `address(this) || 0x00 || entropy`.
      * @dev Byte 21 `0x00` = permissioned deploy, no cross-chain redeploy guard. Last 11 bytes are mineable.
@@ -107,7 +105,6 @@ contract PlayerVaultFactory is AddressBook {
             return _efficientHash(bytes32(block.chainid), salt);
         }
 
-        // CreateX hashes non-pseudo-random salts so guard modes cannot be bypassed.
         return keccak256(abi.encode(salt));
     }
 

@@ -14,7 +14,7 @@ import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
 /**
  * @title DopplerConfig
  * @notice Owner-updatable bonding / migrate launch parameters for `DopplerLocker`.
- * @dev Constructor seeds defaults from `DopplerTypes.defaultMarketLaunchConfig()`.
+ * @dev `__DopplerConfig_init` seeds defaults from `DopplerTypes.defaultMarketLaunchConfig()`.
  *      Owner is the `Orchestrator`. HP graduation policy fields (`minGraduateProceeds`,
  *      `minBondingDuration`) are enforced by finalization logic (not by Doppler Airlock):
  *        - farTick reached anytime, OR
@@ -63,8 +63,13 @@ abstract contract DopplerConfig is Ownable {
 
     DopplerTypes.Curve[] internal _bondingCurves;
 
-    /// @param orchestrator_ `Orchestrator` — sole owner for config updates.
-    constructor(address orchestrator_) Ownable(orchestrator_) {
+    /// @dev Temporary Ownable owner on the implementation; proxy calls `__DopplerConfig_init`.
+    constructor() Ownable(msg.sender) { }
+
+    /// @notice Ownership → Orchestrator + default market launch config (proxy storage).
+    function __DopplerConfig_init(address orchestrator_) internal {
+        if (orchestrator_ == address(0)) revert Errors.ZeroAddress();
+        _transferOwnership(orchestrator_);
         _applyLaunchConfig(DopplerTypes.defaultMarketLaunchConfig());
     }
 

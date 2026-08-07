@@ -32,6 +32,7 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         // Soft-require lockers / factories so handoff can proceed if partial — but warn.
         // TEMP: ROUND_MANAGER parked with data plane — restore when DeployData returns.
         // _warnIfMissing(Keys.ROUND_MANAGER);
+        _warnIfMissing(Keys.DOPPLER_CONFIG);
         _warnIfMissing(Keys.DOPPLER_LOCKER);
         _warnIfMissing(Keys.TRANSFER_LOCKER);
         _warnIfMissing(Keys.FEE_ROUTER_FACTORY);
@@ -45,6 +46,7 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         _transferProxyAdmin(deployTournament, orchestrator);
         // _transferProxyAdminIfSet(Keys.ROUND_MANAGER, orchestrator);
 
+        _transferProxyAdminIfSet(Keys.DOPPLER_CONFIG, orchestrator);
         _transferProxyAdminIfSet(Keys.DOPPLER_LOCKER, orchestrator);
         _transferProxyAdminIfSet(Keys.TRANSFER_LOCKER, orchestrator);
         _transferProxyAdminIfSet(Keys.FEE_ROUTER_FACTORY, orchestrator);

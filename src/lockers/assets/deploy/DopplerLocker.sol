@@ -8,9 +8,9 @@ import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { Oracle } from "@base/abstract/Oracle.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { MineSalt } from "@base/global/libraries/MineSalt.sol";
 import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
 import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
+import { IDopplerConfig } from "@interfaces/governance/IDopplerConfig.sol";
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
 import { IOrchestrator } from "@interfaces/IOrchestrator.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
@@ -24,11 +24,9 @@ import { PlayerVault } from "@vaults/PlayerVault.sol";
 import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 
 import { Airlock, CreateParams } from "@doppler/src/Airlock.sol";
-import { FeeDistributionInfo } from "@doppler/src/types/RehypeTypes.sol";
 import { PoolId } from "@v4-core/types/PoolId.sol";
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
-import { DopplerConfig } from "@deployments/assets/deploy/config/DopplerConfig.sol";
 import { IExcessSupplyLocker } from "@interfaces/governance/IExcessSupplyLocker.sol";
 
 /// @dev Narrow views — avoid importing Rehype/DopplerHookInitializer (pulls Quoter `=0.8.26`).
@@ -80,7 +78,7 @@ interface IRehypePoolInfoView {
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Oracle, RateLimit, IDopplerLocker {
+contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit, IDopplerLocker {
     // -------------------------------------------------------------------------
     //  Types
     // -------------------------------------------------------------------------
@@ -156,35 +154,8 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
     /// @notice Max automatic deploy failures before `DeployFailed` (owner reset required).
     uint256 public maxDeployAttempts;
 
-    /// @notice `DN404Factory` (CREATE2 deployer for PlayerToken).
-    address public tokenFactory;
-
-    /// @notice `PlayerVaultFactory` (CreateX CREATE3 deployer).
-    address public vaultFactory;
-
-    /// @notice Doppler Airlock — `recipient` / `owner` in DN404 ctor (initcode hash).
-    address public airlock;
-
-    /// @notice Launchpad governance factory (Airlock module — excess → `excessSupplyLocker`).
-    address public governanceFactory;
-
-    /// @notice Doppler multicurve pool initializer (Airlock module).
-    address public poolInitializer;
-
-    /// @notice Doppler liquidity migrator (Airlock module).
-    address public liquidityMigrator;
-
-    /// @notice Rehype bonding-hook initializer (fee routing during bonding).
-    address public rehypeHookInitializer;
-
-    /// @notice Rehype migrator hook (fee routing after graduation).
-    address public rehypeHookMigrator;
-
-    /// @notice Global excess-supply receiver (`LaunchpadGovernanceFactory` timelock slot).
-    address public excessSupplyLocker;
-
-    /// @notice HP Treasury — 95% StreamableFeesLocker beneficiary after migrate.
-    address public hpTreasury;
+    /// @notice Shared launch recipe + Doppler module addresses (separate admin surface).
+    IDopplerConfig public dopplerConfig;
 
     /// @notice Privileged call relay (factories / registry require `msg.sender == Orchestrator`).
     IOrchestrator public orchestrator;
@@ -232,12 +203,11 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
     }
 
     /**
-     * @notice Proxy init: default Doppler config, queue wait; resolve deps; ownership → Orchestrator.
-     * @dev AddressProvider must already hold Orchestrator, factories, registry, and Doppler modules.
+     * @notice Proxy init: queue waits; resolve deps + `DopplerConfig`; ownership → Orchestrator.
+     * @dev AddressProvider must hold Orchestrator, factories, registries, and `DOPPLER_CONFIG`.
      *      This proxy must also hold `AUTHORIZED_CONTRACT` on Orchestrator for deploy relays.
      */
     function initialize() external initializer {
-        __DopplerConfig_init();
         queueWait = DEFAULT_QUEUE_WAIT;
         retryWait = DEFAULT_RETRY_WAIT;
         maxDeployAttempts = DEFAULT_MAX_DEPLOY_ATTEMPTS;
@@ -247,17 +217,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         feeRouterFactory = FeeRouterFactory(_getAddress(_addressKey(Addresses.FEE_ROUTER_FACTORY)));
         playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
         tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-        vaultFactory = _getAddress(_addressKey(Addresses.PLAYER_VAULT_FACTORY));
-
-        tokenFactory = _getAddress(_addressKey(Addresses.DN404_FACTORY));
-        airlock = _getAddress(_addressKey(Addresses.DOPPLER_AIRLOCK));
-        governanceFactory = _getAddress(_addressKey(Addresses.LAUNCHPAD_GOVERNANCE_FACTORY));
-        poolInitializer = _getAddress(_addressKey(Addresses.DOPPLER_HOOK_INITIALIZER));
-        liquidityMigrator = _getAddress(_addressKey(Addresses.DOPPLER_HOOK_MIGRATOR));
-        rehypeHookInitializer = _getAddress(_addressKey(Addresses.REHYPE_DOPPLER_HOOK_INITIALIZER));
-        rehypeHookMigrator = _getAddress(_addressKey(Addresses.REHYPE_DOPPLER_HOOK_MIGRATOR));
-        excessSupplyLocker = _getAddress(_addressKey(Addresses.EXCESS_SUPPLY_LOCKER));
-        hpTreasury = _getAddress(_addressKey(Addresses.HP_TREASURY));
+        dopplerConfig = IDopplerConfig(_getAddress(_addressKey(Addresses.DOPPLER_CONFIG)));
 
         _transferOwnership(orch);
     }
@@ -269,56 +229,8 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
     }
 
     // -------------------------------------------------------------------------
-    //  Admin
+    //  Admin (queue / deploy ops — launch recipe + modules live on `DopplerConfig`)
     // -------------------------------------------------------------------------
-
-    /**
-     * @notice Update CREATE2/CREATE3 deployers + Airlock (vanity args / create path).
-     * @dev Defaults are resolved from AddressProvider in `initialize`; owner may override.
-     */
-    function configureDeployModules(address tokenFactory_, address vaultFactory_, address airlock_) external onlyOwner {
-        if (tokenFactory_ == address(0) || vaultFactory_ == address(0) || airlock_ == address(0)) {
-            revert Errors.ZeroAddress();
-        }
-        tokenFactory = tokenFactory_;
-        vaultFactory = vaultFactory_;
-        airlock = airlock_;
-        emit Events.DeployModulesConfigured(tokenFactory_, vaultFactory_, airlock_);
-    }
-
-    /**
-     * @notice Update Airlock governance / pool / migrator / rehype module addresses.
-     * @dev Defaults are resolved from AddressProvider in `initialize`; owner may override.
-     */
-    function configureDopplerModules(
-        address governanceFactory_,
-        address poolInitializer_,
-        address liquidityMigrator_,
-        address rehypeHookInitializer_,
-        address rehypeHookMigrator_
-    ) external onlyOwner {
-        if (
-            governanceFactory_ == address(0) || poolInitializer_ == address(0) || liquidityMigrator_ == address(0)
-                || rehypeHookInitializer_ == address(0) || rehypeHookMigrator_ == address(0)
-        ) {
-            revert Errors.ZeroAddress();
-        }
-        governanceFactory = governanceFactory_;
-        poolInitializer = poolInitializer_;
-        liquidityMigrator = liquidityMigrator_;
-        rehypeHookInitializer = rehypeHookInitializer_;
-        rehypeHookMigrator = rehypeHookMigrator_;
-    }
-
-    /**
-     * @notice Update Launchpad excess recipient + HP Treasury beneficiary.
-     * @dev `excessSupplyLocker` is encoded into `governanceFactoryData` at create time.
-     */
-    function configureLaunchpadRecipients(address excessSupplyLocker_, address hpTreasury_) external onlyOwner {
-        if (excessSupplyLocker_ == address(0) || hpTreasury_ == address(0)) revert Errors.ZeroAddress();
-        excessSupplyLocker = excessSupplyLocker_;
-        hpTreasury = hpTreasury_;
-    }
 
     function setQueueWait(uint256 queueWait_) external onlyOwner {
         if (queueWait_ == 0) revert Errors.NotConfigured();
@@ -365,37 +277,6 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
             e.status = QueueStatus.Queued;
             e.waitSeconds = uint64(retryWait == 0 ? DEFAULT_RETRY_WAIT : retryWait);
         }
-    }
-
-    /**
-     * @notice Replace the full shared launch recipe (scalars + curves + graduation policy).
-     * @dev Does not affect markets already deployed; only subsequent `Airlock.create` calls.
-     */
-    function setMarketLaunchConfig(DopplerTypes.MarketLaunchConfig memory config_) external onlyOwner {
-        _applyLaunchConfig(config_);
-        emit Events.MarketLaunchConfigUpdated(
-            config_.initialSupply, config_.numTokensToSell, config_.farTick, config_.curves.length
-        );
-    }
-
-    /// @notice Update multicurve segments only (shares must sum to WAD).
-    function setBondingCurves(DopplerTypes.Curve[] memory curves_) external onlyOwner {
-        _setBondingCurves(curves_);
-        emit Events.BondingCurvesUpdated(curves_.length);
-    }
-
-    /// @notice Update HP soft-graduation policy (50 ETH / 30d defaults).
-    function setGraduationPolicy(uint256 minGraduateProceeds_, uint32 minBondingDuration_) external onlyOwner {
-        minGraduateProceeds = minGraduateProceeds_;
-        minBondingDuration = minBondingDuration_;
-        emit Events.GraduationPolicyUpdated(minGraduateProceeds_, minBondingDuration_);
-    }
-
-    /// @notice Update Rehype fee routing matrix (each source row must sum to WAD).
-    function setFeeDistribution(FeeDistributionInfo calldata feeDistribution_) external onlyOwner {
-        _validateFeeDistribution(feeDistribution_);
-        feeDistribution = feeDistribution_;
-        emit Events.FeeDistributionUpdated();
     }
 
     // -------------------------------------------------------------------------
@@ -488,7 +369,11 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
 
     /// @inheritdoc IDopplerLocker
     function deployAssets() external rateLimited returns (bytes32 requestId) {
-        if (tokenFactory == address(0) || vaultFactory == address(0) || airlock == address(0)) {
+        if (address(dopplerConfig) == address(0)) revert Errors.NotConfigured();
+        if (
+            dopplerConfig.tokenFactory() == address(0) || dopplerConfig.vaultFactory() == address(0)
+                || dopplerConfig.airlock() == address(0)
+        ) {
             revert Errors.NotConfigured();
         }
 
@@ -515,13 +400,14 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
             if (block.timestamp < uint256(e.queuedAt) + _deployWait(e)) continue;
 
             // Oracle pins IPFS metadata, hashes DN404 initcode with that baseURI, mines salts.
+            IDopplerConfig cfg = dopplerConfig;
             bytes memory args = abi.encode(
                 e.playerId, // seed
-                tokenFactory,
-                vaultFactory,
-                airlock,
-                initialSupply,
-                dn404Unit,
+                cfg.tokenFactory(),
+                cfg.vaultFactory(),
+                cfg.airlock(),
+                cfg.initialSupply(),
+                cfg.dn404Unit(),
                 e.name,
                 e.symbol
             );
@@ -744,24 +630,15 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         (bytes32 tokenSalt, address tokenPredicted, bytes32 vaultSalt, address vaultPredicted, string memory baseURI_) =
             abi.decode(response, (bytes32, address, bytes32, address, string));
 
-        if (tokenSalt == bytes32(0) || vaultSalt == bytes32(0) || bytes(baseURI_).length == 0) {
+        if (
+            tokenSalt == bytes32(0) || vaultSalt == bytes32(0) || tokenPredicted == address(0)
+                || vaultPredicted == address(0) || bytes(baseURI_).length == 0
+        ) {
             revert Errors.NotConfigured();
         }
 
-        // Recompute CREATE2 initcode hash and require predicted token address matches.
-        bytes32 initCodeHash = MineSalt.dn404InitCodeHash(
-            MineSalt.Dn404DeployParams({
-                name: e.name,
-                symbol: e.symbol,
-                initialSupply: initialSupply,
-                airlock: airlock,
-                baseURI: baseURI_,
-                unit: dn404Unit
-            })
-        );
-        address expectedToken = MineSalt.predictTokenAddress(tokenFactory, tokenSalt, initCodeHash);
-        if (expectedToken != tokenPredicted) revert Errors.DeployAddressMismatch(expectedToken, tokenPredicted);
-
+        // Salts / predictions come from FinalConfig (oracle). Address match is enforced at Airlock.create /
+        // vault CREATE3 (`DeployAddressMismatch` / `SaltOccupied` on resume).
         e.baseURI = baseURI_;
         e.tokenSalt = tokenSalt;
         e.tokenPredicted = tokenPredicted;
@@ -853,11 +730,12 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         address expectedFeeRouter = feeRouterFactory.feeRouterOf(playerId);
         if (asset == address(0) || asset.code.length == 0 || expectedFeeRouter == address(0)) return false;
 
-        (,,,,, address pool,,,, address integrator) = Airlock(payable(airlock)).getAssetData(asset);
+        IDopplerConfig cfg = dopplerConfig;
+        (,,,,, address pool,,,, address integrator) = Airlock(payable(cfg.airlock())).getAssetData(asset);
         if (pool == address(0) || integrator != address(orchestrator)) return false;
 
-        (,,,,, PoolKey memory poolKey,) = IDopplerHookInitializerView(poolInitializer).getState(asset);
-        (,, address buybackDst) = IRehypePoolInfoView(rehypeHookInitializer).getPoolInfo(poolKey.toId());
+        (,,,,, PoolKey memory poolKey,) = IDopplerHookInitializerView(cfg.poolInitializer()).getState(asset);
+        (,, address buybackDst) = IRehypePoolInfoView(cfg.rehypeHookInitializer()).getPoolInfo(poolKey.toId());
         return buybackDst == expectedFeeRouter;
     }
 
@@ -879,17 +757,13 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
      *      Prerequisites / follow-ups (do not skip when wiring production intake):
      *        - DopplerLocker proxy MUST hold Orchestrator `AUTHORIZED_CONTRACT` so `_exec`
      *          can reach FeeRouterFactory / PlayerVaultFactory / PlayerSetRegistry.
-     *        - AddressProvider MUST hold DN404 / Airlock / hook / migrator module addresses
-     *          before `initialize` (or owner must `configureDeployModules` /
-     *          `configureDopplerModules` afterwards).
+     *        - `DopplerConfig` must be registered and initialized (modules + launch recipe).
      *        - Numeraire is native ETH (`address(0)`). Airlock treats `address(0)` as ETH
      *          (see `Airlock.migrate` / fee collect). Switch to WETH9 only if the recipe
      *          moves to an ERC-20 numeraire.
      *        - Callback gas: full deploy runs inside CvmRouter `maxCallbackGasLimit`.
      */
     function _onDeployReady(QueueEntry storage e) private {
-        _requireDeployModules();
-
         address pbrFeeHub = tournamentRegistry.pbrFeeHubOf(e.leagueId);
         if (pbrFeeHub == address(0)) revert Errors.HubNotRegistered(e.leagueId);
 
@@ -915,16 +789,6 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         _removeFromQueue(playerId);
     }
 
-    function _requireDeployModules() private view {
-        if (
-            tokenFactory == address(0) || vaultFactory == address(0) || airlock == address(0)
-                || governanceFactory == address(0) || poolInitializer == address(0) || liquidityMigrator == address(0)
-                || rehypeHookInitializer == address(0) || rehypeHookMigrator == address(0)
-        ) {
-            revert Errors.NotConfigured();
-        }
-    }
-
     function _deployFeeRouter(bytes32 playerId, address pbrFeeHub) private returns (address feeRouter) {
         feeRouter = abi.decode(
             _exec(address(feeRouterFactory), abi.encodeCall(FeeRouterFactory.create, (playerId, pbrFeeHub))), (address)
@@ -943,10 +807,17 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
             revert Errors.SaltOccupied(asset);
         }
 
+        IDopplerConfig cfg = dopplerConfig;
         CreateParams memory params = DopplerTypes.buildCreateParams(
-            _dopplerModules(), marketLaunchConfig(), e.name, e.symbol, e.baseURI, feeRouter, e.tokenSalt
+            cfg.dopplerModules(address(feeRouterFactory), address(orchestrator)),
+            cfg.marketLaunchConfig(),
+            e.name,
+            e.symbol,
+            e.baseURI,
+            feeRouter,
+            e.tokenSalt
         );
-        (asset,,,,) = Airlock(payable(airlock)).create(params);
+        (asset,,,,) = Airlock(payable(cfg.airlock())).create(params);
         if (asset != e.tokenPredicted) revert Errors.DeployAddressMismatch(e.tokenPredicted, asset);
     }
 
@@ -961,11 +832,12 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
             return (vault, stToken);
         }
 
+        address vaultFactory_ = dopplerConfig.vaultFactory();
         bytes32 stTokenSalt =
-            PlayerVaultFactory(vaultFactory).makeSalt(bytes11(keccak256(abi.encodePacked(e.playerId, bytes2("st")))));
+            PlayerVaultFactory(vaultFactory_).makeSalt(bytes11(keccak256(abi.encodePacked(e.playerId, bytes2("st")))));
         (vault, stToken) = abi.decode(
             _exec(
-                vaultFactory,
+                vaultFactory_,
                 abi.encodeCall(
                     PlayerVaultFactory.create, (e.playerId, asset, e.name, e.symbol, e.vaultSalt, stTokenSalt)
                 )
@@ -993,8 +865,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
                 revert Errors.LeagueMismatch(e.leagueId, set.tournamentData.leagueId);
             }
         } else {
+            IDopplerConfig cfg = dopplerConfig;
             PoolKey memory poolKey;
-            (,,,,, poolKey,) = IDopplerHookInitializerView(poolInitializer).getState(asset);
+            (,,,,, poolKey,) = IDopplerHookInitializerView(cfg.poolInitializer()).getState(asset);
 
             // Domestic league id is also the DOMESTIC_LEAGUE tournament id.
             bytes32[] memory activeTournaments = new bytes32[](1);
@@ -1010,8 +883,8 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
                         TournamentData({ leagueId: e.leagueId, activeTournaments: activeTournaments }),
                         DopplerData({
                             activePool: poolKey,
-                            hookDoppler: rehypeHookInitializer,
-                            hookMigrator: rehypeHookMigrator,
+                            hookDoppler: cfg.rehypeHookInitializer(),
+                            hookMigrator: cfg.rehypeHookMigrator(),
                             feeRouter: feeRouter
                         })
                     )
@@ -1047,26 +920,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
 
     /// @dev Idempotent via `ExcessSupplyLocker.allocate` (no-op once a position exists).
     function _allocateExcess(address asset) private {
-        if (excessSupplyLocker == address(0)) revert Errors.ZeroAddress();
-        _exec(excessSupplyLocker, abi.encodeCall(IExcessSupplyLocker.allocate, (asset)));
-    }
-
-    /// @dev Local module wiring for `DopplerTypes.buildCreateParams` (numeraire = native ETH).
-    function _dopplerModules() private view returns (DopplerTypes.DopplerModules memory m) {
-        if (excessSupplyLocker == address(0) || hpTreasury == address(0)) revert Errors.ZeroAddress();
-        m.airlock = airlock;
-        m.tokenFactory = tokenFactory;
-        m.governanceFactory = governanceFactory;
-        m.poolInitializer = poolInitializer;
-        m.liquidityMigrator = liquidityMigrator;
-        m.rehypeHookInitializer = rehypeHookInitializer;
-        m.rehypeHookMigrator = rehypeHookMigrator;
-        m.feeRouterFactory = address(feeRouterFactory);
-        m.numeraire = address(0); // native ETH — Airlock convention
-        m.integrator = address(orchestrator);
-        m.airlockOwner = Ownable(airlock).owner();
-        m.excessSupplyLocker = excessSupplyLocker;
-        m.hpTreasury = hpTreasury;
+        address locker = dopplerConfig.excessSupplyLocker();
+        if (locker == address(0)) revert Errors.ZeroAddress();
+        _exec(locker, abi.encodeCall(IExcessSupplyLocker.allocate, (asset)));
     }
 
     function _exec(address target, bytes memory data) private returns (bytes memory) {

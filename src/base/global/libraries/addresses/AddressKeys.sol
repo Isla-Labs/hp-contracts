@@ -14,6 +14,7 @@ library AddressKeys {
 
     // Lockers / data
     string internal constant DOPPLER_LOCKER = "DOPPLER_LOCKER";
+    string internal constant DOPPLER_CONFIG = "DOPPLER_CONFIG";
     string internal constant TRANSFER_LOCKER = "TRANSFER_LOCKER";
     string internal constant EXCESS_SUPPLY_LOCKER = "EXCESS_SUPPLY_LOCKER";
     string internal constant ELIGIBILITY_STORE = "ELIGIBILITY_STORE";

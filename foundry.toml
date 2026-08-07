@@ -2,6 +2,7 @@
 src = "src"
 out = "out"
 libs = ["lib"]
+solc = "0.8.34"
 evm_version = "cancun"
 via_ir = true
 optimizer = true
@@ -34,8 +35,8 @@ wrap_comments = false
 show_metrics = true
 fail_on_revert = true
 
-# Solar (forge 1.5.x) fails to resolve Doppler's bare `src/` imports even with
-# context remappings / lint.ignore. Disable lint-on-build until Foundry catches up.
+# Solar fails to resolve Doppler's bare `src/` imports even with context
+# remappings / lint.ignore. Disable lint-on-build until Foundry catches up.
 [lint]
 ignore = ["lib/**"]
 lint_on_build = false

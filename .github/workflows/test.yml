@@ -33,7 +33,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.5.1
+          version: v1.7.1
           cache: true
 
       - name: Check formatting
@@ -53,7 +53,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.5.1
+          version: v1.7.1
           cache: true
 
       - name: Build
@@ -74,7 +74,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.5.1
+          version: v1.7.1
           cache: true
 
       - name: Run tests

@@ -255,8 +255,8 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
         if (
             tokenFactory == address(0) || vaultFactory == address(0) || airlock == address(0)
                 || governanceFactory == address(0) || poolInitializer == address(0) || liquidityMigrator == address(0)
-                || rehypeHookInitializer == address(0) || rehypeHookMigrator == address(0)
-                || stakeVesting == address(0) || hpTreasury == address(0)
+                || rehypeHookInitializer == address(0) || rehypeHookMigrator == address(0) || stakeVesting == address(0)
+                || hpTreasury == address(0)
         ) {
             revert Errors.NotConfigured();
         }

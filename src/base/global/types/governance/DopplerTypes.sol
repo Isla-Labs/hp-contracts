@@ -154,7 +154,7 @@ library DopplerTypes {
         address integrator;
         address airlockOwner;
         /// @dev Launchpad “timelock” / excess supply recipient (`governanceFactoryData`).
-        address excessSupplyLocker;
+        address stakeVesting;
         /// @dev StreamableFeesLocker beneficiary (95% of post-migrate LP fees) — `HP_TREASURY`.
         address hpTreasury;
     }
@@ -384,7 +384,7 @@ library DopplerTypes {
     /**
      * @notice Full `CreateParams` ready for `Airlock.create`.
      * @dev Module interface fields are written via assembly to bridge remapping type identity.
-     *      `governanceFactoryData` = Launchpad excess recipient (`ExcessSupplyLocker`).
+     *      `governanceFactoryData` = Launchpad excess recipient (`StakeVesting`).
      */
     function buildCreateParams(
         DopplerModules memory modules,
@@ -399,7 +399,7 @@ library DopplerTypes {
         params.numTokensToSell = config.numTokensToSell;
         params.numeraire = modules.numeraire;
         params.tokenFactoryData = encodeTokenFactoryData(name, symbol, baseURI_, config);
-        params.governanceFactoryData = abi.encode(modules.excessSupplyLocker);
+        params.governanceFactoryData = abi.encode(modules.stakeVesting);
         params.poolInitializerData =
             encodePoolInitializerData(feeRouter, modules.numeraire, modules.rehypeHookInitializer, config);
         params.liquidityMigratorData = encodeLiquidityMigratorData(feeRouter, modules, config);

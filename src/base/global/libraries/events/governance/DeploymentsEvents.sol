@@ -68,7 +68,7 @@ library DeploymentsEvents {
     event GraduationPolicyUpdated(uint256 minGraduateProceeds, uint32 minBondingDuration);
     event FeeDistributionUpdated();
 
-    //  ExcessSupplyLocker
+    //  StakeVesting
     event ExcessAllocated(
         address indexed token, bytes32 indexed playerId, uint256 advancedTradeAmount, uint256 vaultAmount
     );

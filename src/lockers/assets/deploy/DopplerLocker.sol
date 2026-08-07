@@ -26,7 +26,7 @@ import { Airlock, CreateParams } from "@doppler/src/Airlock.sol";
 import { PoolId } from "@v4-core/types/PoolId.sol";
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
-import { IExcessSupplyLocker } from "@interfaces/governance/IExcessSupplyLocker.sol";
+import { IStakeVesting } from "@interfaces/governance/IStakeVesting.sol";
 
 /// @dev Narrow views — avoid importing Rehype/DopplerHookInitializer (pulls Quoter `=0.8.26`).
 interface IDopplerHookInitializerView {
@@ -64,7 +64,7 @@ interface IRehypePoolInfoView {
  *        → anyone calls `deployAssets` after wait; RateLimit gates frequency
  *        → FinalConfig: oracle pins IPFS metadata + mines salts + returns `baseURI`
  *        → fulfill → `_onDeployReady` (FeeRouter w/ hub → Airlock → Vault → PlayerSet + registerVaults
- *          → ExcessSupplyLocker.allocate)
+ *          → StakeVesting.allocate)
  *        → oracle/validation failure: re-queue for a new FinalConfig (`retryWait`, default 5m)
  *        → Airlock not ours yet (create fail / salt frontrun): new FinalConfig after `retryWait`
  *        → Airlock already ours (integrator + FeeRouter buybackDst): resume vault/registry after `retryWait`
@@ -751,7 +751,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
      *      2) Airlock.create (skipped when `tokenPredicted` already has Airlock state)
      *      3) PlayerVault + stToken (skipped when `vaultPredicted` already has code)
      *      4) PlayerSetRegistry writes (skipped when already registered / vault attached)
-     *      5) ExcessSupplyLocker.allocate (50/50 AT reserve + vested vault stake)
+     *      5) StakeVesting.allocate (50/50 AT reserve + vested vault stake)
      *
      *      Prerequisites / follow-ups (do not skip when wiring production intake):
      *        - DopplerLocker proxy MUST hold Orchestrator `AUTHORIZED_CONTRACT` so `_exec`
@@ -911,11 +911,11 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         _exec(address(tournamentRegistry), abi.encodeCall(ITournamentRegistry.registerVaults, (leagueId, vaults)));
     }
 
-    /// @dev Idempotent via `ExcessSupplyLocker.allocate` (no-op once a position exists).
+    /// @dev Idempotent via `StakeVesting.allocate` (no-op once a position exists).
     function _allocateExcess(address asset) private {
-        address locker = dopplerConfig.excessSupplyLocker();
-        if (locker == address(0)) revert Errors.ZeroAddress();
-        _exec(locker, abi.encodeCall(IExcessSupplyLocker.allocate, (asset)));
+        address vesting = dopplerConfig.stakeVesting();
+        if (vesting == address(0)) revert Errors.ZeroAddress();
+        _exec(vesting, abi.encodeCall(IStakeVesting.allocate, (asset)));
     }
 
     function _exec(address target, bytes memory data) private returns (bytes memory) {

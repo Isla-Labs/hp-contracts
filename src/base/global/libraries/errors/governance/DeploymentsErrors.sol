@@ -49,7 +49,7 @@ library DeploymentsErrors {
     error InvalidCurveShares(uint256 totalShares);
     error InvalidFeeDistribution();
 
-    //  ExcessSupplyLocker
+    //  StakeVesting
     error ZeroAmount();
     error TransferFailed();
     error EmptyBeneficiaries();

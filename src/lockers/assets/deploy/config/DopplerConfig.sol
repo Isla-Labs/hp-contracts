@@ -75,7 +75,7 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
     address public liquidityMigrator;
     address public rehypeHookInitializer;
     address public rehypeHookMigrator;
-    address public excessSupplyLocker;
+    address public stakeVesting;
     address public hpTreasury;
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
@@ -98,7 +98,7 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
         liquidityMigrator = _getAddress(_addressKey(Addresses.DOPPLER_HOOK_MIGRATOR));
         rehypeHookInitializer = _getAddress(_addressKey(Addresses.REHYPE_DOPPLER_HOOK_INITIALIZER));
         rehypeHookMigrator = _getAddress(_addressKey(Addresses.REHYPE_DOPPLER_HOOK_MIGRATOR));
-        excessSupplyLocker = _getAddress(_addressKey(Addresses.EXCESS_SUPPLY_LOCKER));
+        stakeVesting = _getAddress(_addressKey(Addresses.STAKE_VESTING));
         hpTreasury = _getAddress(_addressKey(Addresses.HP_TREASURY));
 
         _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
@@ -238,9 +238,9 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
     }
 
     /// @inheritdoc IDopplerConfig
-    function configureLaunchpadRecipients(address excessSupplyLocker_, address hpTreasury_) external onlyOwner {
-        if (excessSupplyLocker_ == address(0) || hpTreasury_ == address(0)) revert Errors.ZeroAddress();
-        excessSupplyLocker = excessSupplyLocker_;
+    function configureLaunchpadRecipients(address stakeVesting_, address hpTreasury_) external onlyOwner {
+        if (stakeVesting_ == address(0) || hpTreasury_ == address(0)) revert Errors.ZeroAddress();
+        stakeVesting = stakeVesting_;
         hpTreasury = hpTreasury_;
     }
 
@@ -256,7 +256,7 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
             tokenFactory == address(0) || vaultFactory == address(0) || airlock == address(0)
                 || governanceFactory == address(0) || poolInitializer == address(0) || liquidityMigrator == address(0)
                 || rehypeHookInitializer == address(0) || rehypeHookMigrator == address(0)
-                || excessSupplyLocker == address(0) || hpTreasury == address(0)
+                || stakeVesting == address(0) || hpTreasury == address(0)
         ) {
             revert Errors.NotConfigured();
         }
@@ -273,7 +273,7 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
         m.numeraire = address(0); // native ETH — Airlock convention
         m.integrator = integrator_;
         m.airlockOwner = Ownable(airlock).owner();
-        m.excessSupplyLocker = excessSupplyLocker;
+        m.stakeVesting = stakeVesting;
         m.hpTreasury = hpTreasury;
     }
 

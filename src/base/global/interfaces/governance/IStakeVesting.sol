@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-interface IExcessSupplyLocker {
+interface IStakeVesting {
     function allocate(address token) external;
 
     function setBeneficiaries(address[] calldata accounts, uint256[] calldata sharesWad) external;

@@ -8,6 +8,9 @@ library AddressKeys {
     string internal constant ORCHESTRATOR = "ORCHESTRATOR";
     string internal constant DEPLOY_TOURNAMENT = "DEPLOY_TOURNAMENT";
 
+    // Governance
+    string internal constant STAKE_VESTING = "STAKE_VESTING";
+
     // Registries
     string internal constant TOURNAMENT_REGISTRY = "TOURNAMENT_REGISTRY";
     string internal constant PLAYER_SET_REGISTRY = "PLAYER_SET_REGISTRY";
@@ -16,7 +19,6 @@ library AddressKeys {
     string internal constant DOPPLER_LOCKER = "DOPPLER_LOCKER";
     string internal constant DOPPLER_CONFIG = "DOPPLER_CONFIG";
     string internal constant TRANSFER_LOCKER = "TRANSFER_LOCKER";
-    string internal constant EXCESS_SUPPLY_LOCKER = "EXCESS_SUPPLY_LOCKER";
     string internal constant ELIGIBILITY_STORE = "ELIGIBILITY_STORE";
     string internal constant ELIGIBILITY_VERIFIER = "ELIGIBILITY_VERIFIER";
     string internal constant PPM_VERIFIER = "PPM_VERIFIER";

@@ -30,7 +30,7 @@ interface IDopplerConfig {
 
     function rehypeHookMigrator() external view returns (address);
 
-    function excessSupplyLocker() external view returns (address);
+    function stakeVesting() external view returns (address);
 
     function hpTreasury() external view returns (address);
 
@@ -81,5 +81,5 @@ interface IDopplerConfig {
         address rehypeHookMigrator_
     ) external;
 
-    function configureLaunchpadRecipients(address excessSupplyLocker_, address hpTreasury_) external;
+    function configureLaunchpadRecipients(address stakeVesting_, address hpTreasury_) external;
 }

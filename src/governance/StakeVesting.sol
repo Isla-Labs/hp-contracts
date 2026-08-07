@@ -16,7 +16,7 @@ import { VaultData } from "@types/PlayerSetTypes.sol";
 import { PlayerVault } from "@vaults/PlayerVault.sol";
 
 /**
- * @title ExcessSupplyLocker
+ * @title StakeVesting
  * @notice Global receiver for Doppler Launchpad excess (`initialSupply - numTokensToSell`).
  * @dev Wired as LaunchpadGovernance “timelock” via `governanceFactoryData = abi.encode(this)`.
  *
@@ -30,7 +30,7 @@ import { PlayerVault } from "@vaults/PlayerVault.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract ExcessSupplyLocker is Initializable, AddressBook, Ownable, ReentrancyGuard {
+contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant WAD = 1e18;

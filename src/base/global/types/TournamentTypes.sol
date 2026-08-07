@@ -15,7 +15,7 @@ struct Tournament {
     Hub[] feeHubs; // list of PbrFeeHub contracts that distribute fees to this tournament
     bytes32 tournamentId;
     address pbrTreasury;
-    Season[] seasons; // identity stubs; round calendar SoT is `RoundManager`
+    Season[] seasons; // identity + round calendar SoT on `TournamentRegistry`
 }
 
 struct Hub {
@@ -24,18 +24,17 @@ struct Hub {
 }
 
 // --------------------------------------------
-//  Season identity per tournament (TournamentRegistry)
+//  Season + round calendar (TournamentRegistry)
 // --------------------------------------------
 
-/// @notice Season identity only — `finalRound` / rounds live in `RoundManager`.
+/// @notice Season identity and round calendar — SoT on `TournamentRegistry`.
 struct Season {
     bytes32 seasonId;
     uint16 seasonStartYear;
+    uint32 finalRound;
+    uint32 roundCount;
+    RoundSchedule[] rounds;
 }
-
-// --------------------------------------------
-//  Round calendar (RoundManager)
-// --------------------------------------------
 
 struct RoundSchedule {
     uint32 roundNumber;
@@ -48,17 +47,18 @@ struct RoundSchedule {
 //  DeployTournament types
 // --------------------------------------------
 
-/// @notice Season stub opened at deploy; calendar filled later by RoundManager.
+/// @notice Season opened at deploy; rounds filled later via `upsertRounds`.
 struct BootstrapSeason {
     bytes32 seasonId;
     uint16 seasonStartYear;
+    uint32 finalRound;
 }
 
 /**
  * @param tournamentId Stable tournament id.
  * @param initialSeason Season written into `PbrTreasury.initialize`.
  * @param treasurySalt CreateX salt for `PbrTreasuryFactory.create` (mine offchain for `0x99…`).
- * @param seasons Optional season stubs (`openSeason`); empty skips.
+ * @param seasons Optional seasons (`openSeason`); empty skips.
  */
 struct BootstrapParams {
     bytes32 tournamentId;

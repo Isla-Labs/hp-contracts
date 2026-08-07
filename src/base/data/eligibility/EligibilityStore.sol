@@ -9,7 +9,6 @@ import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { CreReceiver } from "@base/abstract/CreReceiver.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
-import { IRoundManager } from "@interfaces/data/IRoundManager.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { Position } from "@types/PlayerSetTypes.sol";
 
@@ -135,7 +134,7 @@ contract EligibilityStore is Initializable, AddressBook, Ownable, CreReceiver {
     ///         `WorkflowControl.currentSeasonStartYear` (cron / finalize classification).
     uint16 public scoreBaseYear;
 
-    /// @dev Tx-local cache: `RoundManager.getFinalRound(leagueId, year)`.
+    /// @dev Tx-local cache: `TournamentRegistry.getFinalRound(leagueId, year)`.
     struct FinalRoundCache {
         bytes32[_FINAL_ROUND_CACHE_CAP] leagueIds;
         uint16[_FINAL_ROUND_CACHE_CAP] seasonYears;
@@ -1244,11 +1243,6 @@ contract EligibilityStore is Initializable, AddressBook, Ownable, CreReceiver {
         return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
     }
 
-    /// @dev Round calendar SoT (`finalRound`) for the G-index.
-    function _roundManager() internal view returns (IRoundManager) {
-        return IRoundManager(_getAddress(_addressKey(Addresses.ROUND_MANAGER)));
-    }
-
     function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
         return interfaceId == type(IReceiver).interfaceId || CreReceiver.supportsInterface(interfaceId);
     }
@@ -1401,7 +1395,7 @@ contract EligibilityStore is Initializable, AddressBook, Ownable, CreReceiver {
             }
         }
 
-        fr = _roundManager().getFinalRound(leagueId, year);
+        fr = _tournamentRegistry().getFinalRound(leagueId, year);
         if (fr == 0) revert Errors.ZeroId();
 
         if (n < _FINAL_ROUND_CACHE_CAP) {

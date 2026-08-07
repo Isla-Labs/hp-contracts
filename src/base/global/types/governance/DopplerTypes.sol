@@ -60,6 +60,12 @@ struct EligibilityGroups {
  *      Fee matrix → FeeRouter (`buybackDst`):
  *        - ETH fees: direct (`numeraireFeesToNumeraireBuybackWad`)
  *        - Player-token fees: swap to ETH (`assetFeesToNumeraireBuybackWad`)
+ *        - Rehype: 5% of swap fee → Airlock owner; remaining 95% → FeeRouter
+ *        - FeeRouter (one per market; `status` cache via `PlayerSetRegistry.setStatus`):
+ *            BONDING: 10/95 integrator → gross 5:10:85 (Doppler : HP : redistrib)
+ *            GRADUATED / INACTIVE: 5/95 → gross 5:5:90
+ *        - Spot pool LP fee default 0.15% (`migratorFee`) → StreamableFeesLocker 5:95
+ *          (Doppler airlock : HP / `HP_TREASURY`); Rehype trading fee stays 1%
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -80,8 +86,11 @@ library DopplerTypes {
     /// @dev Uniswap V4 max tick (aligned to spacing 8).
     int24 internal constant DEFAULT_TAIL_TICK_UPPER = 887_272;
 
-    /// @dev 1% in Uniswap V4 millionths.
+    /// @dev 1% in Uniswap V4 millionths (Rehype trading fee — bonding + spot).
     uint24 internal constant DEFAULT_FEE = 10_000;
+
+    /// @dev 0.15% pool LP fee post-migrate → StreamableFeesLocker 5:95.
+    uint24 internal constant DEFAULT_MIGRATOR_LP_FEE = 1_500;
 
     uint32 internal constant DEFAULT_MIGRATOR_LOCK_DURATION = 30 days;
 
@@ -94,8 +103,11 @@ library DopplerTypes {
     /// @dev DN404 unit: 1000 whole tokens → 1 NFT (matches Doppler DN404 factory tests).
     uint256 internal constant DEFAULT_DN404_UNIT = 1000 ether;
 
-    /// @dev Doppler `MIN_PROTOCOL_OWNER_SHARES` = WAD / 20.
+    /// @dev Doppler `MIN_PROTOCOL_OWNER_SHARES` = WAD / 20 (5%) — StreamableFeesLocker.
     uint96 internal constant PROTOCOL_OWNER_SHARES = uint96(WAD / 20);
+
+    /// @dev HP (`HP_TREASURY`) StreamableFeesLocker share (95%).
+    uint96 internal constant HP_LP_SHARES = uint96(WAD - uint256(PROTOCOL_OWNER_SHARES));
 
     // -------------------------------------------------------------------------
     //  ABI-compatible local shapes (match Doppler layouts; avoid path-identity clashes)
@@ -121,7 +133,7 @@ library DopplerTypes {
 
     /**
      * @notice Whitelisted Doppler / HP module addresses used when building `CreateParams`.
-     * @dev Set once on `DeployDoppler` (immutables or one-time setters).
+     * @dev Resolved on `DopplerLocker` from AddressProvider (owner may override modules).
      */
     struct DopplerModules {
         address airlock;
@@ -133,8 +145,13 @@ library DopplerTypes {
         address rehypeHookMigrator;
         address feeRouterFactory;
         address numeraire;
+        /// @dev Airlock integrator fee recipient (`CreateParams.integrator`).
         address integrator;
         address airlockOwner;
+        /// @dev Launchpad “timelock” / excess supply recipient (`governanceFactoryData`).
+        address excessSupplyLocker;
+        /// @dev StreamableFeesLocker beneficiary (95% of post-migrate LP fees) — `HP_TREASURY`.
+        address hpTreasury;
     }
 
     /**
@@ -200,7 +217,7 @@ library DopplerTypes {
         config.rehypeStartingTime = 0;
         config.feeRoutingMode = FeeRoutingMode.DirectBuyback;
         config.feeDistribution = defaultFeeDistribution();
-        config.migratorFee = DEFAULT_FEE;
+        config.migratorFee = DEFAULT_MIGRATOR_LP_FEE;
         config.migratorUseDynamicFee = false;
         config.migratorTickSpacing = DEFAULT_TICK_SPACING;
         config.migratorLockDuration = DEFAULT_MIGRATOR_LOCK_DURATION;
@@ -316,7 +333,8 @@ library DopplerTypes {
 
     /**
      * @notice `liquidityMigratorData` for `DopplerHookMigrator.initialize`.
-     * @dev Beneficiaries: integrator 95% + airlockOwner 5%, sorted ascending.
+     * @dev Beneficiaries (StreamableFeesLocker): 5% airlockOwner / 95% HP (`hpTreasury`).
+     *      Bonding initializer beneficiaries stay empty (preserve `Airlock.migrate`).
      */
     function encodeLiquidityMigratorData(
         address feeRouter,
@@ -328,7 +346,7 @@ library DopplerTypes {
             config.migratorUseDynamicFee,
             config.migratorTickSpacing,
             config.migratorLockDuration,
-            _migratorBeneficiaries(modules.integrator, modules.airlockOwner),
+            _migratorBeneficiaries(modules.airlockOwner, modules.hpTreasury),
             modules.rehypeHookMigrator,
             encodeRehypeMigratorHookData(feeRouter, modules.numeraire, config),
             config.proceedsRecipient,
@@ -339,6 +357,7 @@ library DopplerTypes {
     /**
      * @notice Full `CreateParams` ready for `Airlock.create`.
      * @dev Module interface fields are written via assembly to bridge remapping type identity.
+     *      `governanceFactoryData` = Launchpad excess recipient (`ExcessSupplyLocker`).
      */
     function buildCreateParams(
         DopplerModules memory modules,
@@ -352,7 +371,7 @@ library DopplerTypes {
         params.numTokensToSell = config.numTokensToSell;
         params.numeraire = modules.numeraire;
         params.tokenFactoryData = encodeTokenFactoryData(name, symbol, config);
-        params.governanceFactoryData = new bytes(0);
+        params.governanceFactoryData = abi.encode(modules.excessSupplyLocker);
         params.poolInitializerData =
             encodePoolInitializerData(feeRouter, modules.numeraire, modules.rehypeHookInitializer, config);
         params.liquidityMigratorData = encodeLiquidityMigratorData(feeRouter, modules, config);
@@ -376,20 +395,18 @@ library DopplerTypes {
     //  Internal
     // -------------------------------------------------------------------------
 
+    /// @dev 5% airlock owner / 95% HP treasury — addresses sorted ascending.
     function _migratorBeneficiaries(
-        address integrator,
-        address airlockOwner
+        address airlockOwner,
+        address hpTreasury
     ) private pure returns (Beneficiary[] memory beneficiaries) {
-        uint96 ownerShares = PROTOCOL_OWNER_SHARES;
-        uint96 integratorShares = uint96(WAD - uint256(ownerShares));
-
         beneficiaries = new Beneficiary[](2);
-        if (integrator < airlockOwner) {
-            beneficiaries[0] = Beneficiary({ beneficiary: integrator, shares: integratorShares });
-            beneficiaries[1] = Beneficiary({ beneficiary: airlockOwner, shares: ownerShares });
+        if (airlockOwner < hpTreasury) {
+            beneficiaries[0] = Beneficiary({ beneficiary: airlockOwner, shares: PROTOCOL_OWNER_SHARES });
+            beneficiaries[1] = Beneficiary({ beneficiary: hpTreasury, shares: HP_LP_SHARES });
         } else {
-            beneficiaries[0] = Beneficiary({ beneficiary: airlockOwner, shares: ownerShares });
-            beneficiaries[1] = Beneficiary({ beneficiary: integrator, shares: integratorShares });
+            beneficiaries[0] = Beneficiary({ beneficiary: hpTreasury, shares: HP_LP_SHARES });
+            beneficiaries[1] = Beneficiary({ beneficiary: airlockOwner, shares: PROTOCOL_OWNER_SHARES });
         }
     }
 }

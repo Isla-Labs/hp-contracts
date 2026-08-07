@@ -8,11 +8,11 @@ forge-std/=lib/forge-std/src/
 
 @src/=src/
 @base/=src/base/
-@data/=src/data/
-@deployments/=src/base/ops/deployments/
+@data/=src/base/data/
+@deployments/=src/lockers/
+@governance/=src/governance/
 @markets/=src/markets/
 @oracle/=src/oracle/
-@registries/=src/base/ops/registries/
 @routers/=src/routers/
 @vaults/=src/vaults/
 

@@ -20,6 +20,11 @@ import {
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 
+/// @dev Minimal FeeRouter surface for status cache sync (avoids markets import).
+interface IFeeRouterStatus {
+    function setStatus(PlayerStatus status_) external;
+}
+
 /**
  * @title PlayerSetRegistry
  * @notice Canonical per-player market discovery set (`playerId` → `PlayerSet`).
@@ -28,6 +33,7 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
  *        index, and Doppler updates.
  *      - Vault membership SoT is `TournamentRegistry` (not mirrored here).
  *      - Registered vaults: `updateUtilization` via `onlyVault`.
+ *      - `setStatus` always syncs `FeeRouter.status` (integrator share cache).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -170,10 +176,16 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
         emit Events.VaultDataUpdated(playerId, set.vaultData.playerVault, set.vaultData.stToken, isUtilized);
     }
 
+    /**
+     * @notice Updates lifecycle status and syncs the per-market `FeeRouter.status` cache.
+     * @dev Migration / eligibility listeners → Orchestrator → here.
+     */
     function setStatus(bytes32 playerId, PlayerStatus status) external onlyOwner {
-        _requirePlayer(playerId);
-        _playerSets[playerId].status = status;
+        PlayerSet storage set = _requirePlayer(playerId);
+        set.status = status;
         emit Events.StatusUpdated(playerId, status);
+
+        IFeeRouterStatus(set.dopplerData.feeRouter).setStatus(status);
     }
 
     function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyOwner {

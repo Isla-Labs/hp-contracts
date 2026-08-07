@@ -39,6 +39,7 @@ interface IPlayerSetRegistry {
 
     function updateUtilization(bool isUtilized) external;
 
+    /// @dev Always syncs `FeeRouter.status` (integrator share cache).
     function setStatus(bytes32 playerId, PlayerStatus status) external;
 
     function setLeagueId(bytes32 playerId, bytes32 leagueId) external;

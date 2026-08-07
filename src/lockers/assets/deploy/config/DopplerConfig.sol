@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-
 import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
-import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 
 import { FeeDistributionInfo, FeeRoutingMode } from "@doppler/src/types/RehypeTypes.sol";
 import { WAD } from "@doppler/src/types/Wad.sol";
@@ -13,17 +10,28 @@ import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
 
 /**
  * @title DopplerConfig
- * @notice Owner-updatable bonding / migrate launch parameters for `DopplerLocker`.
+ * @notice Bonding / migrate launch parameters for `DopplerLocker`.
  * @dev `__DopplerConfig_init` seeds defaults from `DopplerTypes.defaultMarketLaunchConfig()`.
- *      Owner is the `Orchestrator`. HP graduation policy fields (`minGraduateProceeds`,
- *      `minBondingDuration`) are enforced by finalization logic (not by Doppler Airlock):
+ *      Ownership / `onlyOwner` setters live on `DopplerLocker` (Orchestrator).
+ *
+ *      Create wiring (not stored here):
+ *        - `LaunchpadGovernanceFactory` + `ExcessSupplyLocker` excess recipient
+ *        - Bonding Rehype: 1% → FeeRouter 5:10:85 while `status == BONDING`
+ *        - Spot Rehype: 1% → FeeRouter 5:5:90 for `GRADUATED` / `INACTIVE`
+ *        - Spot pool LP fee: 0.15% (`migratorFee`) → StreamableFeesLocker 5:95 (airlock : HP)
+ *        - Bonding beneficiaries stay empty (preserve `Airlock.migrate`)
+ *
+ *      HP graduation policy fields (`minGraduateProceeds`, `minBondingDuration`) are enforced
+ *      by finalization logic (not by Doppler Airlock):
  *        - farTick reached anytime, OR
  *        - `raised ≥ minGraduateProceeds` after `launch + minBondingDuration`
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-abstract contract DopplerConfig is Ownable {
+abstract contract DopplerConfig {
+    address[] public beneficiaryAddresses;
+
     // -------------------------------------------------------------------------
     //  Storage — shared across every player market until governance updates
     // -------------------------------------------------------------------------
@@ -63,13 +71,8 @@ abstract contract DopplerConfig is Ownable {
 
     DopplerTypes.Curve[] internal _bondingCurves;
 
-    /// @dev Temporary Ownable owner on the implementation; proxy calls `__DopplerConfig_init`.
-    constructor() Ownable(msg.sender) { }
-
-    /// @notice Ownership → Orchestrator + default market launch config (proxy storage).
-    function __DopplerConfig_init(address orchestrator_) internal {
-        if (orchestrator_ == address(0)) revert Errors.ZeroAddress();
-        _transferOwnership(orchestrator_);
+    /// @notice Seed default market launch config (proxy storage).
+    function __DopplerConfig_init() internal {
         _applyLaunchConfig(DopplerTypes.defaultMarketLaunchConfig());
     }
 
@@ -107,41 +110,6 @@ abstract contract DopplerConfig is Ownable {
         config.dn404Unit = dn404Unit;
         config.minGraduateProceeds = minGraduateProceeds;
         config.minBondingDuration = minBondingDuration;
-    }
-
-    // -------------------------------------------------------------------------
-    //  Owner setters
-    // -------------------------------------------------------------------------
-
-    /**
-     * @notice Replace the full shared launch recipe (scalars + curves + graduation policy).
-     * @dev Does not affect markets already deployed; only subsequent `Airlock.create` calls.
-     */
-    function setMarketLaunchConfig(DopplerTypes.MarketLaunchConfig memory config_) external onlyOwner {
-        _applyLaunchConfig(config_);
-        emit Events.MarketLaunchConfigUpdated(
-            config_.initialSupply, config_.numTokensToSell, config_.farTick, config_.curves.length
-        );
-    }
-
-    /// @notice Update multicurve segments only (shares must sum to WAD).
-    function setBondingCurves(DopplerTypes.Curve[] memory curves_) external onlyOwner {
-        _setBondingCurves(curves_);
-        emit Events.BondingCurvesUpdated(curves_.length);
-    }
-
-    /// @notice Update HP soft-graduation policy (50 ETH / 30d defaults).
-    function setGraduationPolicy(uint256 minGraduateProceeds_, uint32 minBondingDuration_) external onlyOwner {
-        minGraduateProceeds = minGraduateProceeds_;
-        minBondingDuration = minBondingDuration_;
-        emit Events.GraduationPolicyUpdated(minGraduateProceeds_, minBondingDuration_);
-    }
-
-    /// @notice Update Rehype fee routing matrix (each source row must sum to WAD).
-    function setFeeDistribution(FeeDistributionInfo calldata feeDistribution_) external onlyOwner {
-        _validateFeeDistribution(feeDistribution_);
-        feeDistribution = feeDistribution_;
-        emit Events.FeeDistributionUpdated();
     }
 
     // -------------------------------------------------------------------------

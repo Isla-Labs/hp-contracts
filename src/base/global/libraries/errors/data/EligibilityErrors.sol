@@ -35,4 +35,12 @@ library EligibilityErrors {
     error FetchOffsetMismatch(bytes32 seasonId, uint16 expected, uint16 received);
     error InvalidNextPage(uint16 pageFetched, uint16 nextPage);
     error UnknownSquadPhase();
+
+    // --------------------------------------------
+    //  CVM oracle (eligibility-2)
+    // --------------------------------------------
+
+    error OracleRequestPending(bytes32 requestId);
+    error UnknownOracleRequest(bytes32 requestId);
+    error NothingToFetch();
 }

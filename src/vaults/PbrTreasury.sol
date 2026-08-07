@@ -14,7 +14,6 @@ import { RoundSchedule } from "@types/TournamentTypes.sol";
 import { RoundState, RoundStatus } from "@types/vaults/VaultTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
-import { IRoundManager } from "@interfaces/data/IRoundManager.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
 
@@ -52,7 +51,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
 
     ITournamentRegistry public tournamentRegistry;
     IPlayerSetRegistry public playerSetRegistry;
-    IRoundManager public roundManager;
 
     bytes32 public tournamentId;
 
@@ -119,7 +117,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
 
         address tournamentRegistry_ = _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY));
         address playerSetRegistry_ = _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY));
-        address roundManager_ = _getAddress(_addressKey(Addresses.ROUND_MANAGER));
 
         tournamentId = tournamentId_;
         seasonId = initialSeason_;
@@ -128,7 +125,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
 
         tournamentRegistry = ITournamentRegistry(tournamentRegistry_);
         playerSetRegistry = IPlayerSetRegistry(playerSetRegistry_);
-        roundManager = IRoundManager(roundManager_);
     }
 
     receive() external payable nonReentrant {
@@ -187,13 +183,12 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         }
 
         bytes32 tid = tournamentId;
-        IRoundManager rm = roundManager;
-        if (!rm.isRoundPublished(tid, season, roundNumber)) revert Errors.NothingDue();
+        if (!tournamentRegistry.isRoundPublished(tid, season, roundNumber)) revert Errors.NothingDue();
 
-        RoundSchedule memory schedule = rm.getRound(tid, season, roundNumber);
+        RoundSchedule memory schedule = tournamentRegistry.getRound(tid, season, roundNumber);
         if (block.timestamp < schedule.startTime) revert Errors.NothingDue();
 
-        uint32 finalRound = rm.getFinalRound(tid, season);
+        uint32 finalRound = tournamentRegistry.getFinalRound(tid, season);
         if (finalRound == 0) revert Errors.NothingDue();
 
         uint256 pot = rewardsR;
@@ -286,7 +281,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         round.status = RoundStatus.Claimable;
         snapshotPending = false;
 
-        uint32 finalRound = roundManager.getFinalRound(tournamentId, season);
+        uint32 finalRound = tournamentRegistry.getFinalRound(tournamentId, season);
         if (roundNumber >= finalRound && finalRound != 0) {
             activeRound = 1;
             uint16 newSeason = season + 1;

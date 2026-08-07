@@ -40,21 +40,6 @@ contract Orchestrator is AccessControl, IOrchestrator {
     //  Role admin helpers
     // --------------------------------------------
 
-    /**
-     * @notice Atomically hand `DEFAULT_ADMIN_ROLE` to `newAdmin` (EOA → Safe).
-     * @dev Grants the role to `newAdmin` then revokes it from `msg.sender`. Prefer this over
-     *      raw `grantRole` / `renounceRole` so there is never a window with two admins or zero.
-     */
-    function transferDefaultAdmin(address newAdmin) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newAdmin == address(0)) revert Errors.ZeroAddress();
-        if (newAdmin == msg.sender) revert Errors.Unauthorized();
-
-        address previous = msg.sender;
-        _grantRole(DEFAULT_ADMIN_ROLE, newAdmin);
-        _revokeRole(DEFAULT_ADMIN_ROLE, previous);
-        emit DefaultAdminTransferred(previous, newAdmin);
-    }
-
     /// @notice Grant `AUTHORIZED_CONTRACT` to a module (e.g. `DeployTournament`).
     function addAuthorizedContract(address account) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (account == address(0)) revert Errors.ZeroAddress();

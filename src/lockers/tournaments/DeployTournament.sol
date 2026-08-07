@@ -41,8 +41,8 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
  *        - `CONTINENTAL`: deploy treasury, attach under selected league hubs (`leagueIds`)
  *        - `INTERNATIONAL`: deploy treasury, attach under all existing league hubs
  *
- *      Season identity stubs (`BootstrapSeason`) open via `TournamentRegistry.openSeason`;
- *      RoundManager later owns `setFinalRound` + `upsertRounds`.
+ *      Seasons (`BootstrapSeason`) open via `TournamentRegistry.openSeason` (includes `finalRound`);
+ *      round rows are filled later via `TournamentRegistry.upsertRounds`.
  *
  *      Protocol deploy order:
  *        1. Deploy AddressProvider
@@ -217,9 +217,12 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
         for (uint256 i; i < length; ++i) {
             BootstrapSeason calldata s = b.seasons[i];
             if (s.seasonId == bytes32(0) || s.seasonStartYear == 0) revert Errors.ZeroId();
+            if (s.finalRound == 0) revert Errors.ZeroId();
             _exec(
                 address(tournamentRegistry),
-                abi.encodeCall(ITournamentRegistry.openSeason, (b.tournamentId, s.seasonId, s.seasonStartYear))
+                abi.encodeCall(
+                    ITournamentRegistry.openSeason, (b.tournamentId, s.seasonId, s.seasonStartYear, s.finalRound)
+                )
             );
         }
 
@@ -267,7 +270,9 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
         uint256 length = b.seasons.length;
         for (uint256 i; i < length; ++i) {
             BootstrapSeason calldata s = b.seasons[i];
-            if (s.seasonId == bytes32(0) || s.seasonStartYear == 0) revert Errors.ZeroId();
+            if (s.seasonId == bytes32(0) || s.seasonStartYear == 0 || s.finalRound == 0) {
+                revert Errors.ZeroId();
+            }
         }
     }
 

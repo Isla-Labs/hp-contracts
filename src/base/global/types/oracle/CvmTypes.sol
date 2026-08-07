@@ -13,7 +13,7 @@ enum CvmJob {
     None,
     /// @dev Sepolia smoke: CVM fetches a URL (or stub) and returns a string body.
     TestFetch,
-    /// @dev Player name / symbol from SP squads (`leagueId` calendar HPID + person HPIDs).
+    /// @dev Player name / symbol from SP squads (`seasonId` calendar HPID + person HPIDs).
     PlayerMetadata,
     /// @dev Vanity salts by `VanityDeployKind` (`Asset` → `0x22`/`0x42`, `Tournament` → `0x99`).
     VanitySalts,

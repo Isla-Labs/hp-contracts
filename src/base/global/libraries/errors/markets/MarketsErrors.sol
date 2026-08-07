@@ -16,6 +16,13 @@ library MarketsErrors {
 
     error InvalidDestination();
     error DestinationNotContract();
+    error LengthMismatch();
+    error EmptyRedistribution();
+    error PbrFeeHubRequired();
+    error PbrFeeHubMissing(address pbrFeeHub);
+    error DuplicateRedistributionHub(address hub);
+    error InvalidFeeSplit();
+    error InvalidFeeSplitTotal(uint256 total);
 
     // --------------------------------------------
     //  PbrFeeHub Errors

@@ -1,0 +1,29 @@
+{
+  "solidity.packageDefaultDependenciesContractsDirectory": "src",
+  "solidity.packageDefaultDependenciesDirectory": "lib",
+  "solidity.remappings": [
+    "forge-std/=lib/forge-std/src/",
+    "@errors/=src/base/global/libraries/errors/",
+    "@events/=src/base/global/libraries/events/",
+    "@types/=src/base/global/types/",
+    "@interfaces/=src/base/global/interfaces/",
+    "@addresses/=src/base/global/libraries/addresses/",
+    "@src/=src/",
+    "@base/=src/base/",
+    "@data/=src/base/data/",
+    "@deployments/=src/lockers/",
+    "@governance/=src/governance/",
+    "@markets/=src/markets/",
+    "@oracle/=src/oracle/",
+    "@routers/=src/routers/",
+    "@vaults/=src/vaults/",
+    "@doppler/=lib/doppler/",
+    "@cre/=lib/chainlink-evm/contracts/cre/src/",
+    "@chainlink/=lib/chainlink-evm/contracts/src/v0.8/",
+    "@openzeppelin/=lib/doppler/lib/v4-core/lib/openzeppelin-contracts/contracts/",
+    "@createx/=lib/doppler/lib/createx/src/",
+    "@v4-core/=lib/doppler/lib/v4-core/src/",
+    "@v4-periphery/=lib/doppler/lib/v4-periphery/src/",
+    "@solady/=lib/doppler/lib/solady/src/"
+  ]
+}

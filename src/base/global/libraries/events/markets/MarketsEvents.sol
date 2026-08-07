@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { PlayerStatus } from "@types/PlayerSetTypes.sol";
 import { TournamentType } from "@types/TournamentTypes.sol";
 
 library MarketsEvents {
@@ -11,6 +12,9 @@ library MarketsEvents {
     event FeeRouterCreated(bytes32 indexed playerId, address indexed feeRouter, address indexed pbrFeeHub);
 
     event PbrFeeHubUpdated(bytes32 indexed playerId, address indexed previousHub, address indexed newHub);
+    event IntegratorUpdated(bytes32 indexed playerId, address indexed previous, address indexed integrator);
+    event StatusUpdated(bytes32 indexed playerId, PlayerStatus previous, PlayerStatus status);
+    event RedistributionUpdated(bytes32 indexed playerId, address[] hubs, uint256[] feeSplit);
     event FeesRelayed(bytes32 indexed playerId, address indexed to, uint256 amount);
     event FeesQueued(bytes32 indexed playerId, address indexed to, uint256 amount);
     event TokenRescued(address indexed token, address indexed to, uint256 amount);

@@ -7,7 +7,7 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { IEligibilityStore } from "@interfaces/data/IEligibilityStore.sol";
+import { IEligibilityStore2 } from "@interfaces/data/IEligibilityStore2.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
@@ -24,13 +24,13 @@ import {
     SCORE_WAD,
     SquadList,
     VerifySnapshot
-} from "@data/eligibility/types/EligibilityTypes.sol";
+} from "@data/eligibility-2/types/EligibilityTypes.sol";
 
 /**
- * @title EligibilityVerifier
+ * @title EligibilityVerifier (eligibility-2)
  * @notice Criteria + rate-limited verify scan; enqueues DopplerLocker / TransferLocker directly.
  * @dev Proxy-initialized. Separation:
- *        - `EligibilityStore` — CRE squads + `recordAppearances` / score math (own proxy)
+ *        - `EligibilityStore` — CVM squads oracle + `recordAppearances` / score math (own proxy)
  *        - `EligibilityCriteria` — owner-tunable thresholds only
  *        - this contract — scan, classify, locker handoff
  *
@@ -49,8 +49,8 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
         Reactivate
     }
 
-    /// @notice Minutes / CRE data plane (set once in `initialize`).
-    IEligibilityStore public store;
+    /// @notice Minutes / CVM data plane (set once in `initialize`).
+    IEligibilityStore2 public store;
 
     /// @param addressProvider_ Canonical `AddressProvider`.
     /// @param cooldown_ Min seconds between `verifyEligibility` pages.
@@ -72,7 +72,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
 
         _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
         __EligibilityCriteria_init();
-        store = IEligibilityStore(store_);
+        store = IEligibilityStore2(store_);
     }
 
     // --------------------------------------------
@@ -94,7 +94,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
         uint256 offset,
         uint256 limit
     ) external rateLimited returns (EligibilityGroups memory groups) {
-        IEligibilityStore s = store;
+        IEligibilityStore2 s = store;
         uint256 total = s.playerCount();
         if (offset >= total || limit == 0) {
             _drainChangers();
@@ -395,7 +395,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
      *      - club changed → clear only (events already emitted on SORT)
      */
     function _drainChangers() private {
-        IEligibilityStore s = store;
+        IEligibilityStore2 s = store;
         IPlayerSetRegistry registry = _playerSetRegistry();
 
         _enqueueDeployedPending(s.takePendingLeftLeague(), LifecycleReason.LeftLeague, registry);
@@ -429,9 +429,8 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
     }
 
     function _enqueueEligible(EligibilityGroups memory groups) private {
-        // TODO(eligibility-2): flatten deploy cohorts into parallel `(playerIds, leagueIds)`
-        // and call `IDopplerLocker.enqueueEligible(playerIds, leagueIds)`. League calendar
-        // HPID is required per player; cohort-only groups no longer match the locker ABI.
+        // TODO(eligibility-2): flatten deploy cohorts into `(seasonId, playerIds)` and call
+        // `IDopplerLocker.queueAssets(seasonId, playerIds)` (owner/Orchestrator path).
         groups;
     }
 

@@ -15,6 +15,7 @@ library AddressKeys {
     // Lockers / data
     string internal constant DOPPLER_LOCKER = "DOPPLER_LOCKER";
     string internal constant TRANSFER_LOCKER = "TRANSFER_LOCKER";
+    string internal constant EXCESS_SUPPLY_LOCKER = "EXCESS_SUPPLY_LOCKER";
     string internal constant ELIGIBILITY_STORE = "ELIGIBILITY_STORE";
     string internal constant ELIGIBILITY_VERIFIER = "ELIGIBILITY_VERIFIER";
     string internal constant PPM_VERIFIER = "PPM_VERIFIER";
@@ -22,11 +23,24 @@ library AddressKeys {
     string internal constant PBR_SETTLE = "PBR_SETTLE";
     string internal constant ROUND_MANAGER = "ROUND_MANAGER";
 
+    // DAO / fee beneficiaries
+    string internal constant HP_TREASURY = "HP_TREASURY";
+
     // Factories
     string internal constant FEE_ROUTER_FACTORY = "FEE_ROUTER_FACTORY";
     string internal constant PBR_FEE_HUB_FACTORY = "PBR_FEE_HUB_FACTORY";
     string internal constant PBR_TREASURY_FACTORY = "PBR_TREASURY_FACTORY";
     string internal constant PLAYER_VAULT_FACTORY = "PLAYER_VAULT_FACTORY";
+    string internal constant DN404_FACTORY = "DN404_FACTORY";
+
+    // Doppler modules (Airlock create path)
+    string internal constant DOPPLER_AIRLOCK = "DOPPLER_AIRLOCK";
+    string internal constant NO_OP_GOVERNANCE_FACTORY = "NO_OP_GOVERNANCE_FACTORY";
+    string internal constant LAUNCHPAD_GOVERNANCE_FACTORY = "LAUNCHPAD_GOVERNANCE_FACTORY";
+    string internal constant DOPPLER_HOOK_INITIALIZER = "DOPPLER_HOOK_INITIALIZER";
+    string internal constant REHYPE_DOPPLER_HOOK_INITIALIZER = "REHYPE_DOPPLER_HOOK_INITIALIZER";
+    string internal constant DOPPLER_HOOK_MIGRATOR = "DOPPLER_HOOK_MIGRATOR";
+    string internal constant REHYPE_DOPPLER_HOOK_MIGRATOR = "REHYPE_DOPPLER_HOOK_MIGRATOR";
 
     // Automata DCAP (TEE quote verification)
     string internal constant AUTOMATA_DCAP_ATTESTATION = "AUTOMATA_DCAP_ATTESTATION";

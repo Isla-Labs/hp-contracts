@@ -12,9 +12,6 @@ interface IOrchestrator {
         bytes data;
     }
 
-    /// @notice Atomically move `DEFAULT_ADMIN_ROLE` from caller to `newAdmin` (EOA → Safe).
-    function transferDefaultAdmin(address newAdmin) external;
-
     function execute(address target, uint256 value, bytes calldata data) external returns (bytes memory result);
 
     function executeBatch(Call[] calldata calls) external returns (bytes[] memory results);

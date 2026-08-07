@@ -60,4 +60,16 @@ library EligibilityEvents {
         uint32 thresholdNewTransfer,
         uint256 under21Age
     );
+
+    /// @notice CVM squad fetch opened (`SquadSync` / `HistoricalSquadSync`).
+    event SquadFetchRequested(
+        bytes32 indexed requestId,
+        bytes32 indexed leagueId,
+        bytes32 indexed seasonId,
+        uint16 pageToFetch,
+        uint16 personsOffset
+    );
+
+    /// @notice CVM fulfill returned `err` or empty `response` (pending cleared; retry via `requestFetch`).
+    event SquadOracleFailed(bytes32 indexed requestId, bytes err);
 }

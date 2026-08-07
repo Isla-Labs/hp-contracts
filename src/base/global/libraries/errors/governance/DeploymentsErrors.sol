@@ -30,9 +30,11 @@ library DeploymentsErrors {
     error MetadataNotSet(bytes32 playerId);
     error EmptyName();
     error EmptySymbol();
+    error TooManyPlayers(uint256 max);
     error OracleInFlight(bytes32 requestId);
     error UnknownOracleRequest(bytes32 requestId);
     error NothingReady();
+    error DeployAddressMismatch(address expected, address actual);
 
     //  DopplerConfig
     error InvalidLaunchSupply();

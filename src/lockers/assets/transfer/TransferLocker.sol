@@ -27,7 +27,15 @@ interface IFeeRouterHub {
  *         cross-league moves (`ChangedLeague`), or reactivations.
  *      1) Offchain / manual review (webhook + email — TBD) confirms or rejects.
  *      2) Confirmed deactivate → owner → `setStatus(INACTIVE)` (not wired yet).
- *      3) Confirmed reactivate → owner → restore prior active status (not wired yet).
+ *      3) Confirmed reactivate → owner → `setStatus(BONDING|GRADUATED)` (not wired yet).
+ *
+ *      Reactivation status (important):
+ *        Markets can go `INACTIVE` while still on the bonding curve or after migrate.
+ *        Do NOT hardcode `GRADUATED` on reactivate. Resolve live market phase from
+ *        `DopplerData.activePool` vs hooks:
+ *          - `activePool.hooks == hookDoppler`  → `setStatus(BONDING)`
+ *          - `activePool.hooks == hookMigrator` → `setStatus(GRADUATED)`
+ *        `PlayerSetRegistry.setStatus` then syncs `FeeRouter.status` (integrator share).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -181,7 +189,10 @@ contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker 
     }
 
     function confirmReactivate(bytes32 playerId) external view {
-        // gated: manual review + owner setStatus(GRADUATED) / prior status
+        // gated: manual review + topology check, then setStatus from active pool phase:
+        //   activePool.hooks == hookDoppler  → BONDING
+        //   activePool.hooks == hookMigrator → GRADUATED
+        // (do not assume GRADUATED — bonding markets can also reactivate)
         _requireFeeTopologyConsistent(playerId);
     }
 

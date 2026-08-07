@@ -32,10 +32,13 @@ library RegistryEvents {
     event HubAddedToTournament(bytes32 indexed tournamentId, bytes32 indexed leagueId, address pbrFeeHub);
     event HubRemovedFromTournament(bytes32 indexed tournamentId, bytes32 indexed leagueId);
     event PbrTreasuryUpdated(bytes32 indexed tournamentId, address indexed previous, address indexed pbrTreasury);
-    event SeasonOpened(bytes32 indexed tournamentId, bytes32 indexed seasonId, uint16 indexed seasonStartYear);
+    event SeasonOpened(
+        bytes32 indexed tournamentId, bytes32 indexed seasonId, uint16 indexed seasonStartYear, uint32 finalRound
+    );
     /// @notice Domestic-league season opened — CRE squads sync/append (not cups / continental).
     /// @dev `leagueId == tournamentId` for `DOMESTIC_LEAGUE`. Generic `SeasonOpened` still fires for all types.
     event DomesticSeasonOpened(bytes32 indexed leagueId, bytes32 indexed seasonId, uint16 indexed seasonStartYear);
+    event RoundUpserted(bytes32 indexed tournamentId, uint16 indexed seasonStartYear, uint32 roundNumber);
     event VaultRegistered(bytes32 indexed tournamentId, address indexed vault);
     event VaultUnregistered(bytes32 indexed tournamentId, address indexed vault);
 }

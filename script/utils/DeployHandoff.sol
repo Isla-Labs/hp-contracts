@@ -65,7 +65,7 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         _transferProxyAdmin(proxy, newOwner);
     }
 
-    function _warnIfMissing(string memory name) internal {
+    function _warnIfMissing(string memory name) internal view {
         address addr = _requireAddressProvider().getByName(name);
         if (addr == address(0)) {
             console.log("WARN: missing on AddressProvider before handoff:", name);

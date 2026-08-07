@@ -57,11 +57,7 @@ jobs:
           cache: true
 
       - name: Build
-        # DopplerLocker is intentionally over EIP-170 while via_ir + optimizer_runs=0 (testnet iteration).
-        # `--sizes` alone still emits the table; don't fail CI on the runtime-size gate.
-        run: |
-          forge build
-          forge build --sizes || true
+        run: forge build --sizes
 
   test:
     name: Test

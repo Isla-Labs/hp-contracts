@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { CreateParams } from "@doppler/src/Airlock.sol";
 import { FeeDistributionInfo } from "@doppler/src/types/RehypeTypes.sol";
 import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
 
@@ -38,7 +39,7 @@ interface IDopplerConfig {
     function marketLaunchConfig() external view returns (DopplerTypes.MarketLaunchConfig memory);
 
     /**
-     * @notice Module bundle for `DopplerTypes.buildCreateParams`.
+     * @notice Module bundle used by `buildCreateParams`.
      * @param feeRouterFactory_ Per-market FeeRouter factory (HP infra; lives on locker).
      * @param integrator_ Airlock integrator (`Orchestrator`).
      */
@@ -46,6 +47,21 @@ interface IDopplerConfig {
         address feeRouterFactory_,
         address integrator_
     ) external view returns (DopplerTypes.DopplerModules memory);
+
+    /**
+     * @notice Full `CreateParams` for `Airlock.create` (encoding lives here, not on the locker).
+     * @param feeRouterFactory_ Per-market FeeRouter factory (HP infra; lives on locker).
+     * @param integrator_ Airlock integrator (`Orchestrator`).
+     */
+    function buildCreateParams(
+        string calldata name,
+        string calldata symbol,
+        string calldata baseURI_,
+        address feeRouter,
+        bytes32 salt,
+        address feeRouterFactory_,
+        address integrator_
+    ) external view returns (CreateParams memory);
 
     function setMarketLaunchConfig(DopplerTypes.MarketLaunchConfig memory config_) external;
 

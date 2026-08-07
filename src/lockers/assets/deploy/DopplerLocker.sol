@@ -15,7 +15,6 @@ import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
 import { IOrchestrator } from "@interfaces/IOrchestrator.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
-import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
 import { CvmJob } from "@types/oracle/CvmTypes.sol";
 import { DopplerData, PlayerSet, TokenData, TournamentData, VaultData } from "@types/PlayerSetTypes.sol";
 import { AddressProvider } from "@src/AddressProvider.sol";
@@ -808,14 +807,8 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         }
 
         IDopplerConfig cfg = dopplerConfig;
-        CreateParams memory params = DopplerTypes.buildCreateParams(
-            cfg.dopplerModules(address(feeRouterFactory), address(orchestrator)),
-            cfg.marketLaunchConfig(),
-            e.name,
-            e.symbol,
-            e.baseURI,
-            feeRouter,
-            e.tokenSalt
+        CreateParams memory params = cfg.buildCreateParams(
+            e.name, e.symbol, e.baseURI, feeRouter, e.tokenSalt, address(feeRouterFactory), address(orchestrator)
         );
         (asset,,,,) = Airlock(payable(cfg.airlock())).create(params);
         if (asset != e.tokenPredicted) revert Errors.DeployAddressMismatch(e.tokenPredicted, asset);

@@ -14,7 +14,8 @@ import { WAD } from "@doppler/src/types/Wad.sol";
  * @title DopplerTypes
  * @notice Shared types + encoders for `Airlock.create` (Rehype multicurve path).
  * @dev Mutable launch parameters live on `DopplerConfig` (governance-updatable). This library
- *      holds ABI shapes, default constants, and pure encoders.
+ *      holds ABI shapes, default constants, and pure encoders. `DopplerConfig.buildCreateParams`
+ *      inlines these encoders so `DopplerLocker` stays under EIP-170.
  *
  *      Waiting-room cohort shapes used to live in `EligibilityTypes` (archived under
  *      `.junk/data-legacy`). Kept here so `DopplerLocker` stays compilable during the

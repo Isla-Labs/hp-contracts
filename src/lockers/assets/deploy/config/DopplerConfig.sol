@@ -11,13 +11,14 @@ import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvent
 import { IDopplerConfig } from "@interfaces/governance/IDopplerConfig.sol";
 import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
 
+import { CreateParams } from "@doppler/src/Airlock.sol";
 import { FeeDistributionInfo, FeeRoutingMode } from "@doppler/src/types/RehypeTypes.sol";
 import { WAD } from "@doppler/src/types/Wad.sol";
 
 /**
  * @title DopplerConfig
- * @notice Standalone launch recipe + Doppler module wiring for `DopplerLocker`.
- * @dev Ownable → Orchestrator. Locker reads config via external calls (keeps deploy path lean).
+ * @notice Standalone launch recipe + Doppler module wiring + `CreateParams` encoding for `DopplerLocker`.
+ * @dev Ownable → Orchestrator. Locker reads config / buildCreateParams via external calls (keeps deploy path lean).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -143,30 +144,29 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
     function dopplerModules(
         address feeRouterFactory_,
         address integrator_
-    ) external view returns (DopplerTypes.DopplerModules memory m) {
-        if (
-            tokenFactory == address(0) || vaultFactory == address(0) || airlock == address(0)
-                || governanceFactory == address(0) || poolInitializer == address(0) || liquidityMigrator == address(0)
-                || rehypeHookInitializer == address(0) || rehypeHookMigrator == address(0)
-                || excessSupplyLocker == address(0) || hpTreasury == address(0)
-        ) {
-            revert Errors.NotConfigured();
-        }
-        if (feeRouterFactory_ == address(0) || integrator_ == address(0)) revert Errors.ZeroAddress();
+    ) external view returns (DopplerTypes.DopplerModules memory) {
+        return _dopplerModules(feeRouterFactory_, integrator_);
+    }
 
-        m.airlock = airlock;
-        m.tokenFactory = tokenFactory;
-        m.governanceFactory = governanceFactory;
-        m.poolInitializer = poolInitializer;
-        m.liquidityMigrator = liquidityMigrator;
-        m.rehypeHookInitializer = rehypeHookInitializer;
-        m.rehypeHookMigrator = rehypeHookMigrator;
-        m.feeRouterFactory = feeRouterFactory_;
-        m.numeraire = address(0); // native ETH — Airlock convention
-        m.integrator = integrator_;
-        m.airlockOwner = Ownable(airlock).owner();
-        m.excessSupplyLocker = excessSupplyLocker;
-        m.hpTreasury = hpTreasury;
+    /// @inheritdoc IDopplerConfig
+    function buildCreateParams(
+        string calldata name,
+        string calldata symbol,
+        string calldata baseURI_,
+        address feeRouter,
+        bytes32 salt,
+        address feeRouterFactory_,
+        address integrator_
+    ) external view returns (CreateParams memory) {
+        return DopplerTypes.buildCreateParams(
+            _dopplerModules(feeRouterFactory_, integrator_),
+            marketLaunchConfig(),
+            name,
+            symbol,
+            baseURI_,
+            feeRouter,
+            salt
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -247,6 +247,35 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
     // -------------------------------------------------------------------------
     //  Internal
     // -------------------------------------------------------------------------
+
+    function _dopplerModules(
+        address feeRouterFactory_,
+        address integrator_
+    ) private view returns (DopplerTypes.DopplerModules memory m) {
+        if (
+            tokenFactory == address(0) || vaultFactory == address(0) || airlock == address(0)
+                || governanceFactory == address(0) || poolInitializer == address(0) || liquidityMigrator == address(0)
+                || rehypeHookInitializer == address(0) || rehypeHookMigrator == address(0)
+                || excessSupplyLocker == address(0) || hpTreasury == address(0)
+        ) {
+            revert Errors.NotConfigured();
+        }
+        if (feeRouterFactory_ == address(0) || integrator_ == address(0)) revert Errors.ZeroAddress();
+
+        m.airlock = airlock;
+        m.tokenFactory = tokenFactory;
+        m.governanceFactory = governanceFactory;
+        m.poolInitializer = poolInitializer;
+        m.liquidityMigrator = liquidityMigrator;
+        m.rehypeHookInitializer = rehypeHookInitializer;
+        m.rehypeHookMigrator = rehypeHookMigrator;
+        m.feeRouterFactory = feeRouterFactory_;
+        m.numeraire = address(0); // native ETH — Airlock convention
+        m.integrator = integrator_;
+        m.airlockOwner = Ownable(airlock).owner();
+        m.excessSupplyLocker = excessSupplyLocker;
+        m.hpTreasury = hpTreasury;
+    }
 
     function _applyLaunchConfig(DopplerTypes.MarketLaunchConfig memory config_) private {
         if (config_.initialSupply == 0 || config_.numTokensToSell == 0) revert Errors.InvalidLaunchSupply();

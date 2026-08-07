@@ -21,17 +21,14 @@ import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
  *        - Spot pool LP fee: 0.15% (`migratorFee`) → StreamableFeesLocker 5:95 (airlock : HP)
  *        - Bonding beneficiaries stay empty (preserve `Airlock.migrate`)
  *
- *      HP graduation policy fields (`minGraduateProceeds`, `minBondingDuration`) are enforced
- *      by finalization logic (not by Doppler Airlock):
- *        - farTick reached anytime, OR
- *        - `raised ≥ minGraduateProceeds` after `launch + minBondingDuration`
+ *      Graduate migrate gate (`DopplerHookInitializer`): spot tick crosses `farTick` only
+ *      (~2500 ETH FDV / ~$5M at $2000/ETH; open mark ~$500k). Tail share 10%.
+ *      `minGraduateProceeds` / `minBondingDuration` are reserved storage — unused by Airlock.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 abstract contract DopplerConfig {
-    address[] public beneficiaryAddresses;
-
     // -------------------------------------------------------------------------
     //  Storage — shared across every player market until governance updates
     // -------------------------------------------------------------------------
@@ -57,7 +54,7 @@ abstract contract DopplerConfig {
     address public proceedsRecipient;
     uint256 public proceedsShare;
 
-    /// @notice NFT metadata base URI for `DopplerDN404`.
+    /// @notice Legacy unused HTTPS prefix. Live `baseURI` comes from oracle IPFS at FinalConfig.
     string public baseURI;
 
     /// @notice DN404 fungible→NFT unit (must divide `initialSupply`).

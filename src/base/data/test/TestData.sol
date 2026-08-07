@@ -19,11 +19,12 @@ import { CvmJob, VanityDeployKind } from "@types/oracle/CvmTypes.sol";
  *        `abi.encode(VanityDeployKind kind, bytes32 seed,
  *                    address tokenFactory, bytes32 tokenInitCodeHash, address vaultFactory,
  *                    address treasuryFactory)`
- *      Response (v1):
+ *      Response (v2):
  *        `abi.encode(VanityDeployKind kind,
  *                    bytes32 tokenSalt, address tokenPredicted,
  *                    bytes32 vaultSalt, address vaultPredicted,
- *                    bytes32 treasurySalt, address treasuryPredicted)`
+ *                    bytes32 treasurySalt, address treasuryPredicted,
+ *                    string baseURI)` — `baseURI` always empty here (IPFS is `CvmJob.FinalConfig`).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -120,6 +121,7 @@ contract TestData is Oracle {
         lastError = err;
 
         if (err.length == 0 && response.length > 0) {
+            string memory baseURI_;
             (
                 lastKind,
                 lastTokenSalt,
@@ -127,8 +129,10 @@ contract TestData is Oracle {
                 lastVaultSalt,
                 lastVaultPredicted,
                 lastTreasurySalt,
-                lastTreasuryPredicted
-            ) = abi.decode(response, (VanityDeployKind, bytes32, address, bytes32, address, bytes32, address));
+                lastTreasuryPredicted,
+                baseURI_
+            ) = abi.decode(response, (VanityDeployKind, bytes32, address, bytes32, address, bytes32, address, string));
+            baseURI_; // always empty for VanitySalts Asset/Tournament
         } else {
             _clearSalts();
         }

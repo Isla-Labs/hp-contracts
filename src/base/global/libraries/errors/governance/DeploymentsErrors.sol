@@ -35,6 +35,11 @@ library DeploymentsErrors {
     error UnknownOracleRequest(bytes32 requestId);
     error NothingReady();
     error DeployAddressMismatch(address expected, address actual);
+    /// @dev Predicted token exists but is not our Airlock market (salt frontrun / foreign create).
+    error SaltOccupied(address token);
+    error LeagueMismatch(bytes32 expected, bytes32 actual);
+    /// @dev `seasonId` is not open on TournamentRegistry (or not under `leagueId`).
+    error SeasonNotRegistered(bytes32 seasonId);
 
     //  DopplerConfig
     error InvalidLaunchSupply();

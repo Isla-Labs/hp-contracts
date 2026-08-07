@@ -31,7 +31,7 @@ enum EligibilityBucket {
 }
 
 /// @notice Deploy / lifecycle cohorts from the legacy EligibilityVerifier classify pass.
-/// @dev DopplerLocker now takes parallel `(playerIds, leagueIds)`; these groups remain for
+/// @dev DopplerLocker intake is `queueAssets(leagueId, seasonId, playerIds)`; these groups remain for
 ///      the verifier return type until eligibility-2 flattens intake.
 struct EligibilityGroups {
     bytes32[] goalkeepers;
@@ -49,13 +49,17 @@ struct EligibilityGroups {
  *        - Supply: 22M total / 20M to sell
  *        - Fee: 1% (`10_000` millionths)
  *        - Spacing: 8
- *        - Curves (ETH FDV → tick, spacing-aligned):
- *            35%  300 → 900   (−112040 → −101040)
- *            35%  700 → 2000  (−103560 → −93056)
- *            20% 1800 → 4000  (−94120 → −86128)
- *            10% 4000 → max   (−86128 → 887272) tail
- *        - `farTick` = −86128 (~4000 ETH FDV / ~2000 ETH full-raise target)
- *        - HP graduation policy: farTick anytime, OR ≥50 ETH after 30 days
+ *        - Open mark: ~250 ETH FDV ≈ **$500k** at $2000/ETH (first curve start)
+ *        - Graduate (`farTick`): ~2500 ETH FDV ≈ **$5M** at $2000/ETH (price gate only)
+ *        - Curves (Doppler-shaped 30/40/20/10, market-cap bands → ticks):
+ *            30%  $500k → $1.5M  (250 → 750 ETH)   (−113856 → −102872)
+ *            40%  $1.0M → $4.0M  (500 → 2000 ETH)  (−106928 → −93064)
+ *            20%  $3.5M → $5.0M  (1750 → 2500 ETH) (−94392 → −90832)
+ *            10%  $5.0M → max    (2500 ETH → max)  (−90832 → 887272) tail
+ *        - `farTick` = −90832. Sole `DopplerHookInitializer` migrate gate.
+ *        - Est. raise on a clean walk: ~$2.0–2.3M (~1000–1150 ETH); ~2M tokens remain for spot.
+ *        - `minGraduateProceeds` / `minBondingDuration` unused by Airlock/HookInitializer
+ *          (reserved HP policy storage only).
  *
  *      Fee matrix → FeeRouter (`buybackDst`):
  *        - ETH fees: direct (`numeraireFeesToNumeraireBuybackWad`)
@@ -80,8 +84,8 @@ library DopplerTypes {
 
     int24 internal constant DEFAULT_TICK_SPACING = 8;
 
-    /// @dev ~4000 ETH FDV (end of main discovery / start of tail).
-    int24 internal constant DEFAULT_FAR_TICK = -86_128;
+    /// @dev ~2500 ETH FDV ≈ $5M at $2000/ETH (end of main discovery / start of tail).
+    int24 internal constant DEFAULT_FAR_TICK = -90_832;
 
     /// @dev Uniswap V4 max tick (aligned to spacing 8).
     int24 internal constant DEFAULT_TAIL_TICK_UPPER = 887_272;
@@ -94,10 +98,10 @@ library DopplerTypes {
 
     uint32 internal constant DEFAULT_MIGRATOR_LOCK_DURATION = 30 days;
 
-    /// @dev Soft floor for time-based graduation (HP policy, not a Doppler field).
+    /// @dev Reserved HP soft-graduate storage (not enforced by Airlock / HookInitializer).
     uint256 internal constant DEFAULT_MIN_GRADUATE_PROCEEDS = 50 ether;
 
-    /// @dev Earliest timestamp offset for the ≥50 ETH graduation path.
+    /// @dev Reserved HP soft-graduate storage (not enforced by Airlock / HookInitializer).
     uint32 internal constant DEFAULT_MIN_BONDING_DURATION = 30 days;
 
     /// @dev DN404 unit: 1000 whole tokens → 1 NFT (matches Doppler DN404 factory tests).
@@ -179,7 +183,8 @@ library DopplerTypes {
         uint24 migratorRehypeCustomFee;
         address proceedsRecipient;
         uint256 proceedsShare;
-        /// @dev NFT metadata base URI for `DopplerDN404` (`tokenURI = baseURI + tokenId`).
+        /// @dev Optional legacy HTTPS prefix. Live launches set per-token `baseURI` via oracle
+        ///      IPFS pin at `CvmJob.FinalConfig`; this field is not used for CREATE2.
         string baseURI;
         /// @dev DN404 fungible→NFT unit; must be non-zero and divide `initialSupply`.
         uint256 dn404Unit;
@@ -203,7 +208,7 @@ library DopplerTypes {
     //  Defaults
     // -------------------------------------------------------------------------
 
-    /// @notice Recommended launch config (50–2000 ETH band, 1% fee, 4-curve multicurve).
+    /// @notice Recommended launch config (~$500k–$5M FDV @ $2000/ETH, 1% fee, 4-curve).
     function defaultMarketLaunchConfig() internal pure returns (MarketLaunchConfig memory config) {
         config.initialSupply = DEFAULT_INITIAL_SUPPLY;
         config.numTokensToSell = DEFAULT_NUM_TOKENS_TO_SELL;
@@ -232,14 +237,14 @@ library DopplerTypes {
 
     /**
      * @notice Default multicurve (ETH FDV bands, spacing 8).
-     * @dev Shares: 35% / 35% / 20% / 10% tail. `farTick` aligns to end of curve 3.
+     * @dev Shares: 30% / 40% / 20% / 10% tail. `farTick` = end of curve 3 (~2500 ETH / $5M FDV).
      */
     function defaultBondingCurves() internal pure returns (Curve[] memory curves) {
         curves = new Curve[](4);
-        curves[0] = Curve({ tickLower: -112_040, tickUpper: -101_040, numPositions: 12, shares: 0.35e18 });
-        curves[1] = Curve({ tickLower: -103_560, tickUpper: -93_056, numPositions: 12, shares: 0.35e18 });
-        curves[2] = Curve({ tickLower: -94_120, tickUpper: -86_128, numPositions: 10, shares: 0.2e18 });
-        curves[3] = Curve({ tickLower: -86_128, tickUpper: DEFAULT_TAIL_TICK_UPPER, numPositions: 1, shares: 0.1e18 });
+        curves[0] = Curve({ tickLower: -113_856, tickUpper: -102_872, numPositions: 10, shares: 0.30e18 });
+        curves[1] = Curve({ tickLower: -106_928, tickUpper: -93_064, numPositions: 15, shares: 0.40e18 });
+        curves[2] = Curve({ tickLower: -94_392, tickUpper: -90_832, numPositions: 10, shares: 0.20e18 });
+        curves[3] = Curve({ tickLower: -90_832, tickUpper: DEFAULT_TAIL_TICK_UPPER, numPositions: 1, shares: 0.10e18 });
     }
 
     /**
@@ -263,13 +268,34 @@ library DopplerTypes {
     //  Encoders → Airlock.create blobs
     // -------------------------------------------------------------------------
 
+    /// @notice Per-player DN404 metadata prefix: `globalPrefix + 0x{playerId hex}/`.
+    function playerBaseURI(string memory globalPrefix, bytes32 playerId) internal pure returns (string memory) {
+        return string.concat(globalPrefix, bytes32ToHex(playerId), "/");
+    }
+
+    /// @dev Lowercase `0x` + 64 hex chars for URL path segments.
+    function bytes32ToHex(bytes32 value) internal pure returns (string memory) {
+        bytes16 symbols = "0123456789abcdef";
+        bytes memory str = new bytes(66);
+        str[0] = "0";
+        str[1] = "x";
+        for (uint256 i; i < 32; ++i) {
+            uint8 b = uint8(value[i]);
+            str[2 + i * 2] = symbols[b >> 4];
+            str[3 + i * 2] = symbols[b & 0x0f];
+        }
+        return string(str);
+    }
+
     /// @notice `DN404Factory` tokenData: `(name, symbol, baseURI, unit)`.
+    /// @param baseURI_ Per-player metadata prefix (`…/metadata/0x{playerId}/`).
     function encodeTokenFactoryData(
         string memory name,
         string memory symbol,
+        string memory baseURI_,
         MarketLaunchConfig memory config
     ) internal pure returns (bytes memory) {
-        return abi.encode(name, symbol, config.baseURI, config.dn404Unit);
+        return abi.encode(name, symbol, baseURI_, config.dn404Unit);
     }
 
     /// @notice Nested Rehype bonding-hook init calldata (`buybackDst` = per-player FeeRouter).
@@ -364,13 +390,14 @@ library DopplerTypes {
         MarketLaunchConfig memory config,
         string memory name,
         string memory symbol,
+        string memory baseURI_,
         address feeRouter,
         bytes32 salt
     ) internal pure returns (CreateParams memory params) {
         params.initialSupply = config.initialSupply;
         params.numTokensToSell = config.numTokensToSell;
         params.numeraire = modules.numeraire;
-        params.tokenFactoryData = encodeTokenFactoryData(name, symbol, config);
+        params.tokenFactoryData = encodeTokenFactoryData(name, symbol, baseURI_, config);
         params.governanceFactoryData = abi.encode(modules.excessSupplyLocker);
         params.poolInitializerData =
             encodePoolInitializerData(feeRouter, modules.numeraire, modules.rehypeHookInitializer, config);

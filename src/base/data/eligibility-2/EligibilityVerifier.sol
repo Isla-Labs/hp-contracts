@@ -430,7 +430,7 @@ contract EligibilityVerifier is Initializable, AddressBook, EligibilityCriteria,
 
     function _enqueueEligible(EligibilityGroups memory groups) private {
         // TODO(eligibility-2): flatten deploy cohorts into `(seasonId, playerIds)` and call
-        // `IDopplerLocker.queueAssets(seasonId, playerIds)` (owner/Orchestrator path).
+        // `IDopplerLocker.queueAssets(leagueId, seasonId, playerIds)` (owner/Orchestrator path).
         groups;
     }
 

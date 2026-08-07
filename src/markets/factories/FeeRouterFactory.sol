@@ -27,6 +27,9 @@ contract FeeRouterFactory is Initializable, AddressBook, Ownable {
     /// @notice Owns the beacon (logic upgrades); sole caller of `create`
     address public orchestrator;
 
+    /// @notice Idempotent resume: `playerId` → deployed FeeRouter (zero until first create).
+    mapping(bytes32 playerId => address feeRouter) public feeRouterOf;
+
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
@@ -42,18 +45,25 @@ contract FeeRouterFactory is Initializable, AddressBook, Ownable {
     }
 
     /**
-     * @notice Deploys a BeaconProxy FeeRouter for `playerId` and initializes per-market state.
+     * @notice Deploy a BeaconProxy FeeRouter for `playerId`, or return the existing one.
+     * @dev Idempotent so DopplerLocker deploy retries do not orphan FeeRouters after a
+     *      partial `_onDeployReady` failure.
      * @param playerId Player identity associated with the FeeRouter.
-     * @param pbrFeeHub League `PbrFeeHub` (zero = unsupported even-split).
-     * @return feeRouter Address of the newly deployed BeaconProxy.
+     * @param pbrFeeHub League `PbrFeeHub` (zero = unsupported even-split). Ignored if
+     *        a FeeRouter already exists for `playerId` (use `FeeRouter.setPbrFeeHub` to change).
+     * @return feeRouter Address of the FeeRouter BeaconProxy.
      */
     function create(bytes32 playerId, address pbrFeeHub) external returns (address feeRouter) {
         if (msg.sender != orchestrator) revert Errors.Unauthorized();
         if (playerId == bytes32(0)) revert Errors.ZeroId();
 
+        feeRouter = feeRouterOf[playerId];
+        if (feeRouter != address(0)) return feeRouter;
+
         bytes memory initData = abi.encodeCall(FeeRouter.initialize, (playerId, pbrFeeHub));
 
         feeRouter = address(new BeaconProxy(address(beacon), initData));
+        feeRouterOf[playerId] = feeRouter;
 
         emit Events.FeeRouterCreated(playerId, feeRouter, pbrFeeHub);
     }

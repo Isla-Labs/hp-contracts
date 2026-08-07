@@ -57,6 +57,15 @@ interface ITournamentRegistry {
 
     function tournamentCount() external view returns (uint256);
 
+    /// @notice True when `createTournament` has registered `tournamentId` (non-reverting).
+    function tournamentExists(bytes32 tournamentId) external view returns (bool);
+
+    /**
+     * @notice Reverse index: calendar `seasonId` → owning `tournamentId` (set in `openSeason`).
+     * @dev For `DOMESTIC_LEAGUE`, `tournamentId == leagueId`. Zero if the season was never opened.
+     */
+    function tournamentIdOfSeason(bytes32 seasonId) external view returns (bytes32);
+
     function getAllDomesticPbrFeeHubs() external view returns (address[] memory hubs);
 
     /// @notice All registered domestic hubs as `(leagueId, pbrFeeHub)` pairs.

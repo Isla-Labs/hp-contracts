@@ -14,14 +14,17 @@ import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvent
 import { IDopplerLocker } from "@interfaces/governance/IDopplerLocker.sol";
 import { IOrchestrator } from "@interfaces/IOrchestrator.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
-import { CvmJob, VanityDeployKind } from "@types/oracle/CvmTypes.sol";
-import { DopplerData, TokenData, TournamentData, VaultData } from "@types/PlayerSetTypes.sol";
+import { CvmJob } from "@types/oracle/CvmTypes.sol";
+import { DopplerData, PlayerSet, TokenData, TournamentData, VaultData } from "@types/PlayerSetTypes.sol";
 import { AddressProvider } from "@src/AddressProvider.sol";
 import { FeeRouterFactory } from "@markets/factories/FeeRouterFactory.sol";
+import { PlayerVault } from "@vaults/PlayerVault.sol";
 import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 
 import { Airlock, CreateParams } from "@doppler/src/Airlock.sol";
+import { RehypeDopplerHookInitializer } from "@doppler/src/dopplerHooks/RehypeDopplerHookInitializer.sol";
 import { DopplerHookInitializer } from "@doppler/src/initializers/DopplerHookInitializer.sol";
 import { FeeDistributionInfo } from "@doppler/src/types/RehypeTypes.sol";
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
@@ -30,18 +33,25 @@ import { DopplerConfig } from "@deployments/assets/deploy/config/DopplerConfig.s
 
 /**
  * @title DopplerLocker
- * @notice Intake → metadata → explicit 24h queue → vanity salts → deploy handoff.
+ * @notice Intake → metadata → explicit 24h queue → FinalConfig → deploy handoff.
  * @dev Dual CVM jobs via `Oracle._sendOracleRequest(job, args)`:
  *        1) `queueAssets` → `CvmJob.PlayerMetadata` (`seasonId`, `playerIds[]`)
- *        2) `deployAssets` (rate-limited) → `CvmJob.VanitySalts` (Asset) once wait elapsed
+ *        2) `deployAssets` (rate-limited) → `CvmJob.FinalConfig` once wait elapsed
  *
  *      Flow:
- *        owner `queueAssets(seasonId, playerIds)` → `AwaitingMetadata` + metadata request
- *        → fulfill → `ReadyToQueue` (name/symbol set; clock not started)
+ *        DeployTournament (DOMESTIC_LEAGUE) first → `pbrFeeHubOf(leagueId)` live
+ *        → owner `queueAssets(leagueId, seasonId, playerIds)` → `AwaitingMetadata` + metadata request
+ *        → fulfill → `ReadyToQueue` (name/symbol; clock not started)
  *        → next `queueAssets` promotes `ReadyToQueue` → `Queued` (`queuedAt = now`)
  *        → owner may `editMetadata` / `unqueueAsset` during the 24h window
  *        → anyone calls `deployAssets` after wait; RateLimit gates frequency
- *        → VanitySalts fulfill → `_onDeployReady` (FeeRouter → Airlock → Vault → registry)
+ *        → FinalConfig: oracle pins IPFS metadata + mines salts + returns `baseURI`
+ *        → fulfill → `_onDeployReady` (FeeRouter w/ hub → Airlock → Vault → PlayerSet + registerVaults)
+ *        → oracle/validation failure: re-queue for a new FinalConfig (`retryWait`, default 5m)
+ *        → Airlock not ours yet (create fail / salt frontrun): new FinalConfig after `retryWait`
+ *        → Airlock already ours (integrator + FeeRouter buybackDst): resume vault/registry after `retryWait`
+ *        → post-Airlock steps are idempotent; success removes the entry from the queue
+ *        → after `maxDeployAttempts` failures: `DeployFailed` + event (owner `resetFailedDeploy`)
  *
  *      Factory / registry writes relay through `Orchestrator.execute` (this proxy must hold
  *      `AUTHORIZED_CONTRACT`). `Airlock.create` is called directly.
@@ -60,34 +70,45 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         AwaitingMetadata,
         /// @dev Metadata set; waiting for owner to start the 24h window via `queueAssets`.
         ReadyToQueue,
-        /// @dev In the 24h review window (`queuedAt + queueWait`).
+        /// @dev In the review window (`queuedAt + active wait`).
         Queued,
-        /// @dev VanitySalts request in flight.
-        AwaitingSalts,
-        /// @dev Salts stored; ready for Airlock / vault deploy.
+        /// @dev FinalConfig request in flight.
+        AwaitingFinalConfig,
+        /// @dev Salts/`baseURI` stored; deploy in progress or waiting to resume after a partial failure.
         DeployReady,
-        Deployed
+        Deployed,
+        /// @dev Automatic retries exhausted; owner must `resetFailedDeploy`.
+        DeployFailed
     }
 
     enum OracleKind {
         None,
         PlayerMetadata,
-        VanitySalts
+        /// @dev FinalConfig fulfill → store salts/`baseURI` → `_onDeployReady`.
+        Deploy
     }
 
     struct QueueEntry {
         bytes32 playerId;
+        /// @dev Domestic league id (`==` DeployTournament `tournamentId` for DOMESTIC_LEAGUE).
+        bytes32 leagueId;
         /// @dev Tournament-calendar HPID (`tmcl` after HPID decode).
         bytes32 seasonId;
         string name;
         string symbol;
+        /// @dev DN404 metadata prefix from FinalConfig (`ipfs://…/`); empty until fulfill.
+        string baseURI;
         bool metadataSet;
         uint64 queuedAt;
+        /// @dev Per-entry wait override (`0` → use `queueWait`; set to `retryWait` on deploy fail).
+        uint64 waitSeconds;
         QueueStatus status;
         bytes32 tokenSalt;
         address tokenPredicted;
         bytes32 vaultSalt;
         address vaultPredicted;
+        /// @dev Failed deploy attempts toward `maxDeployAttempts` (oracle + onchain).
+        uint8 deployAttempts;
     }
 
     // -------------------------------------------------------------------------
@@ -95,7 +116,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
     // -------------------------------------------------------------------------
 
     uint256 public constant DEFAULT_QUEUE_WAIT = 24 hours;
+    uint256 public constant DEFAULT_RETRY_WAIT = 5 minutes;
     uint256 public constant DEFAULT_DEPLOY_COOLDOWN = 5 minutes;
+    uint256 public constant DEFAULT_MAX_DEPLOY_ATTEMPTS = 5;
     /// @notice Max players per `queueAssets` call and per PlayerMetadata oracle page.
     uint256 public constant METADATA_BATCH_SIZE = 50;
 
@@ -103,8 +126,14 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
     //  Immutables / config
     // -------------------------------------------------------------------------
 
-    /// @notice Seconds after `Queued` before `deployAssets` may request vanity salts.
+    /// @notice Seconds after `Queued` before `deployAssets` may request FinalConfig (first attempt).
     uint256 public queueWait;
+
+    /// @notice Seconds after a failed deploy fulfill before `deployAssets` may retry.
+    uint256 public retryWait;
+
+    /// @notice Max automatic deploy failures before `DeployFailed` (owner reset required).
+    uint256 public maxDeployAttempts;
 
     /// @notice `DN404Factory` (CREATE2 deployer for PlayerToken).
     address public tokenFactory;
@@ -144,6 +173,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
 
     /// @notice Canonical player market registry (Orchestrator-gated).
     IPlayerSetRegistry public playerSetRegistry;
+
+    /// @notice League hubs / vault membership SoT (Orchestrator-gated).
+    ITournamentRegistry public tournamentRegistry;
 
     // -------------------------------------------------------------------------
     //  Queue storage
@@ -186,11 +218,14 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
     function initialize() external initializer {
         __DopplerConfig_init();
         queueWait = DEFAULT_QUEUE_WAIT;
+        retryWait = DEFAULT_RETRY_WAIT;
+        maxDeployAttempts = DEFAULT_MAX_DEPLOY_ATTEMPTS;
 
         address orch = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
         orchestrator = IOrchestrator(orch);
         feeRouterFactory = FeeRouterFactory(_getAddress(_addressKey(Addresses.FEE_ROUTER_FACTORY)));
         playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
         vaultFactory = _getAddress(_addressKey(Addresses.PLAYER_VAULT_FACTORY));
 
         tokenFactory = _getAddress(_addressKey(Addresses.DN404_FACTORY));
@@ -271,6 +306,46 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         emit Events.QueueWaitUpdated(previous, queueWait_);
     }
 
+    function setRetryWait(uint256 retryWait_) external onlyOwner {
+        if (retryWait_ == 0) revert Errors.NotConfigured();
+        uint256 previous = retryWait;
+        retryWait = retryWait_;
+        emit Events.RetryWaitUpdated(previous, retryWait_);
+    }
+
+    function setMaxDeployAttempts(uint256 maxDeployAttempts_) external onlyOwner {
+        if (maxDeployAttempts_ == 0 || maxDeployAttempts_ > type(uint8).max) revert Errors.NotConfigured();
+        uint256 previous = maxDeployAttempts;
+        maxDeployAttempts = maxDeployAttempts_;
+        emit Events.MaxDeployAttemptsUpdated(previous, maxDeployAttempts_);
+    }
+
+    /**
+     * @notice Clear `DeployFailed` so ops can redeploy after a bugfix.
+     * @param keepSalts If true and salts/`baseURI` remain, resume as `DeployReady` (post-Airlock path).
+     *        Otherwise clear salts and return to `Queued` with a short `retryWait` gate.
+     */
+    function resetFailedDeploy(bytes32 playerId, bool keepSalts) external onlyOwner {
+        QueueEntry storage e = _entry(playerId);
+        if (e.status != QueueStatus.DeployFailed) revert Errors.BadQueueStatus(playerId, uint8(e.status));
+
+        e.deployAttempts = 0;
+        e.queuedAt = uint64(block.timestamp);
+
+        if (keepSalts && e.tokenPredicted != address(0) && bytes(e.baseURI).length != 0) {
+            e.status = QueueStatus.DeployReady;
+            e.waitSeconds = 0; // eligible immediately
+        } else {
+            e.baseURI = "";
+            e.tokenSalt = bytes32(0);
+            e.tokenPredicted = address(0);
+            e.vaultSalt = bytes32(0);
+            e.vaultPredicted = address(0);
+            e.status = QueueStatus.Queued;
+            e.waitSeconds = uint64(retryWait == 0 ? DEFAULT_RETRY_WAIT : retryWait);
+        }
+    }
+
     /**
      * @notice Replace the full shared launch recipe (scalars + curves + graduation policy).
      * @dev Does not affect markets already deployed; only subsequent `Airlock.create` calls.
@@ -307,8 +382,15 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
     // -------------------------------------------------------------------------
 
     /// @inheritdoc IDopplerLocker
-    function queueAssets(bytes32 seasonId, bytes32[] calldata playerIds) external onlyOwner {
-        if (seasonId == bytes32(0)) revert Errors.ZeroId();
+    function queueAssets(bytes32 leagueId, bytes32 seasonId, bytes32[] calldata playerIds) external onlyOwner {
+        if (leagueId == bytes32(0) || seasonId == bytes32(0)) revert Errors.ZeroId();
+        // League must already be bootstrapped via DeployTournament (hub + treasury registered).
+        if (!tournamentRegistry.tournamentExists(leagueId)) revert Errors.NotConfigured();
+        if (tournamentRegistry.pbrFeeHubOf(leagueId) == address(0)) revert Errors.HubNotRegistered(leagueId);
+        // Season must be open under this domestic league (`tournamentId == leagueId`).
+        bytes32 seasonTournament = tournamentRegistry.tournamentIdOfSeason(seasonId);
+        if (seasonTournament == bytes32(0)) revert Errors.SeasonNotRegistered(seasonId);
+        if (seasonTournament != leagueId) revert Errors.LeagueMismatch(leagueId, seasonTournament);
 
         uint256 added;
         uint256 length = playerIds.length;
@@ -322,16 +404,20 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
             _queue.push(
                 QueueEntry({
                     playerId: playerId,
+                    leagueId: leagueId,
                     seasonId: seasonId,
                     name: "",
                     symbol: "",
+                    baseURI: "",
                     metadataSet: false,
                     queuedAt: 0,
+                    waitSeconds: 0,
                     status: QueueStatus.AwaitingMetadata,
                     tokenSalt: bytes32(0),
                     tokenPredicted: address(0),
                     vaultSalt: bytes32(0),
-                    vaultPredicted: address(0)
+                    vaultPredicted: address(0),
+                    deployAttempts: 0
                 })
             );
             unchecked {
@@ -342,13 +428,15 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         uint256 promoted = _promoteReadyToQueue();
         uint256 awaiting = _requestAwaitingMetadata();
 
-        emit Events.AssetsQueued(seasonId, added, promoted, awaiting, _queue.length);
+        emit Events.AssetsQueued(leagueId, seasonId, added, promoted, awaiting, _queue.length);
     }
 
     /// @inheritdoc IDopplerLocker
     function unqueueAsset(bytes32 playerId) external onlyOwner {
         QueueEntry storage e = _entry(playerId);
-        if (e.status != QueueStatus.Queued) revert Errors.BadQueueStatus(playerId, uint8(e.status));
+        if (e.status != QueueStatus.Queued && e.status != QueueStatus.DeployFailed) {
+            revert Errors.BadQueueStatus(playerId, uint8(e.status));
+        }
 
         _removeFromQueue(playerId);
         emit Events.AssetUnqueued(playerId);
@@ -364,10 +452,13 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
 
         e.name = name;
         e.symbol = symbol;
+        // `baseURI` is set at FinalConfig (IPFS); clear any stale value if re-editing.
+        e.baseURI = "";
         e.metadataSet = true;
         e.queuedAt = uint64(block.timestamp);
+        e.waitSeconds = 0; // full `queueWait` after manual edit
 
-        emit Events.PlayerMetadataUpdated(playerId, name, symbol);
+        emit Events.PlayerMetadataUpdated(playerId, name, symbol, e.baseURI);
     }
 
     // -------------------------------------------------------------------------
@@ -381,30 +472,45 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         }
 
         uint256 length = _queue.length;
-        uint256 wait_ = queueWait;
+
+        // Prefer resuming a DeployReady entry (same salts/`baseURI`) before a new FinalConfig.
+        for (uint256 i; i < length; ++i) {
+            QueueEntry storage e = _queue[i];
+            if (e.status != QueueStatus.DeployReady) continue;
+            if (e.tokenPredicted == address(0) || bytes(e.baseURI).length == 0) continue;
+            if (block.timestamp < uint256(e.queuedAt) + _deployWait(e)) continue;
+
+            try this.executeDeploy(e.playerId) {
+            } catch {
+                _handleDeployFailure(e);
+            }
+            return bytes32(0);
+        }
 
         for (uint256 i; i < length; ++i) {
             QueueEntry storage e = _queue[i];
             if (e.status != QueueStatus.Queued) continue;
             if (!e.metadataSet) continue;
-            if (block.timestamp < uint256(e.queuedAt) + wait_) continue;
+            if (block.timestamp < uint256(e.queuedAt) + _deployWait(e)) continue;
 
-            bytes32 initCodeHash = _tokenInitCodeHash(e);
+            // Oracle pins IPFS metadata, hashes DN404 initcode with that baseURI, mines salts.
             bytes memory args = abi.encode(
-                VanityDeployKind.Asset,
                 e.playerId, // seed
                 tokenFactory,
-                initCodeHash,
                 vaultFactory,
-                address(0)
+                airlock,
+                initialSupply,
+                dn404Unit,
+                e.name,
+                e.symbol
             );
 
-            requestId = _sendOracleRequest(CvmJob.VanitySalts, args);
-            _oracleKind[requestId] = OracleKind.VanitySalts;
+            requestId = _sendOracleRequest(CvmJob.FinalConfig, args);
+            _oracleKind[requestId] = OracleKind.Deploy;
             _oraclePlayerId[requestId] = e.playerId;
-            e.status = QueueStatus.AwaitingSalts;
+            e.status = QueueStatus.AwaitingFinalConfig;
 
-            emit Events.VanitySaltsRequested(requestId, e.playerId, initCodeHash);
+            emit Events.FinalConfigRequested(requestId, e.playerId);
             return requestId;
         }
 
@@ -425,7 +531,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         if (kind == OracleKind.PlayerMetadata) {
             _fulfillPlayerMetadata(requestId, response, err);
         } else {
-            _fulfillVanitySalts(requestId, response, err);
+            _fulfillDeploy(requestId, response, err);
         }
     }
 
@@ -452,8 +558,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
     /// @notice Earliest timestamp when `playerId` becomes deploy-eligible (`0` if unknown).
     function deployUnlockAt(bytes32 playerId) external view returns (uint256) {
         QueueEntry storage e = _entry(playerId);
-        if (e.status != QueueStatus.Queued || e.queuedAt == 0) return 0;
-        return uint256(e.queuedAt) + queueWait;
+        if (e.queuedAt == 0) return 0;
+        if (e.status != QueueStatus.Queued && e.status != QueueStatus.DeployReady) return 0;
+        return uint256(e.queuedAt) + _deployWait(e);
     }
 
     // -------------------------------------------------------------------------
@@ -468,6 +575,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
             if (e.status != QueueStatus.ReadyToQueue) continue;
             e.status = QueueStatus.Queued;
             e.queuedAt = now_;
+            e.waitSeconds = 0;
             unchecked {
                 ++promoted;
             }
@@ -562,57 +670,190 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
 
             e.name = names[i];
             e.symbol = symbols[i];
+            e.baseURI = "";
             e.metadataSet = true;
             e.status = QueueStatus.ReadyToQueue;
 
-            emit Events.PlayerMetadataUpdated(playerId, names[i], symbols[i]);
+            emit Events.PlayerMetadataUpdated(playerId, names[i], symbols[i], e.baseURI);
         }
     }
 
     // -------------------------------------------------------------------------
-    //  Internal — vanity salts
+    //  Internal — deploy fulfill (IPFS baseURI + salts → market deploy)
     // -------------------------------------------------------------------------
 
-    function _fulfillVanitySalts(bytes32 requestId, bytes memory response, bytes memory err) private {
+    function _fulfillDeploy(bytes32 requestId, bytes memory response, bytes memory err) private {
         bytes32 playerId = _oraclePlayerId[requestId];
         delete _oraclePlayerId[requestId];
 
         QueueEntry storage e = _entry(playerId);
+        if (e.status != QueueStatus.AwaitingFinalConfig) return;
 
         if (err.length != 0 || response.length == 0) {
-            if (e.status == QueueStatus.AwaitingSalts) e.status = QueueStatus.Queued;
+            _requeueForFinalConfig(e);
             return;
         }
 
-        (
-            VanityDeployKind kind,
-            bytes32 tokenSalt,
-            address tokenPredicted,
-            bytes32 vaultSalt,
-            address vaultPredicted,
-            ,
-        ) = abi.decode(response, (VanityDeployKind, bytes32, address, bytes32, address, bytes32, address));
-
-        if (kind != VanityDeployKind.Asset || tokenSalt == bytes32(0) || vaultSalt == bytes32(0)) {
-            if (e.status == QueueStatus.AwaitingSalts) e.status = QueueStatus.Queued;
+        // Commit salts/`baseURI` first (separate external call) so a later deploy revert does not
+        // wipe predictions needed for idempotent resume.
+        try this.applyFinalConfig(playerId, response) {
+        } catch {
+            _requeueForFinalConfig(e);
             return;
         }
 
+        try this.executeDeploy(playerId) {
+        } catch {
+            _handleDeployFailure(e);
+        }
+    }
+
+    /**
+     * @notice Validate FinalConfig response and persist salts/`baseURI` as `DeployReady`.
+     * @dev External so `_fulfillDeploy` can `try/catch` without reverting the CVM callback.
+     */
+    function applyFinalConfig(bytes32 playerId, bytes calldata response) external {
+        if (msg.sender != address(this)) revert Errors.Unauthorized();
+
+        QueueEntry storage e = _entry(playerId);
+        if (e.status != QueueStatus.AwaitingFinalConfig) {
+            revert Errors.BadQueueStatus(playerId, uint8(e.status));
+        }
+
+        (bytes32 tokenSalt, address tokenPredicted, bytes32 vaultSalt, address vaultPredicted, string memory baseURI_) =
+            abi.decode(response, (bytes32, address, bytes32, address, string));
+
+        if (tokenSalt == bytes32(0) || vaultSalt == bytes32(0) || bytes(baseURI_).length == 0) {
+            revert Errors.NotConfigured();
+        }
+
+        // Recompute CREATE2 initcode hash and require predicted token address matches.
+        bytes32 initCodeHash = MineSalt.dn404InitCodeHash(
+            MineSalt.Dn404DeployParams({
+                name: e.name,
+                symbol: e.symbol,
+                initialSupply: initialSupply,
+                airlock: airlock,
+                baseURI: baseURI_,
+                unit: dn404Unit
+            })
+        );
+        address expectedToken = MineSalt.predictTokenAddress(tokenFactory, tokenSalt, initCodeHash);
+        if (expectedToken != tokenPredicted) revert Errors.DeployAddressMismatch(expectedToken, tokenPredicted);
+
+        e.baseURI = baseURI_;
         e.tokenSalt = tokenSalt;
         e.tokenPredicted = tokenPredicted;
         e.vaultSalt = vaultSalt;
         e.vaultPredicted = vaultPredicted;
         e.status = QueueStatus.DeployReady;
-
-        _onDeployReady(e);
+        // Immediate fulfill attempt uses wait=0 via queuedAt unchanged from Queued era, or:
+        e.queuedAt = uint64(block.timestamp);
+        e.waitSeconds = 0;
     }
 
     /**
-     * @dev Atomic market deploy in the oracle fulfill callback:
-     *      1) FeeRouter (via Orchestrator)
-     *      2) Airlock.create (direct)
-     *      3) PlayerVault + stToken (via Orchestrator)
-     *      4) PlayerSetRegistry.addPlayerSet + addVaultData (via Orchestrator)
+     * @notice Run idempotent FeeRouter → Airlock → vault → registry deploy for a `DeployReady` entry.
+     * @dev External so fulfill / `deployAssets` can `try/catch` without reverting the caller.
+     */
+    function executeDeploy(bytes32 playerId) external {
+        if (msg.sender != address(this)) revert Errors.Unauthorized();
+
+        QueueEntry storage e = _entry(playerId);
+        if (e.status != QueueStatus.DeployReady) revert Errors.BadQueueStatus(playerId, uint8(e.status));
+        _onDeployReady(e);
+    }
+
+    /// @dev Oracle/validation / pre-Airlock miss — clear salts; re-queue or `DeployFailed` if capped.
+    function _requeueForFinalConfig(QueueEntry storage e) private {
+        bool exhausted = _noteDeployFailure(e);
+
+        e.baseURI = "";
+        e.tokenSalt = bytes32(0);
+        e.tokenPredicted = address(0);
+        e.vaultSalt = bytes32(0);
+        e.vaultPredicted = address(0);
+
+        if (exhausted) return; // status already `DeployFailed`
+
+        uint256 wait_ = retryWait == 0 ? DEFAULT_RETRY_WAIT : retryWait;
+        e.status = QueueStatus.Queued;
+        e.queuedAt = uint64(block.timestamp);
+        e.waitSeconds = uint64(wait_);
+        emit Events.DeployRetryQueued(e.playerId, e.queuedAt, wait_, e.deployAttempts, uint8(_maxDeployAttempts()));
+    }
+
+    /**
+     * @dev Branch on whether Airlock.create already landed for this entry:
+     *      - our market at `tokenPredicted` → keep salts, resume vault/registry
+     *      - otherwise (create revert / salt frontrun) → new FinalConfig
+     */
+    function _handleDeployFailure(QueueEntry storage e) private {
+        if (_isOurBondingMarket(e.playerId, e.tokenPredicted)) {
+            _scheduleDeployResume(e);
+        } else {
+            _requeueForFinalConfig(e);
+        }
+    }
+
+    /// @dev Post-Airlock miss — keep salts/`baseURI` and resume `executeDeploy` after `retryWait`.
+    function _scheduleDeployResume(QueueEntry storage e) private {
+        if (_noteDeployFailure(e)) return;
+
+        uint256 wait_ = retryWait == 0 ? DEFAULT_RETRY_WAIT : retryWait;
+        e.status = QueueStatus.DeployReady;
+        e.queuedAt = uint64(block.timestamp);
+        e.waitSeconds = uint64(wait_);
+        emit Events.DeployRetryQueued(e.playerId, e.queuedAt, wait_, e.deployAttempts, uint8(_maxDeployAttempts()));
+    }
+
+    /// @dev Increment attempt counter; on cap set `DeployFailed` and return true.
+    function _noteDeployFailure(QueueEntry storage e) private returns (bool exhausted) {
+        uint8 next = e.deployAttempts + 1;
+        e.deployAttempts = next;
+        uint256 max_ = _maxDeployAttempts();
+        if (next >= max_) {
+            e.status = QueueStatus.DeployFailed;
+            emit Events.DeployAttemptsExhausted(e.playerId, next);
+            return true;
+        }
+        return false;
+    }
+
+    function _maxDeployAttempts() private view returns (uint256) {
+        return maxDeployAttempts == 0 ? DEFAULT_MAX_DEPLOY_ATTEMPTS : maxDeployAttempts;
+    }
+
+    /**
+     * @dev True when `asset` is our Airlock market: Orchestrator integrator **and** Rehype
+     *      `buybackDst` equals the FeeRouter from `feeRouterFactory` for `playerId`.
+     */
+    function _isOurBondingMarket(bytes32 playerId, address asset) private view returns (bool) {
+        address expectedFeeRouter = feeRouterFactory.feeRouterOf(playerId);
+        if (asset == address(0) || asset.code.length == 0 || expectedFeeRouter == address(0)) return false;
+
+        (,,,,, address pool,,,, address integrator) = Airlock(payable(airlock)).getAssetData(asset);
+        if (pool == address(0) || integrator != address(orchestrator)) return false;
+
+        (,,,,, PoolKey memory poolKey,) = DopplerHookInitializer(payable(poolInitializer)).getState(asset);
+        (,, address buybackDst) =
+            RehypeDopplerHookInitializer(payable(rehypeHookInitializer)).getPoolInfo(poolKey.toId());
+        return buybackDst == expectedFeeRouter;
+    }
+
+    function _deployWait(QueueEntry storage e) private view returns (uint256) {
+        // DeployReady: `waitSeconds` is absolute (`0` = eligible now; resume uses `retryWait`).
+        // Queued: `0` means the normal `queueWait` review window.
+        if (e.status == QueueStatus.DeployReady) return uint256(e.waitSeconds);
+        return e.waitSeconds == 0 ? queueWait : uint256(e.waitSeconds);
+    }
+
+    /**
+     * @dev Idempotent market deploy (fulfill callback or `deployAssets` resume):
+     *      1) FeeRouter via Orchestrator (`FeeRouterFactory.create` returns existing)
+     *      2) Airlock.create (skipped when `tokenPredicted` already has Airlock state)
+     *      3) PlayerVault + stToken (skipped when `vaultPredicted` already has code)
+     *      4) PlayerSetRegistry writes (skipped when already registered / vault attached)
      *
      *      Prerequisites / follow-ups (do not skip when wiring production intake):
      *        - DopplerLocker proxy MUST hold Orchestrator `AUTHORIZED_CONTRACT` so `_exec`
@@ -623,22 +864,16 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
      *        - Numeraire is native ETH (`address(0)`). Airlock treats `address(0)` as ETH
      *          (see `Airlock.migrate` / fee collect). Switch to WETH9 only if the recipe
      *          moves to an ERC-20 numeraire.
-     *        - League / PbrFeeHub: intake currently has `seasonId` only. Until
-     *          EligibilityVerifier (or queueAssets) supplies `leagueId`:
-     *            * FeeRouter is created with `pbrFeeHub = address(0)` (even-split / no hub)
-     *            * PlayerSetRegistry gets `TournamentData.leagueId = 0` and empty
-     *              `activeTournaments`
-     *        - After league is known: `TournamentRegistry.registerVaults(leagueId, [vault])`
-     *          so TransferLocker / treasury membership sees the vault; also
-     *          `setLeagueId` / hub rewiring on FeeRouter as needed.
      *        - Callback gas: full deploy runs inside CvmRouter `maxCallbackGasLimit`.
      */
     function _onDeployReady(QueueEntry storage e) private {
         _requireDeployModules();
 
-        // 1) FeeRouter — buyback destination for Rehype fees.
-        //    TODO(league): pass `TournamentRegistry.pbrFeeHubOf(leagueId)` once intake has leagueId.
-        address feeRouter = _deployFeeRouter(e.playerId);
+        address pbrFeeHub = tournamentRegistry.pbrFeeHubOf(e.leagueId);
+        if (pbrFeeHub == address(0)) revert Errors.HubNotRegistered(e.leagueId);
+
+        // 1) FeeRouter — buyback destination for Rehype fees (idempotent via factory mapping).
+        address feeRouter = _deployFeeRouter(e.playerId, pbrFeeHub);
 
         // 2) Airlock.create — DN404 + bonding pool. Numeraire = native ETH (`address(0)`).
         address asset = _deployBondingMarket(e, feeRouter);
@@ -646,13 +881,14 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         // 3) PlayerVault + stToken (stToken salt is deterministic; vault salt is vanity-mined).
         (address vault, address stToken) = _deployVault(e, asset);
 
-        // 4) Registry — token + Doppler set, then vault set.
-        //    TODO(league): set TournamentData.leagueId + activeTournaments; then
-        //    TournamentRegistry.registerVaults(leagueId, [vault]) via Orchestrator.
+        // 4) PlayerSet + domestic league vault membership (treasury cache sync).
         _registerPlayerSet(e, asset, feeRouter, vault, stToken);
+        _registerLeagueVault(e.leagueId, vault);
 
-        e.status = QueueStatus.Deployed;
-        emit Events.AssetDeployed(e.playerId, asset, vault, feeRouter, stToken);
+        bytes32 playerId = e.playerId;
+        emit Events.AssetDeployed(playerId, asset, vault, feeRouter, stToken);
+        // Drop from the waiting-room queue (status Deployed is not retained on-disk).
+        _removeFromQueue(playerId);
     }
 
     function _requireDeployModules() private view {
@@ -665,22 +901,43 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         }
     }
 
-    function _deployFeeRouter(bytes32 playerId) private returns (address feeRouter) {
+    function _deployFeeRouter(bytes32 playerId, address pbrFeeHub) private returns (address feeRouter) {
         feeRouter = abi.decode(
-            _exec(address(feeRouterFactory), abi.encodeCall(FeeRouterFactory.create, (playerId, address(0)))),
+            _exec(address(feeRouterFactory), abi.encodeCall(FeeRouterFactory.create, (playerId, pbrFeeHub))),
             (address)
         );
     }
 
+    /**
+     * @dev CREATE2 at `tokenPredicted`. Adopt only if this is *our* Airlock market; a foreign
+     *      create at the predicted address (salt frontrun) reverts `SaltOccupied` so the caller
+     *      re-requests FinalConfig. Otherwise call `Airlock.create`.
+     */
     function _deployBondingMarket(QueueEntry storage e, address feeRouter) private returns (address asset) {
+        asset = e.tokenPredicted;
+        if (asset.code.length != 0) {
+            if (_isOurBondingMarket(e.playerId, asset)) return asset;
+            revert Errors.SaltOccupied(asset);
+        }
+
         CreateParams memory params = DopplerTypes.buildCreateParams(
-            _dopplerModules(), marketLaunchConfig(), e.name, e.symbol, feeRouter, e.tokenSalt
+            _dopplerModules(), marketLaunchConfig(), e.name, e.symbol, e.baseURI, feeRouter, e.tokenSalt
         );
         (asset,,,,) = Airlock(payable(airlock)).create(params);
         if (asset != e.tokenPredicted) revert Errors.DeployAddressMismatch(e.tokenPredicted, asset);
     }
 
+    /// @dev CREATE3 at `vaultPredicted`; adopt existing vault/stToken on retry.
     function _deployVault(QueueEntry storage e, address asset) private returns (address vault, address stToken) {
+        vault = e.vaultPredicted;
+        if (vault.code.length != 0) {
+            stToken = PlayerVault(vault).stToken();
+            if (PlayerVault(vault).playerToken() != asset || stToken == address(0) || stToken.code.length == 0) {
+                revert Errors.DeployAddressMismatch(asset, PlayerVault(vault).playerToken());
+            }
+            return (vault, stToken);
+        }
+
         bytes32 stTokenSalt =
             PlayerVaultFactory(vaultFactory).makeSalt(bytes11(keccak256(abi.encodePacked(e.playerId, bytes2("st")))));
         (vault, stToken) = abi.decode(
@@ -695,6 +952,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         if (vault != e.vaultPredicted) revert Errors.DeployAddressMismatch(e.vaultPredicted, vault);
     }
 
+    /// @dev Skip registry writes that already landed; require addresses match on resume.
     function _registerPlayerSet(
         QueueEntry storage e,
         address asset,
@@ -702,33 +960,68 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         address vault,
         address stToken
     ) private {
-        PoolKey memory poolKey;
-        (,,,,, poolKey,) = DopplerHookInitializer(payable(poolInitializer)).getState(asset);
+        if (playerSetRegistry.playerExists(e.playerId)) {
+            PlayerSet memory set = playerSetRegistry.getPlayerSet(e.playerId);
+            if (set.tokenData.token != asset) revert Errors.DeployAddressMismatch(asset, set.tokenData.token);
+            if (set.dopplerData.feeRouter != feeRouter) {
+                revert Errors.DeployAddressMismatch(feeRouter, set.dopplerData.feeRouter);
+            }
+            if (set.tournamentData.leagueId != e.leagueId) {
+                revert Errors.LeagueMismatch(e.leagueId, set.tournamentData.leagueId);
+            }
+        } else {
+            PoolKey memory poolKey;
+            (,,,,, poolKey,) = DopplerHookInitializer(payable(poolInitializer)).getState(asset);
 
-        bytes32[] memory activeTournaments;
-        _exec(
-            address(playerSetRegistry),
-            abi.encodeCall(
-                IPlayerSetRegistry.addPlayerSet,
-                (
-                    e.playerId,
-                    TokenData({ token: asset, name: e.name, symbol: e.symbol }),
-                    TournamentData({ leagueId: bytes32(0), activeTournaments: activeTournaments }),
-                    DopplerData({
-                        activePool: poolKey,
-                        hookDoppler: rehypeHookInitializer,
-                        hookMigrator: rehypeHookMigrator,
-                        feeRouter: feeRouter
-                    })
+            // Domestic league id is also the DOMESTIC_LEAGUE tournament id.
+            bytes32[] memory activeTournaments = new bytes32[](1);
+            activeTournaments[0] = e.leagueId;
+
+            _exec(
+                address(playerSetRegistry),
+                abi.encodeCall(
+                    IPlayerSetRegistry.addPlayerSet,
+                    (
+                        e.playerId,
+                        TokenData({ token: asset, name: e.name, symbol: e.symbol }),
+                        TournamentData({ leagueId: e.leagueId, activeTournaments: activeTournaments }),
+                        DopplerData({
+                            activePool: poolKey,
+                            hookDoppler: rehypeHookInitializer,
+                            hookMigrator: rehypeHookMigrator,
+                            feeRouter: feeRouter
+                        })
+                    )
                 )
-            )
-        );
+            );
+        }
+
+        VaultData memory existingVault = playerSetRegistry.getVaultData(e.playerId);
+        if (existingVault.playerVault != address(0)) {
+            if (existingVault.playerVault != vault || existingVault.stToken != stToken) {
+                revert Errors.DeployAddressMismatch(vault, existingVault.playerVault);
+            }
+            return;
+        }
+
         _exec(
             address(playerSetRegistry),
             abi.encodeCall(
                 IPlayerSetRegistry.addVaultData,
                 (e.playerId, VaultData({ playerVault: vault, stToken: stToken, isUtilized: false }))
             )
+        );
+    }
+
+    /// @dev Idempotent: skip if vault already registered for the domestic league treasury.
+    function _registerLeagueVault(bytes32 leagueId, address vault) private {
+        if (tournamentRegistry.isVaultRegistered(leagueId, vault)) return;
+
+        address[] memory vaults = new address[](1);
+        vaults[0] = vault;
+        _exec(
+            address(tournamentRegistry),
+            abi.encodeCall(ITournamentRegistry.registerVaults, (leagueId, vaults))
         );
     }
 
@@ -806,16 +1099,4 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         delete _queueIndexPlusOne[playerId];
     }
 
-    function _tokenInitCodeHash(QueueEntry storage e) private view returns (bytes32) {
-        return MineSalt.dn404InitCodeHash(
-            MineSalt.Dn404DeployParams({
-                name: e.name,
-                symbol: e.symbol,
-                initialSupply: initialSupply,
-                airlock: airlock,
-                baseURI: baseURI,
-                unit: dn404Unit
-            })
-        );
-    }
 }

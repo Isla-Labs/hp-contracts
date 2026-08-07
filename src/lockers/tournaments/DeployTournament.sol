@@ -41,8 +41,17 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
  *        - `CONTINENTAL`: deploy treasury, attach under selected league hubs (`leagueIds`)
  *        - `INTERNATIONAL`: deploy treasury, attach under all existing league hubs
  *
- *      Seasons (`BootstrapSeason`) open via `TournamentRegistry.openSeason` (includes `finalRound`);
- *      round rows are filled later via `TournamentRegistry.upsertRounds`.
+ *      Seasons (`BootstrapSeason`) open via `TournamentRegistry.openSeason` (includes `finalRound`),
+ *      which also writes the global reverse index `tournamentIdOfSeason[seasonId] = tournamentId`
+ *      (for DOMESTIC_LEAGUE, that value is the `leagueId` DopplerLocker checks at intake).
+ *      Round calendars are intentionally NOT written here — call
+ *      `TournamentRegistry.upsertRounds(tournamentId, seasonStartYear, rounds)` separately
+ *      (manual ops now; automated SP/oracle job later) so DeployTournament stays topology-only.
+ *
+ *      After a successful `DOMESTIC_LEAGUE` deploy:
+ *        - `pbrFeeHubOf(tournamentId)` is set (`tournamentId` == `leagueId`)
+ *        - `getPbrTreasury(tournamentId)` is set
+ *        - DopplerLocker may `queueAssets(leagueId, seasonId, playerIds)` and resolve the hub
  *
  *      Protocol deploy order:
  *        1. Deploy AddressProvider
@@ -50,6 +59,7 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
  *        3. Deploy all other contracts as upgradeable proxies
  *        4. Register all addresses on AddressProvider
  *        5. Initialize all contracts (resolve deps from AP + transfer ownership to Orchestrator)
+ *        6. Deploy domestic leagues via this contract before DopplerLocker asset intake
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -262,6 +272,8 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
         if (b.tournamentId == bytes32(0)) revert Errors.ZeroId();
         if (b.initialSeason == 0) revert Errors.ZeroSeason();
         if (b.treasurySalt == bytes32(0)) revert Errors.ZeroSalt();
+        // Prevent double-bootstrap of the same tournament id (and league hub for DOMESTIC_LEAGUE).
+        if (tournamentRegistry.tournamentExists(b.tournamentId)) revert Errors.AlreadySet();
     }
 
     function _simulateBootstrap(BootstrapParams calldata b) internal view {

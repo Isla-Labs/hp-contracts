@@ -36,6 +36,8 @@ library RegistryErrors {
     error InvalidLinkTarget(TournamentType tournamentType);
     error SeasonExists(bytes32 tournamentId, uint16 seasonStartYear);
     error SeasonNotFound(bytes32 tournamentId, uint16 seasonStartYear);
+    /// @dev Global reverse index: `seasonId` already opened under another tournament.
+    error SeasonIdTaken(bytes32 seasonId, bytes32 existingTournamentId);
     error InvalidFinalRound();
     error RoundNotFound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber);
     error InvalidRoundNumber(uint32 roundNumber, uint32 finalRound);

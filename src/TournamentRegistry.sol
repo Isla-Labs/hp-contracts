@@ -45,6 +45,10 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     mapping(bytes32 tournamentId => Tournament) private _tournaments;
     bytes32[] private _tournamentIds;
 
+    /// @notice Global reverse index: SP calendar `seasonId` → `tournamentId` (written in `openSeason`).
+    /// @dev For `DOMESTIC_LEAGUE`, value equals `leagueId`. Unique across all tournaments.
+    mapping(bytes32 seasonId => bytes32 tournamentId) public tournamentIdOfSeason;
+
     /// @dev SoT vault set per tournament (mirrored to `PbrTreasury` cache on write).
     mapping(bytes32 tournamentId => address[]) private _registeredVaults;
     mapping(bytes32 tournamentId => mapping(address vault => uint256)) private _registeredVaultIndex; // 1-based
@@ -191,6 +195,10 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
             revert Errors.SeasonExists(tournamentId, seasonStartYear);
         }
 
+        bytes32 existing = tournamentIdOfSeason[seasonId];
+        if (existing != bytes32(0)) revert Errors.SeasonIdTaken(seasonId, existing);
+        tournamentIdOfSeason[seasonId] = tournamentId;
+
         t.seasons.push(
             Season({
                 seasonId: seasonId,
@@ -232,6 +240,11 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
 
     function tournamentCount() external view returns (uint256) {
         return _tournamentIds.length;
+    }
+
+    /// @inheritdoc ITournamentRegistry
+    function tournamentExists(bytes32 tournamentId) external view returns (bool) {
+        return _tournaments[tournamentId].tournamentId != bytes32(0);
     }
 
     /// @notice Domestic fee hubs for unsupported-market even-split (`FeeRouter`)

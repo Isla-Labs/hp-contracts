@@ -28,17 +28,21 @@ enum CvmJob {
     /// @dev One-time / bootstrap round sync (historical).
     HistoricalRoundSync,
     /// @dev One-time / bootstrap DMS ingest (batched per request).
-    HistoricalDms
+    HistoricalDms,
+    /// @dev DopplerLocker launch: pin IPFS metadata + mine `0x22`/`0x42` salts; returns `baseURI`.
+    FinalConfig
 }
 
 /// @notice Which vanity salt set `CvmJob.VanitySalts` should mine.
 /// @dev Append-only after a live deploy. Unused response slots for a kind are zeroed.
 enum VanityDeployKind {
     None,
-    /// @dev PlayerToken `0x22` (CREATE2) + PlayerVault `0x42` (CreateX CREATE3).
+    /// @dev PlayerToken `0x22` + PlayerVault `0x42` with caller-supplied `tokenInitCodeHash` (TestData).
     Asset,
     /// @dev PbrTreasury `0x99` (CreateX CREATE3).
-    Tournament
+    Tournament,
+    /// @dev Deprecated — use `CvmJob.FinalConfig` (kept for append-only ordinal stability).
+    AssetDeploy
 }
 
 /// @notice Onchain commitment stored while a request is in flight.

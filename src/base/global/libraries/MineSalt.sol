@@ -209,9 +209,7 @@ library MineSalt {
         bytes32 initCodeHash_,
         bytes32 seed_
     ) internal view returns (bytes32 salt, address predicted) {
-        return minePlayerTokenSalt(
-            tokenFactory, initCodeHash_, seed_, PLAYER_TOKEN_PREFIX, DEFAULT_MAX_ATTEMPTS
-        );
+        return minePlayerTokenSalt(tokenFactory, initCodeHash_, seed_, PLAYER_TOKEN_PREFIX, DEFAULT_MAX_ATTEMPTS);
     }
 
     function minePlayerTokenSalt(
@@ -264,18 +262,14 @@ library MineSalt {
         address vaultFactory,
         bytes32 seed_
     ) internal view returns (bytes32 salt, address predicted) {
-        return mineCreate3VanitySalt(
-            vaultFactory, seed_, "vault", PLAYER_VAULT_PREFIX, DEFAULT_MAX_ATTEMPTS
-        );
+        return mineCreate3VanitySalt(vaultFactory, seed_, "vault", PLAYER_VAULT_PREFIX, DEFAULT_MAX_ATTEMPTS);
     }
 
     function minePbrTreasurySalt(
         address treasuryFactory,
         bytes32 seed_
     ) internal view returns (bytes32 salt, address predicted) {
-        return mineCreate3VanitySalt(
-            treasuryFactory, seed_, "treasury", PBR_TREASURY_PREFIX, DEFAULT_MAX_ATTEMPTS
-        );
+        return mineCreate3VanitySalt(treasuryFactory, seed_, "treasury", PBR_TREASURY_PREFIX, DEFAULT_MAX_ATTEMPTS);
     }
 
     function minePbrTreasurySalt(
@@ -301,8 +295,7 @@ library MineSalt {
         uint256 nonce
     ) internal view returns (AssetSalts memory result) {
         result.seed = seed(playerId, nonce);
-        (result.tokenSalt, result.tokenPredicted) =
-            minePlayerTokenSalt(tokenFactory, tokenInitCodeHash, result.seed);
+        (result.tokenSalt, result.tokenPredicted) = minePlayerTokenSalt(tokenFactory, tokenInitCodeHash, result.seed);
         (result.vaultSalt, result.vaultPredicted) = minePlayerVaultSalt(vaultFactory, result.seed);
     }
 
@@ -313,8 +306,6 @@ library MineSalt {
         bytes32 playerId,
         uint256 nonce
     ) internal view returns (AssetSalts memory result) {
-        return mineAssetSalts(
-            tokenFactory, dn404InitCodeHash(deployParams), vaultFactory, playerId, nonce
-        );
+        return mineAssetSalts(tokenFactory, dn404InitCodeHash(deployParams), vaultFactory, playerId, nonce);
     }
 }

@@ -139,10 +139,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
     /**
      * @notice Attaches Advanced Trade vault + mark source after those deployments.
      */
-    function addAdvancedTradeData(
-        bytes32 playerId,
-        AdvancedTradeData calldata data
-    ) external onlyOwner {
+    function addAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data) external onlyOwner {
         PlayerSet storage set = _requirePlayer(playerId);
         if (set.advancedTradeData.advancedTradeVault != address(0)) {
             revert Errors.AdvancedTradeDataAlreadySet(playerId);

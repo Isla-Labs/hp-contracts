@@ -4,7 +4,8 @@ pragma solidity ^0.8.34;
 import { DeployOrchestrator } from "../utils/DeployOrchestrator.sol";
 import { DeployRegistries } from "../utils/DeployRegistries.sol";
 import { DeployDeployTournament } from "../utils/DeployDeployTournament.sol";
-import { DeployData } from "../utils/DeployData.sol";
+// TEMP: data plane parked — restore with DeployData.sol
+// import { DeployData } from "../utils/DeployData.sol";
 import { DeployLockers } from "../utils/DeployLockers.sol";
 import { DeployFactories } from "../utils/DeployFactories.sol";
 import { DeployHandoff } from "../utils/DeployHandoff.sol";
@@ -47,17 +48,18 @@ contract DeployDeployTournamentStack is DeployDeployTournament {
     }
 }
 
-/// @notice Base mainnet — RoundManager (data).
-contract DeployDataStack is DeployData {
-    function run() external returns (DataDeployment memory d) {
-        uint256 privateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(privateKey);
-
-        vm.startBroadcast(privateKey);
-        d = _deployData(deployer);
-        vm.stopBroadcast();
-    }
-}
+// TEMP: data plane parked — restore with DeployData.sol
+// /// @notice Base mainnet — RoundManager (data).
+// contract DeployDataStack is DeployData {
+//     function run() external returns (DataDeployment memory d) {
+//         uint256 privateKey = vm.envUint("PRIVATE_KEY");
+//         address deployer = vm.addr(privateKey);
+//
+//         vm.startBroadcast(privateKey);
+//         d = _deployData(deployer);
+//         vm.stopBroadcast();
+//     }
+// }
 
 /// @notice Base mainnet — DopplerLocker + TransferLocker.
 contract DeployLockersStack is DeployLockers {

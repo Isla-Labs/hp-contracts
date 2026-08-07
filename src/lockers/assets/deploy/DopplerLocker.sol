@@ -24,12 +24,32 @@ import { PlayerVault } from "@vaults/PlayerVault.sol";
 import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 
 import { Airlock, CreateParams } from "@doppler/src/Airlock.sol";
-import { RehypeDopplerHookInitializer } from "@doppler/src/dopplerHooks/RehypeDopplerHookInitializer.sol";
-import { DopplerHookInitializer } from "@doppler/src/initializers/DopplerHookInitializer.sol";
 import { FeeDistributionInfo } from "@doppler/src/types/RehypeTypes.sol";
+import { PoolId } from "@v4-core/types/PoolId.sol";
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
 import { DopplerConfig } from "@deployments/assets/deploy/config/DopplerConfig.sol";
+import { IExcessSupplyLocker } from "@interfaces/governance/IExcessSupplyLocker.sol";
+
+/// @dev Narrow views — avoid importing Rehype/DopplerHookInitializer (pulls Quoter `=0.8.26`).
+interface IDopplerHookInitializerView {
+    function getState(address asset)
+        external
+        view
+        returns (
+            address numeraire,
+            uint256 totalTokensOnBondingCurve,
+            address dopplerHook,
+            bytes memory graduationDopplerHookCalldata,
+            uint8 status,
+            PoolKey memory poolKey,
+            int24 farTick
+        );
+}
+
+interface IRehypePoolInfoView {
+    function getPoolInfo(PoolId poolId) external view returns (address asset, address numeraire, address buybackDst);
+}
 
 /**
  * @title DopplerLocker
@@ -46,7 +66,8 @@ import { DopplerConfig } from "@deployments/assets/deploy/config/DopplerConfig.s
  *        → owner may `editMetadata` / `unqueueAsset` during the 24h window
  *        → anyone calls `deployAssets` after wait; RateLimit gates frequency
  *        → FinalConfig: oracle pins IPFS metadata + mines salts + returns `baseURI`
- *        → fulfill → `_onDeployReady` (FeeRouter w/ hub → Airlock → Vault → PlayerSet + registerVaults)
+ *        → fulfill → `_onDeployReady` (FeeRouter w/ hub → Airlock → Vault → PlayerSet + registerVaults
+ *          → ExcessSupplyLocker.allocate)
  *        → oracle/validation failure: re-queue for a new FinalConfig (`retryWait`, default 5m)
  *        → Airlock not ours yet (create fail / salt frontrun): new FinalConfig after `retryWait`
  *        → Airlock already ours (integrator + FeeRouter buybackDst): resume vault/registry after `retryWait`
@@ -480,8 +501,8 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
             if (e.tokenPredicted == address(0) || bytes(e.baseURI).length == 0) continue;
             if (block.timestamp < uint256(e.queuedAt) + _deployWait(e)) continue;
 
-            try this.executeDeploy(e.playerId) {
-            } catch {
+            try this.executeDeploy(e.playerId) { }
+            catch {
                 _handleDeployFailure(e);
             }
             return bytes32(0);
@@ -696,14 +717,14 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
 
         // Commit salts/`baseURI` first (separate external call) so a later deploy revert does not
         // wipe predictions needed for idempotent resume.
-        try this.applyFinalConfig(playerId, response) {
-        } catch {
+        try this.applyFinalConfig(playerId, response) { }
+        catch {
             _requeueForFinalConfig(e);
             return;
         }
 
-        try this.executeDeploy(playerId) {
-        } catch {
+        try this.executeDeploy(playerId) { }
+        catch {
             _handleDeployFailure(e);
         }
     }
@@ -835,9 +856,8 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         (,,,,, address pool,,,, address integrator) = Airlock(payable(airlock)).getAssetData(asset);
         if (pool == address(0) || integrator != address(orchestrator)) return false;
 
-        (,,,,, PoolKey memory poolKey,) = DopplerHookInitializer(payable(poolInitializer)).getState(asset);
-        (,, address buybackDst) =
-            RehypeDopplerHookInitializer(payable(rehypeHookInitializer)).getPoolInfo(poolKey.toId());
+        (,,,,, PoolKey memory poolKey,) = IDopplerHookInitializerView(poolInitializer).getState(asset);
+        (,, address buybackDst) = IRehypePoolInfoView(rehypeHookInitializer).getPoolInfo(poolKey.toId());
         return buybackDst == expectedFeeRouter;
     }
 
@@ -854,6 +874,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
      *      2) Airlock.create (skipped when `tokenPredicted` already has Airlock state)
      *      3) PlayerVault + stToken (skipped when `vaultPredicted` already has code)
      *      4) PlayerSetRegistry writes (skipped when already registered / vault attached)
+     *      5) ExcessSupplyLocker.allocate (50/50 AT reserve + vested vault stake)
      *
      *      Prerequisites / follow-ups (do not skip when wiring production intake):
      *        - DopplerLocker proxy MUST hold Orchestrator `AUTHORIZED_CONTRACT` so `_exec`
@@ -885,6 +906,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         _registerPlayerSet(e, asset, feeRouter, vault, stToken);
         _registerLeagueVault(e.leagueId, vault);
 
+        // 5) Split Launchpad excess: 50% AT ringfence + 50% vault stake / vesting.
+        _allocateExcess(asset);
+
         bytes32 playerId = e.playerId;
         emit Events.AssetDeployed(playerId, asset, vault, feeRouter, stToken);
         // Drop from the waiting-room queue (status Deployed is not retained on-disk).
@@ -903,8 +927,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
 
     function _deployFeeRouter(bytes32 playerId, address pbrFeeHub) private returns (address feeRouter) {
         feeRouter = abi.decode(
-            _exec(address(feeRouterFactory), abi.encodeCall(FeeRouterFactory.create, (playerId, pbrFeeHub))),
-            (address)
+            _exec(address(feeRouterFactory), abi.encodeCall(FeeRouterFactory.create, (playerId, pbrFeeHub))), (address)
         );
     }
 
@@ -971,7 +994,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
             }
         } else {
             PoolKey memory poolKey;
-            (,,,,, poolKey,) = DopplerHookInitializer(payable(poolInitializer)).getState(asset);
+            (,,,,, poolKey,) = IDopplerHookInitializerView(poolInitializer).getState(asset);
 
             // Domestic league id is also the DOMESTIC_LEAGUE tournament id.
             bytes32[] memory activeTournaments = new bytes32[](1);
@@ -1019,10 +1042,13 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
 
         address[] memory vaults = new address[](1);
         vaults[0] = vault;
-        _exec(
-            address(tournamentRegistry),
-            abi.encodeCall(ITournamentRegistry.registerVaults, (leagueId, vaults))
-        );
+        _exec(address(tournamentRegistry), abi.encodeCall(ITournamentRegistry.registerVaults, (leagueId, vaults)));
+    }
+
+    /// @dev Idempotent via `ExcessSupplyLocker.allocate` (no-op once a position exists).
+    function _allocateExcess(address asset) private {
+        if (excessSupplyLocker == address(0)) revert Errors.ZeroAddress();
+        _exec(excessSupplyLocker, abi.encodeCall(IExcessSupplyLocker.allocate, (asset)));
     }
 
     /// @dev Local module wiring for `DopplerTypes.buildCreateParams` (numeraire = native ETH).
@@ -1098,5 +1124,4 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, DopplerConfig, Or
         _queue.pop();
         delete _queueIndexPlusOne[playerId];
     }
-
 }

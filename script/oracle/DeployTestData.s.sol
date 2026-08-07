@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import { Script, console2 } from "forge-std/Script.sol";
 
-import { TestData } from "@src/data/test/TestData.sol";
+import { TestData } from "@oracle/test/TestData.sol";
 
 /**
  * @title DeployTestData

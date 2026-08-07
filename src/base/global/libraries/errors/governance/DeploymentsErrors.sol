@@ -48,4 +48,12 @@ library DeploymentsErrors {
     error InvalidCurve();
     error InvalidCurveShares(uint256 totalShares);
     error InvalidFeeDistribution();
+
+    //  ExcessSupplyLocker
+    error ZeroAmount();
+    error TransferFailed();
+    error EmptyBeneficiaries();
+    error InvalidBeneficiaryShares();
+    error NothingToUnlock();
+    error InsufficientExcessReserve();
 }

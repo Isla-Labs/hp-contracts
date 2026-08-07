@@ -44,8 +44,7 @@ interface ITournamentRegistry {
     // --------------------------------------------
 
     /// @notice Open a season with `finalRound`; rounds filled later via `upsertRound(s)`.
-    function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound)
-        external;
+    function openSeason(bytes32 tournamentId, bytes32 seasonId, uint16 seasonStartYear, uint32 finalRound) external;
 
     function upsertRound(bytes32 tournamentId, uint16 seasonStartYear, RoundSchedule calldata round) external;
 

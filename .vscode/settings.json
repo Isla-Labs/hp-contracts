@@ -10,7 +10,7 @@
     "@addresses/=src/base/global/libraries/addresses/",
     "@src/=src/",
     "@base/=src/base/",
-    "@data/=src/base/data/",
+    "@registries/=src/",
     "@deployments/=src/lockers/",
     "@governance/=src/governance/",
     "@markets/=src/markets/",

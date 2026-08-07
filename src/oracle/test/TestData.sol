@@ -96,14 +96,7 @@ contract TestData is Oracle {
         address vaultFactory_,
         bytes32 seed_
     ) external returns (bytes32 requestId) {
-        return _request(
-            VanityDeployKind.Asset,
-            seed_,
-            tokenFactory_,
-            tokenInitCodeHash_,
-            vaultFactory_,
-            address(0)
-        );
+        return _request(VanityDeployKind.Asset, seed_, tokenFactory_, tokenInitCodeHash_, vaultFactory_, address(0));
     }
 
     /**
@@ -162,9 +155,7 @@ contract TestData is Oracle {
             CvmJob.VanitySalts,
             abi.encode(kind, seed_, tokenFactory_, tokenInitCodeHash_, vaultFactory_, treasuryFactory_)
         );
-        emit SaltsRequested(
-            requestId, kind, seed_, tokenFactory_, tokenInitCodeHash_, vaultFactory_, treasuryFactory_
-        );
+        emit SaltsRequested(requestId, kind, seed_, tokenFactory_, tokenInitCodeHash_, vaultFactory_, treasuryFactory_);
     }
 
     function _clearSalts() private {

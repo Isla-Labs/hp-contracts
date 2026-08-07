@@ -17,7 +17,7 @@ docs/
 .env
 .env.sp
 
-# Temp
+# Temp (soft-delete park; not part of core protocol compile)
 .temp/
 .plans/
 deploymentPrerequisites.md

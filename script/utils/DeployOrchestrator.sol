@@ -4,7 +4,7 @@ pragma solidity ^0.8.34;
 import { console2 as console } from "forge-std/console2.sol";
 
 import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { Orchestrator } from "@src/Orchestrator.sol";
+import { Orchestrator } from "@governance/Orchestrator.sol";
 
 import { AddressProviderOps } from "./AddressProviderOps.sol";
 

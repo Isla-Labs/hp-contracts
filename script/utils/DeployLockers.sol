@@ -41,13 +41,13 @@ abstract contract DeployLockers is AddressProviderOps, ProxyUtils {
         d.dopplerLocker = _deployInitGuardProxy(guard, deployer);
         d.transferLocker = _deployInitGuardProxy(guard, deployer);
 
-        d.dopplerLockerImpl = address(new DopplerLocker(addressProvider, 5 minutes));
+        d.dopplerLockerImpl = address(new DopplerLocker(addressProvider));
         d.transferLockerImpl = address(new TransferLocker(addressProvider));
 
         _registerName(deployer, Keys.DOPPLER_LOCKER, d.dopplerLocker);
         _registerName(deployer, Keys.TRANSFER_LOCKER, d.transferLocker);
 
-        _upgradeAndCall(d.dopplerLocker, d.dopplerLockerImpl, abi.encodeCall(DopplerLocker.initialize, (24 hours)));
+        _upgradeAndCall(d.dopplerLocker, d.dopplerLockerImpl, abi.encodeCall(DopplerLocker.initialize, ()));
         _upgradeAndCall(d.transferLocker, d.transferLockerImpl, abi.encodeCall(TransferLocker.initialize, ()));
 
         console.log("=== DeployLockers (proxies) ===");

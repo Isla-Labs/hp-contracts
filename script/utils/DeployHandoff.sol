@@ -28,9 +28,10 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         address tournamentRegistry = _requireName(Keys.TOURNAMENT_REGISTRY);
         address playerSetRegistry = _requireName(Keys.PLAYER_SET_REGISTRY);
         address deployTournament = _requireName(Keys.DEPLOY_TOURNAMENT);
-        address roundManager = _requireName(Keys.ROUND_MANAGER);
 
-        // Soft-require lockers / factories so handoff can still proceed if partial — but warn.
+        // Soft-require lockers / factories so handoff can proceed if partial — but warn.
+        // TEMP: ROUND_MANAGER parked with data plane — restore when DeployData returns.
+        // _warnIfMissing(Keys.ROUND_MANAGER);
         _warnIfMissing(Keys.DOPPLER_LOCKER);
         _warnIfMissing(Keys.TRANSFER_LOCKER);
         _warnIfMissing(Keys.FEE_ROUTER_FACTORY);
@@ -42,7 +43,7 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         _transferProxyAdmin(tournamentRegistry, orchestrator);
         _transferProxyAdmin(playerSetRegistry, orchestrator);
         _transferProxyAdmin(deployTournament, orchestrator);
-        _transferProxyAdmin(roundManager, orchestrator);
+        // _transferProxyAdminIfSet(Keys.ROUND_MANAGER, orchestrator);
 
         _transferProxyAdminIfSet(Keys.DOPPLER_LOCKER, orchestrator);
         _transferProxyAdminIfSet(Keys.TRANSFER_LOCKER, orchestrator);
@@ -53,7 +54,7 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
 
         console.log("=== DeployHandoff ===");
         console.log("AddressProvider owner -> Orchestrator", orchestrator);
-        console.log("ProxyAdmins transferred for registries / DT / RoundManager / lockers / factories");
+        console.log("ProxyAdmins transferred for registries / DT / lockers / factories");
     }
 
     function _transferProxyAdminIfSet(string memory name, address newOwner) internal {

@@ -94,7 +94,7 @@ library DopplerTypes {
     uint24 internal constant DEFAULT_FEE = 10_000;
 
     /// @dev 0.15% pool LP fee post-migrate → StreamableFeesLocker 5:95.
-    uint24 internal constant DEFAULT_MIGRATOR_LP_FEE = 1_500;
+    uint24 internal constant DEFAULT_MIGRATOR_LP_FEE = 1500;
 
     uint32 internal constant DEFAULT_MIGRATOR_LOCK_DURATION = 30 days;
 
@@ -241,10 +241,10 @@ library DopplerTypes {
      */
     function defaultBondingCurves() internal pure returns (Curve[] memory curves) {
         curves = new Curve[](4);
-        curves[0] = Curve({ tickLower: -113_856, tickUpper: -102_872, numPositions: 10, shares: 0.30e18 });
-        curves[1] = Curve({ tickLower: -106_928, tickUpper: -93_064, numPositions: 15, shares: 0.40e18 });
-        curves[2] = Curve({ tickLower: -94_392, tickUpper: -90_832, numPositions: 10, shares: 0.20e18 });
-        curves[3] = Curve({ tickLower: -90_832, tickUpper: DEFAULT_TAIL_TICK_UPPER, numPositions: 1, shares: 0.10e18 });
+        curves[0] = Curve({ tickLower: -113_856, tickUpper: -102_872, numPositions: 10, shares: 0.3e18 });
+        curves[1] = Curve({ tickLower: -106_928, tickUpper: -93_064, numPositions: 15, shares: 0.4e18 });
+        curves[2] = Curve({ tickLower: -94_392, tickUpper: -90_832, numPositions: 10, shares: 0.2e18 });
+        curves[3] = Curve({ tickLower: -90_832, tickUpper: DEFAULT_TAIL_TICK_UPPER, numPositions: 1, shares: 0.1e18 });
     }
 
     /**

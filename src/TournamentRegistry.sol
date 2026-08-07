@@ -199,15 +199,16 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         if (existing != bytes32(0)) revert Errors.SeasonIdTaken(seasonId, existing);
         tournamentIdOfSeason[seasonId] = tournamentId;
 
-        t.seasons.push(
-            Season({
-                seasonId: seasonId,
-                seasonStartYear: seasonStartYear,
-                finalRound: finalRound,
-                roundCount: 0,
-                rounds: new RoundSchedule[](0)
-            })
-        );
+        t.seasons
+            .push(
+                Season({
+                    seasonId: seasonId,
+                    seasonStartYear: seasonStartYear,
+                    finalRound: finalRound,
+                    roundCount: 0,
+                    rounds: new RoundSchedule[](0)
+                })
+            );
         emit Events.SeasonOpened(tournamentId, seasonId, seasonStartYear, finalRound);
         if (t.tournamentType == TournamentType.DOMESTIC_LEAGUE) {
             emit Events.DomesticSeasonOpened(tournamentId, seasonId, seasonStartYear);

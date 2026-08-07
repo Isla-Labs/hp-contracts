@@ -65,7 +65,6 @@ import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
  * @custom:security-contact security@islalabs.co
  */
 contract DeployTournament is Initializable, AddressBook, Ownable {
-
     IOrchestrator public orchestrator;
     ITournamentRegistry public tournamentRegistry;
 
@@ -251,7 +250,9 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     function _appendTreasuryToHub(address hubAddr, TournamentType tournamentType, address treasury) internal {
         IPbrFeeHub hub = IPbrFeeHub(hubAddr);
         if (tournamentType == TournamentType.DOMESTIC_CUP) {
-            _exec(hubAddr, abi.encodeCall(IPbrFeeHub.setDomesticCups, (_appendAddress(hub.getDomesticCups(), treasury))));
+            _exec(
+                hubAddr, abi.encodeCall(IPbrFeeHub.setDomesticCups, (_appendAddress(hub.getDomesticCups(), treasury)))
+            );
         } else if (tournamentType == TournamentType.CONTINENTAL) {
             _exec(hubAddr, abi.encodeCall(IPbrFeeHub.setContinental, (_appendAddress(hub.getContinental(), treasury))));
         } else if (tournamentType == TournamentType.INTERNATIONAL) {

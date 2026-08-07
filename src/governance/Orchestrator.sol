@@ -56,10 +56,7 @@ contract Orchestrator is AccessControl, IOrchestrator {
     // --------------------------------------------
 
     /// @inheritdoc IOrchestrator
-    function execute(address target, uint256 value, bytes calldata data)
-        external
-        returns (bytes memory result)
-    {
+    function execute(address target, uint256 value, bytes calldata data) external returns (bytes memory result) {
         _checkAdminOrAuthorized();
         if (target == address(0)) revert Errors.ZeroAddress();
         (bool ok, bytes memory ret) = target.call{ value: value }(data);

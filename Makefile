@@ -37,12 +37,13 @@ deploy-base-deploy-tournament:
 		--broadcast --slow
 	$(MAKE) generate-history
 
-deploy-base-data:
-	@forge script script/DeployBase/DeployBase.s.sol:DeployDataStack \
-		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
-		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--broadcast --slow
-	$(MAKE) generate-history
+# TEMP: data plane parked — restore DeployDataStack when RoundManager returns to src.
+# deploy-base-data:
+# 	@forge script script/DeployBase/DeployBase.s.sol:DeployDataStack \
+# 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+# 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+# 		--broadcast --slow
+# 	$(MAKE) generate-history
 
 deploy-base-lockers:
 	@forge script script/DeployBase/DeployBase.s.sol:DeployLockersStack \
@@ -110,13 +111,13 @@ deploy-base-sepolia-deploy-tournament:
 		--broadcast --slow
 	$(MAKE) generate-history
 
-# 6) Data (RoundManager)
-deploy-base-sepolia-data:
-	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployDataStack \
-		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
-		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--broadcast --slow
-	$(MAKE) generate-history
+# 6) Data (RoundManager) — TEMP parked with data plane
+# deploy-base-sepolia-data:
+# 	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployDataStack \
+# 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+# 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+# 		--broadcast --slow
+# 	$(MAKE) generate-history
 
 # 7) Lockers
 deploy-base-sepolia-lockers:

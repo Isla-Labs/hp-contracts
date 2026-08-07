@@ -7,8 +7,8 @@ forge-std/=lib/forge-std/src/
 @addresses/=src/base/global/libraries/addresses/
 
 @src/=src/
+@registries/=src/
 @base/=src/base/
-@data/=src/base/data/
 @deployments/=src/lockers/
 @governance/=src/governance/
 @markets/=src/markets/

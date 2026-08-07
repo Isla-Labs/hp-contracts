@@ -59,11 +59,7 @@ contract CvmRouter is Initializable, Ownable, Pausable, ICvmRouter {
      * @param coordinator_ `CvmCoordinator` proxy used for `isOracle` / oracle set.
      * @param config_ Initial router config.
      */
-    function initialize(
-        address owner_,
-        address coordinator_,
-        CvmRouterConfig calldata config_
-    ) external initializer {
+    function initialize(address owner_, address coordinator_, CvmRouterConfig calldata config_) external initializer {
         if (owner_ == address(0) || coordinator_ == address(0)) {
             revert Errors.ZeroAddress();
         }

@@ -58,9 +58,7 @@ contract CvmRouterTest is Test {
         coordinator = CvmCoordinator(
             address(
                 new TransparentUpgradeableProxy(
-                    address(coordImpl),
-                    dao,
-                    abi.encodeCall(CvmCoordinator.initialize, (dao, address(verifier), 1 days))
+                    address(coordImpl), dao, abi.encodeCall(CvmCoordinator.initialize, (dao, address(verifier), 1 days))
                 )
             )
         );
@@ -71,9 +69,7 @@ contract CvmRouterTest is Test {
         router = CvmRouter(
             address(
                 new TransparentUpgradeableProxy(
-                    address(routerImpl),
-                    dao,
-                    abi.encodeCall(CvmRouter.initialize, (dao, address(coordinator), cfg))
+                    address(routerImpl), dao, abi.encodeCall(CvmRouter.initialize, (dao, address(coordinator), cfg))
                 )
             )
         );

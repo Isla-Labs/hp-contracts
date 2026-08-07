@@ -54,11 +54,7 @@ contract CvmCoordinator is Initializable, Ownable, ICvmCoordinator {
      * @param attestationVerifier_ Optional; required before permissionless `registerOracle`.
      * @param registrationTtl_ Live registration lifetime in seconds.
      */
-    function initialize(
-        address owner_,
-        address attestationVerifier_,
-        uint64 registrationTtl_
-    ) external initializer {
+    function initialize(address owner_, address attestationVerifier_, uint64 registrationTtl_) external initializer {
         if (owner_ == address(0)) revert Errors.ZeroAddress();
         if (registrationTtl_ == 0) revert Errors.ZeroRegistrationTtl();
 

@@ -45,15 +45,13 @@ library DeploymentsEvents {
 
     /// @notice Full asset market deployed atomically in the FinalConfig fulfill callback.
     event AssetDeployed(
-        bytes32 indexed playerId,
-        address indexed token,
-        address indexed vault,
-        address feeRouter,
-        address stToken
+        bytes32 indexed playerId, address indexed token, address indexed vault, address feeRouter, address stToken
     );
 
     /// @notice Deploy path failed; next attempt after `retryWait` (new FinalConfig if pre-Airlock, else resume).
-    event DeployRetryQueued(bytes32 indexed playerId, uint64 queuedAt, uint256 retryWait, uint8 attempt, uint8 maxAttempts);
+    event DeployRetryQueued(
+        bytes32 indexed playerId, uint64 queuedAt, uint256 retryWait, uint8 attempt, uint8 maxAttempts
+    );
 
     /// @notice Automatic retries exhausted; entry is `DeployFailed` until owner resets.
     event DeployAttemptsExhausted(bytes32 indexed playerId, uint8 attempts);
@@ -71,5 +69,13 @@ library DeploymentsEvents {
     event FeeDistributionUpdated();
 
     //  ExcessSupplyLocker
+    event ExcessAllocated(
+        address indexed token, bytes32 indexed playerId, uint256 advancedTradeAmount, uint256 vaultAmount
+    );
+    event ExcessTrancheUnlocked(address indexed token, uint8 tranche, uint256 amount);
+    event ExcessVestedDistributed(address indexed token, uint256 amount);
+    event ExcessPbrDistributed(address indexed token, uint256 amount);
+    event ExcessBeneficiariesUpdated(uint256 beneficiaryCount);
+    event AdvancedTradeReleased(address indexed token, address indexed to, uint256 amount);
     event ExcessTokenRescued(address indexed token, address indexed to, uint256 amount);
 }

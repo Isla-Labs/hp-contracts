@@ -28,18 +28,14 @@ contract DeployCvmRouter is Script, ProxyUtils, OracleDeployment {
         address coordinator = _oracleCoordinator(json);
 
         CvmRouterConfig memory routerConfig = CvmRouterConfig({
-            maxCallbackGasLimit: 5_000_000,
-            requestTimeout: uint32(1 hours),
-            gasForCallExactCheck: 5000
+            maxCallbackGasLimit: 5_000_000, requestTimeout: uint32(1 hours), gasForCallExactCheck: 5000
         });
 
         vm.startBroadcast(privateKey);
         InitGuard guard = new InitGuard();
         CvmRouter impl = new CvmRouter();
         address proxy = _deployInitGuardProxy(guard, owner);
-        _upgradeAndCall(
-            proxy, address(impl), abi.encodeCall(CvmRouter.initialize, (owner, coordinator, routerConfig))
-        );
+        _upgradeAndCall(proxy, address(impl), abi.encodeCall(CvmRouter.initialize, (owner, coordinator, routerConfig)));
         vm.stopBroadcast();
 
         // Fresh initialize already seeds exclusives; persist addresses.

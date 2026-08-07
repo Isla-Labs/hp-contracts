@@ -58,9 +58,7 @@ contract DeployOracle is Script, ProxyUtils, AddressProviderOps {
         address coordinatorProxy = _deployInitGuardProxy(guard, owner);
         address coordinatorImpl = address(new CvmCoordinator());
         _upgradeAndCall(
-            coordinatorProxy,
-            coordinatorImpl,
-            abi.encodeCall(CvmCoordinator.initialize, (owner, verifier, ttl))
+            coordinatorProxy, coordinatorImpl, abi.encodeCall(CvmCoordinator.initialize, (owner, verifier, ttl))
         );
 
         if (owner == deployer && vm.envExists("COMPOSE_HASH")) {
@@ -77,9 +75,7 @@ contract DeployOracle is Script, ProxyUtils, AddressProviderOps {
         address routerProxy = _deployInitGuardProxy(guard, owner);
         address routerImpl = address(new CvmRouter());
         _upgradeAndCall(
-            routerProxy,
-            routerImpl,
-            abi.encodeCall(CvmRouter.initialize, (owner, coordinatorProxy, routerConfig))
+            routerProxy, routerImpl, abi.encodeCall(CvmRouter.initialize, (owner, coordinatorProxy, routerConfig))
         );
 
         _tryRegisterName(deployer, Keys.CVM_COORDINATOR, coordinatorProxy);

@@ -41,7 +41,6 @@ interface IFeeRouterHub {
  * @custom:security-contact security@islalabs.co
  */
 contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker {
-
     // --------------------------------------------
     //  Config
     // --------------------------------------------
@@ -149,7 +148,9 @@ contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker 
         LifecycleReason reason,
         uint32[] calldata effectiveMins
     ) external {
-        if (msg.sender != owner() && msg.sender != eligibilityVerifier) revert Errors.Unauthorized();
+        if (msg.sender != owner() && msg.sender != eligibilityVerifier) {
+            revert Errors.Unauthorized();
+        }
 
         uint256 length = playerIds.length;
         if (effectiveMins.length != 0 && effectiveMins.length != length) {

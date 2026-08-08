@@ -1,7 +1,4 @@
 {
-  "lib/chainlink-evm": {
-    "rev": "c31017a32737920234a1786ab54c3641bf975adf"
-  },
   "lib/doppler": {
     "rev": "bda077cf05c834f3bb5eb311f5b86376910d7912"
   },

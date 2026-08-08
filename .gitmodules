@@ -4,6 +4,3 @@
 [submodule "lib/doppler"]
 	path = lib/doppler
 	url = https://github.com/whetstoneresearch/doppler
-[submodule "lib/chainlink-evm"]
-	path = lib/chainlink-evm
-	url = https://github.com/smartcontractkit/chainlink-evm

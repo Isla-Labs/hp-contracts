@@ -31,7 +31,7 @@ enum CvmJob {
     HistoricalDms,
     /// @dev DopplerLocker launch: pin IPFS metadata + mine `0x22`/`0x42` salts; returns `baseURI`.
     FinalConfig,
-    /// @dev TransferLocker ChangedLeague: resolve destination league + `activeTournamentIds[]`.
+    /// @dev TransferLocker ChangedLeague / Reactivate: resolve league + `activeTournamentIds[]`.
     ///      Args: `abi.encode(bytes32 playerId)`
     ///      Response: `abi.encode(bytes32 newLeagueId, bytes32[] activeTournamentIds)`
     ///      (`activeTournamentIds` must include `newLeagueId`; TransferLocker validates before apply.)

@@ -31,9 +31,10 @@ interface IFeeRouterHub {
  *      0) EligibilityVerifier (or Orchestrator) enqueues via `enqueueLifecycle`.
  *      1) 24h review window (`queueWait`); owner may `unqueueAsset`.
  *      2) Anyone calls `processLifecycle` after wait (rate-limited):
- *           - ContinuityUnderThreshold / LeftLeague → `PlayerSetRegistry.setStatus(INACTIVE)`
- *           - Reactivate → topology check + `BONDING`/`GRADUATED` from `activePool.hooks`
- *           - ChangedLeague → `CvmJob.LeagueTransfer` → fulfill → `setLeagueId`
+ *           - ContinuityUnderThreshold / LeftLeague → `setStatus(INACTIVE)`
+ *             (unregisters vaults for live set; clears `leagueId` / `activeTournaments`)
+ *           - ChangedLeague / Reactivate → `CvmJob.LeagueTransfer` → fulfill →
+ *             `setLeagueId` (+ Reactivate: `setStatus(BONDING|GRADUATED)` from pool hooks)
  *
  *      Registry writes relay through `Orchestrator.execute` (this proxy must hold
  *      `AUTHORIZED_CONTRACT`).
@@ -255,7 +256,8 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
             LifecycleReason reason = e.reason;
             bytes32 playerId = e.playerId;
 
-            if (reason == LifecycleReason.ChangedLeague) {
+            // Topology remap (transfer) or restore-from-INACTIVE (reactivate): oracle first.
+            if (reason == LifecycleReason.ChangedLeague || reason == LifecycleReason.Reactivate) {
                 requestId = _sendOracleRequest(CvmJob.LeagueTransfer, abi.encode(playerId));
                 _oraclePlayerId[requestId] = playerId;
                 e.status = LifecycleQueueStatus.AwaitingLeagueTransfer;
@@ -263,15 +265,8 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
                 return requestId;
             }
 
-            PlayerStatus status;
-            if (reason == LifecycleReason.Reactivate) {
-                _requireFeeTopologyConsistent(playerId);
-                status = _resolveReactivateStatus(playerId);
-            } else {
-                // ContinuityUnderThreshold / LeftLeague
-                status = PlayerStatus.INACTIVE;
-            }
-
+            // ContinuityUnderThreshold / LeftLeague → soft-inactive / deactivate
+            PlayerStatus status = PlayerStatus.INACTIVE;
             _exec(address(playerSetRegistry), abi.encodeCall(IPlayerSetRegistry.setStatus, (playerId, status)));
             emit Events.LifecycleApplied(playerId, reason, status);
             _removeAt(i);
@@ -309,13 +304,20 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
             return;
         }
 
+        LifecycleReason reason = _pending[index].reason;
+
         _exec(
             address(playerSetRegistry),
             abi.encodeCall(IPlayerSetRegistry.setLeagueId, (playerId, newLeagueId, activeTournamentIds))
         );
-        emit Events.LifecycleApplied(
-            playerId, LifecycleReason.ChangedLeague, playerSetRegistry.getPlayerSet(playerId).status
-        );
+
+        PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
+        if (reason == LifecycleReason.Reactivate) {
+            status = _resolveReactivateStatus(playerId);
+            _exec(address(playerSetRegistry), abi.encodeCall(IPlayerSetRegistry.setStatus, (playerId, status)));
+        }
+
+        emit Events.LifecycleApplied(playerId, reason, status);
         _removeAt(index);
     }
 
@@ -370,6 +372,7 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
         e.queuedAt = uint64(block.timestamp);
     }
 
+    /// @dev Hub alignment only — live vault registration is not required for claims.
     function _requireFeeTopologyConsistent(bytes32 playerId) internal view {
         PlayerSet memory set = playerSetRegistry.getPlayerSet(playerId);
 
@@ -385,13 +388,6 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
         address actualHub = IFeeRouterHub(feeRouter).pbrFeeHub();
         if (actualHub != expectedHub) {
             revert Errors.FeeHubMismatch(playerId, leagueId, expectedHub, actualHub);
-        }
-
-        address domesticTreasury = tournamentRegistry.getPbrTreasury(leagueId);
-        address vault = set.vaultData.playerVault;
-
-        if (vault != address(0) && !tournamentRegistry.isVaultRegistered(leagueId, vault)) {
-            revert Errors.VaultNotOnLeagueTreasury(playerId, leagueId, domesticTreasury, vault);
         }
     }
 

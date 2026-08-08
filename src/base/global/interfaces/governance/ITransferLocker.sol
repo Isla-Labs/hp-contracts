@@ -27,8 +27,9 @@ interface ITransferLocker {
 
     /**
      * @notice Finalize the next mature `Queued` entry (anyone; rate-limited).
-     * @dev Continuity / LeftLeague → `INACTIVE`. Reactivate → `BONDING`/`GRADUATED`.
-     *      ChangedLeague → `CvmJob.LeagueTransfer` (returns `requestId`; apply on fulfill).
+     * @dev Continuity / LeftLeague → `INACTIVE` (clears league / actives, unregisters vaults).
+     *      ChangedLeague / Reactivate → `CvmJob.LeagueTransfer` (apply on fulfill:
+     *      `setLeagueId`, then Reactivate also `setStatus(BONDING|GRADUATED)`).
      */
     function processLifecycle() external returns (bytes32 requestId);
 
@@ -45,8 +46,8 @@ interface ITransferLocker {
     function pendingLifecycle(uint256 offset, uint256 limit) external view returns (PendingLifecycle[] memory out);
 
     /**
-     * @notice Reverts unless `leagueId → FeeRouter.pbrFeeHub / PbrTreasury` topology matches.
-     * @dev Used before reactivate and by offchain scanners.
+     * @notice Reverts unless `leagueId → FeeRouter.pbrFeeHub` matches (when league is set).
+     * @dev Does not require live vault registration (claims use snapshot-era points).
      */
     function requireFeeTopologyConsistent(bytes32 playerId) external view;
 }

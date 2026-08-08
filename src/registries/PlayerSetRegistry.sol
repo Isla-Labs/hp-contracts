@@ -182,6 +182,9 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
     /**
      * @notice Updates lifecycle status and fans out FeeRouter / vault active / treasury membership.
      * @dev TransferLocker / Orchestrator → here (SoT).
+     *      `INACTIVE`: unregister vaults from current topology, then clear `leagueId` /
+     *      `activeTournaments` (discovery emptied; historical claims use snapshot-era points).
+     *      Active statuses: register vaults on the (already written) tournament set.
      */
     function setStatus(bytes32 playerId, PlayerStatus status) external onlyOwner {
         PlayerSet storage set = _requirePlayer(playerId);
@@ -200,6 +203,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
 
         if (status == PlayerStatus.INACTIVE) {
             _syncVaultMembership(set, vault, false);
+            _clearTournamentMembership(playerId, set);
         } else {
             _syncVaultMembership(set, vault, true);
         }
@@ -361,6 +365,20 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
     function _requirePlayer(bytes32 playerId) internal view returns (PlayerSet storage set) {
         set = _playerSets[playerId];
         if (set.tokenData.token == address(0)) revert Errors.NotFound();
+    }
+
+    /// @dev Empty discovery index after deactivate (vaults already unregistered).
+    function _clearTournamentMembership(bytes32 playerId, PlayerSet storage set) private {
+        bytes32[] storage active = set.tournamentData.activeTournaments;
+        while (active.length != 0) {
+            bytes32 removed = active[active.length - 1];
+            active.pop();
+            emit Events.ActiveTournamentRemoved(playerId, removed);
+        }
+        if (set.tournamentData.leagueId != bytes32(0)) {
+            set.tournamentData.leagueId = bytes32(0);
+            emit Events.LeagueIdUpdated(playerId, bytes32(0));
+        }
     }
 
     /**

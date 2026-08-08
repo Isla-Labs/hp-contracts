@@ -28,6 +28,9 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  *
  *      Vault membership SoT is `TournamentRegistry`. This contract keeps a local `_vaults` /
  *      `isVault` cache so crank paths never external-call the registry for the set.
+ *      Live distribution (`settle` / snapshots) requires `isVault`; historical `payClaim`
+ *      gates on snapshot-era `vaultPoints[season][round][vault] > 0` so unregister does not
+ *      strand claimable rounds.
  *
  *      Crank: `lock()` → `snapshotBatch()` → `settle(...)`.
  *      Wrap: lock of `finalRound` sets `tradingRound = 1`; settle advances `seasonId`.
@@ -298,6 +301,11 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     //  Distribution
     // --------------------------------------------
 
+    /**
+     * @notice Pay a staker's PBR share for a claimable round.
+     * @dev Caller must be the vault. Does **not** require live `isVault` — eligibility is
+     *      snapshot-era `vaultPoints[season][roundNumber][vault] > 0` (set at settle).
+     */
     function payClaim(
         uint16 season,
         uint32 roundNumber,
@@ -305,7 +313,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         uint256 s,
         uint256 S
     ) external nonReentrant returns (uint256 payout) {
-        if (!isVault[msg.sender]) revert Errors.UnknownVault(msg.sender);
         if (user == address(0)) revert Errors.ZeroAddress();
 
         RoundState storage round = _rounds[season][roundNumber];
@@ -314,6 +321,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         }
         if (s == 0 || S == 0 || round.R == 0) revert Errors.NothingToClaim();
 
+        // Snapshot-era membership (not live `isVault`) — vault may have been unregistered since.
         uint256 m = vaultPoints[season][roundNumber][msg.sender];
         if (m == 0) revert Errors.NothingToClaim();
 

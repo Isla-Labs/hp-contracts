@@ -31,11 +31,6 @@ contract StakedTokenTest is VaultsTestBase {
         assertEq(stToken.balanceOf(user), 3 ether);
     }
 
-    function test_snapshot_onlyVault() public {
-        vm.expectRevert(Errors.OnlyVault.selector);
-        stToken.snapshot();
-    }
-
     function test_transfer_p2p_reverts() public {
         _stake(user, vault, 1 ether);
         vm.prank(user);
@@ -43,23 +38,19 @@ contract StakedTokenTest is VaultsTestBase {
         stToken.transfer(user2, 0.5 ether);
     }
 
-    function test_snapshot_balanceOfAt_totalSupplyAt() public {
+    function test_balanceOfAt_totalSupplyAt_byBlock() public {
+        // Explicit blocks avoid via-IR quirks with capturing `block.number` into locals.
+        vm.roll(100);
         _stake(user, vault, 10 ether);
+        vm.roll(101);
 
-        address fakeTreasury = makeAddr("fakeTreasury");
-        tournamentRegistry.setPbrTreasury(TOURNAMENT, fakeTreasury);
-        vm.prank(fakeTreasury);
-        (uint256 snapId, bool didSnap) = vault.snapshot(TOURNAMENT, SEASON, 1);
-        assertEq(snapId, 1);
-        assertTrue(didSnap);
-
-        assertEq(stToken.balanceOfAt(user, snapId), 10 ether);
-        assertEq(stToken.totalSupplyAt(snapId), 10 ether);
+        assertEq(stToken.balanceOfAt(user, 100), 10 ether);
+        assertEq(stToken.totalSupplyAt(100), 10 ether);
 
         _stake(user2, vault, 4 ether);
         assertEq(stToken.balanceOf(user2), 4 ether);
-        assertEq(stToken.balanceOfAt(user2, snapId), 0);
-        assertEq(stToken.totalSupplyAt(snapId), 10 ether);
+        assertEq(stToken.balanceOfAt(user2, 100), 0);
+        assertEq(stToken.totalSupplyAt(100), 10 ether);
         assertEq(stToken.totalSupply(), 14 ether);
     }
 }

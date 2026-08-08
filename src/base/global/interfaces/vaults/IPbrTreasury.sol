@@ -6,24 +6,23 @@ import { RoundState } from "@types/vaults/VaultTypes.sol";
 /**
  * @title IPbrTreasury
  * @notice Cross-contract surface for single-tournament PBR pots.
- * @dev Crank: `lock` → `snapshotBatch` → `requestSettle` (per-fixture zk) → `applyFixtureSettlement`*
- *      → Claimable. Claims read `vaultPoints` (simple `claim` / `claimAll`).
+ * @dev Crank: `lockVaults` → `requestSettle` → `applyFixtureSettlement`* → Claimable.
  */
 interface IPbrTreasury {
     function syncRegisterVault(address vault) external;
 
     function syncUnregisterVault(address vault) external;
 
-    function lock() external;
+    /// @notice Vault push of live `S`. Returns target round; `joined` if newly utilized.
+    function syncVaultStake(uint256 newTotalStaked)
+        external
+        returns (uint16 season, uint32 roundNumber, bool joined);
 
-    function snapshotBatch() external returns (uint256 processed, bool done);
+    /// @notice Freeze `R` + `lockBlock` + utilized set for the active round (O(1)).
+    function lockVaults() external;
 
     function requestSettle() external returns (bytes32[] memory requestIds);
 
-    /**
-     * @notice Apply one fixture's zk-proven scores (≤32). Opens Claimable when all fixtures land.
-     * @dev `PbrSettle` only.
-     */
     function applyFixtureSettlement(
         bytes32 fixtureId,
         bytes32 fixtureDigest,

@@ -8,11 +8,9 @@ pragma solidity ^0.8.34;
 interface IStakedToken {
     function vault() external view returns (address);
 
-    function snapshot() external returns (uint256 snapId);
+    function balanceOfAt(address account, uint256 blockNumber) external view returns (uint256);
 
-    function balanceOfAt(address account, uint256 snapshotId) external view returns (uint256);
-
-    function totalSupplyAt(uint256 snapshotId) external view returns (uint256);
+    function totalSupplyAt(uint256 blockNumber) external view returns (uint256);
 
     function mint(address to, uint256 amount) external;
 

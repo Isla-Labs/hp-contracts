@@ -20,15 +20,14 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
 
 /**
  * @title PbrTreasury
- * @notice Single-tournament PBR pot: lock / snapshot / per-fixture zk settle / pull claims.
- * @dev Crank: `lock` → `snapshotBatch` → `requestSettle` → `applyFixtureSettlement`* → Claimable.
- *      See `../data/pbrSettleFlow.md`.
+ * @notice Single-tournament PBR pot: O(1) lock / per-fixture zk settle / pull claims.
+ * @dev Crank: `lockVaults` → `requestSettle` → `applyFixtureSettlement`* → Claimable.
+ *      Vaults push live `S` via `syncVaultStake`; cut-off is `lockBlock` on stToken checkpoints.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IPbrTreasury {
-    uint256 public constant SNAPSHOT_BATCH_SIZE = 50;
     uint256 public constant MAX_FIXTURE_PLAYERS = 32;
     uint256 public constant LOCK_BPS = 8000;
 
@@ -51,12 +50,9 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     address[] private _vaults;
     mapping(address vault => uint256) private _vaultIndex; // 1-based
 
-    uint256 public snapshotVaultCount;
-    uint256 public snapshotCursor;
-    bool public snapshotPending;
-
     mapping(uint16 season => mapping(uint32 roundNumber => address[])) private _utilizedVaults;
     mapping(uint16 season => mapping(uint32 roundNumber => mapping(address vault => bool))) private _isUtilized;
+    mapping(uint16 season => mapping(uint32 roundNumber => mapping(address vault => uint256))) private _utilizedIndex; // 1-based
 
     mapping(uint16 season => mapping(uint32 roundNumber => mapping(bytes32 fixtureId => bool))) private _fixtureExpected;
     mapping(uint16 season => mapping(uint32 roundNumber => mapping(bytes32 fixtureId => bool))) private _fixtureSettled;
@@ -115,10 +111,22 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         _vaults.push(vault);
         _vaultIndex[vault] = _vaults.length;
         emit Events.VaultRegistered(vault);
+
+        uint256 S = IPlayerVault(vault).totalStaked();
+        if (S > 0) {
+            (uint16 season, uint32 roundNumber) = _stakeTarget();
+            _setUtilized(season, roundNumber, vault, true);
+            IPlayerVault(vault).noteUtilizedRound(tournamentId, season, roundNumber);
+        }
     }
 
     function syncUnregisterVault(address vault) external onlyTournamentRegistry {
         if (!isVault[vault]) revert Errors.UnknownVault(vault);
+
+        (uint16 season, uint32 roundNumber) = _stakeTarget();
+        if (_isUtilized[season][roundNumber][vault]) {
+            _setUtilized(season, roundNumber, vault, false);
+        }
 
         uint256 index0 = _vaultIndex[vault] - 1;
         uint256 last = _vaults.length - 1;
@@ -133,11 +141,70 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         emit Events.VaultUnregistered(vault);
     }
 
+    /**
+     * @notice Push live vault `S`. Updates utilized membership for the open stake-target round.
+     * @dev Only registered vaults. While active round is Locked/SettlePending, writes go to `tradingRound`.
+     *      Caller vault should `noteUtilizedRound` when `joined` (avoids reentrancy into vault stake).
+     */
+    function syncVaultStake(uint256 newTotalStaked)
+        external
+        returns (uint16 season, uint32 roundNumber, bool joined)
+    {
+        if (!isVault[msg.sender]) revert Errors.UnknownVault(msg.sender);
+        (season, roundNumber) = _stakeTarget();
+
+        bool was = _isUtilized[season][roundNumber][msg.sender];
+        bool isUtil = newTotalStaked > 0;
+        if (was != isUtil) {
+            _setUtilized(season, roundNumber, msg.sender, isUtil);
+            joined = isUtil;
+        }
+    }
+
+    /// @dev Round that accepts live stake membership updates.
+    function _stakeTarget() internal view returns (uint16 season, uint32 roundNumber) {
+        season = seasonId;
+        uint32 active = activeRound;
+        RoundStatus status = _rounds[season][active].status;
+        if (status == RoundStatus.None) {
+            roundNumber = active;
+        } else {
+            // Locked / SettlePending / Claimable (briefly): build next trading round set.
+            roundNumber = tradingRound;
+        }
+    }
+
+    function _setUtilized(uint16 season, uint32 roundNumber, address vault, bool utilized) internal {
+        if (utilized) {
+            if (_isUtilized[season][roundNumber][vault]) return;
+            _isUtilized[season][roundNumber][vault] = true;
+            _utilizedVaults[season][roundNumber].push(vault);
+            _utilizedIndex[season][roundNumber][vault] = _utilizedVaults[season][roundNumber].length;
+        } else {
+            if (!_isUtilized[season][roundNumber][vault]) return;
+            uint256 index0 = _utilizedIndex[season][roundNumber][vault] - 1;
+            address[] storage list = _utilizedVaults[season][roundNumber];
+            uint256 last = list.length - 1;
+            if (index0 != last) {
+                address moved = list[last];
+                list[index0] = moved;
+                _utilizedIndex[season][roundNumber][moved] = index0 + 1;
+            }
+            list.pop();
+            delete _utilizedIndex[season][roundNumber][vault];
+            _isUtilized[season][roundNumber][vault] = false;
+        }
+    }
+
     // --------------------------------------------
-    //  Lock / snapshot
+    //  Lock
     // --------------------------------------------
 
-    function lock() external {
+    /**
+     * @notice Freeze rewards and stake cut-off for the active round.
+     * @dev O(1): sets `lockBlock = block.number - 1` (or 0 on genesis). Utilized set is already mirrored.
+     */
+    function lockVaults() external {
         if (tradingRound != activeRound) revert Errors.NothingDue();
 
         uint16 season = seasonId;
@@ -164,66 +231,17 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         round.R = R;
         round.startTime = schedule.startTime;
         round.endTime = schedule.endTime;
+        round.lockBlock = block.number == 0 ? 0 : uint64(block.number - 1);
 
         tradingRound = roundNumber >= finalRound ? 1 : roundNumber + 1;
-        snapshotVaultCount = _vaults.length;
-        snapshotCursor = 0;
-        snapshotPending = true;
 
         emit Events.RoundLocked(season, roundNumber, R, round.startTime, round.endTime, tradingRound);
-    }
-
-    function snapshotBatch() external returns (uint256 processed, bool done) {
-        if (!snapshotPending) return (0, true);
-
-        uint16 season = seasonId;
-        uint32 roundNumber = activeRound;
-        RoundState storage round = _rounds[season][roundNumber];
-        if (round.status != RoundStatus.Locked) {
-            revert Errors.BadRoundStatus(season, roundNumber, round.status, RoundStatus.Locked);
-        }
-
-        uint256 length = snapshotVaultCount;
-        uint256 cursor = snapshotCursor;
-        if (cursor >= length) {
-            snapshotPending = false;
-            emit Events.SnapshotBatchProgress(season, roundNumber, cursor, true);
-            return (0, true);
-        }
-
-        uint256 end = cursor + SNAPSHOT_BATCH_SIZE;
-        if (end > length) end = length;
-
-        bytes32 tid = tournamentId;
-        address[] storage utilized = _utilizedVaults[season][roundNumber];
-        for (uint256 i = cursor; i < end;) {
-            address vault = _vaults[i];
-            (uint256 snapId, bool didSnap) = IPlayerVault(vault).snapshot(tid, season, roundNumber);
-            if (didSnap) {
-                utilized.push(vault);
-                _isUtilized[season][roundNumber][vault] = true;
-                emit Events.VaultSnapshotted(season, roundNumber, vault, snapId);
-            }
-            unchecked {
-                ++i;
-                ++processed;
-            }
-        }
-
-        snapshotCursor = end;
-        done = end >= length;
-        if (done) snapshotPending = false;
-        emit Events.SnapshotBatchProgress(season, roundNumber, end, done);
     }
 
     // --------------------------------------------
     //  Settle (per-fixture zk)
     // --------------------------------------------
 
-    /**
-     * @notice Open per-fixture settle jobs after the round ends (snapshot must be complete).
-     * @dev Empty utilized set opens `Claimable` immediately (no oracle). Otherwise fans out via `PbrSettle`.
-     */
     function requestSettle() external returns (bytes32[] memory requestIds) {
         address settle_ = pbrSettle;
         if (settle_ == address(0)) revert Errors.ZeroAddress();
@@ -237,7 +255,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         if (block.timestamp < round.endTime) {
             revert Errors.RoundNotEnded(season, roundNumber, round.endTime, block.timestamp);
         }
-        if (snapshotPending) revert Errors.SnapshotPending();
 
         bytes32 utilizedHash = keccak256(abi.encode(_utilizedVaults[season][roundNumber]));
         round.status = RoundStatus.SettlePending;
@@ -270,10 +287,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         emit Events.RoundSettleRequested(season, roundNumber, settle_, utilizedHash, uint32(fixtureCount));
     }
 
-    /**
-     * @notice Apply one fixture's scores. Accumulates `M_adj` over utilized vaults only.
-     * @dev Last fixture opens `Claimable`. Max 32 players per fixture.
-     */
     function applyFixtureSettlement(
         bytes32 fixtureId,
         bytes32 fixtureDigest,

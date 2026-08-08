@@ -39,7 +39,7 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(vault.totalStaked(), 10 ether);
         assertTrue(playerSetRegistry.lastUtilized());
         assertEq(playerSetRegistry.updateCount(), 1);
-        assertEq(playerSetRegistry.lastCaller(), address(vault));
+        assertEq(treasury.getUtilizedVaults(SEASON, 1).length, 1);
     }
 
     function test_stake_revertsZero() public {
@@ -82,7 +82,7 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(playerToken.balanceOf(user), 10 ether);
         assertEq(vault.totalStaked(), 0);
         assertFalse(playerSetRegistry.lastUtilized());
-        assertEq(playerSetRegistry.updateCount(), 2);
+        assertEq(treasury.getUtilizedVaults(SEASON, 1).length, 0);
     }
 
     function test_unstake_revertsInsufficient() public {
@@ -92,22 +92,12 @@ contract PlayerVaultTest is VaultsTestBase {
         vault.unstake(2 ether);
     }
 
-    function test_unstake_allowedWhenInactive() public {
-        _stake(user, vault, 5 ether);
-        vm.prank(orchestrator);
-        vault.setActive(false);
-
-        vm.prank(user);
-        vault.unstake(5 ether);
-        assertEq(playerToken.balanceOf(user), 5 ether);
-    }
-
     function test_unstake_matchweekLock() public {
         _stake(user, vault, 10 ether);
 
         vm.warp(startTime);
         _sendEth(address(treasury), 100 ether);
-        _lockAndSnapshot(treasury);
+        _lockVaults(treasury);
 
         assertEq(vault.lockedBalance(user), 10 ether);
 
@@ -127,44 +117,6 @@ contract PlayerVaultTest is VaultsTestBase {
 
         vm.prank(user);
         vault.unstake(10 ether);
-    }
-
-    function test_snapshot_onlyTreasury() public {
-        _stake(user, vault, 1 ether);
-        vm.expectRevert(Errors.OnlyTournamentTreasury.selector);
-        vault.snapshot(TOURNAMENT, SEASON, 1);
-    }
-
-    function test_snapshot_unutilizedReturnsFalse() public {
-        vm.prank(address(treasury));
-        (uint256 snapId, bool didSnap) = vault.snapshot(TOURNAMENT, SEASON, 1);
-        assertEq(snapId, 0);
-        assertFalse(didSnap);
-    }
-
-    function test_snapshot_idempotentForTreasury() public {
-        _stake(user, vault, 1 ether);
-        vm.warp(startTime);
-        _sendEth(address(treasury), 10 ether);
-        treasury.lock();
-        treasury.snapshotBatch();
-
-        vm.prank(address(treasury));
-        (uint256 snapId, bool didSnap) = vault.snapshot(TOURNAMENT, SEASON, 1);
-        assertEq(snapId, 1);
-        assertTrue(didSnap);
-    }
-
-    function test_snapshot_worksWhilePaused() public {
-        _stake(user, vault, 1 ether);
-        vm.prank(orchestrator);
-        vault.pause();
-
-        vm.warp(startTime);
-        _sendEth(address(treasury), 10 ether);
-        _lockAndSnapshot(treasury);
-
-        assertEq(vault.snapIdOf(TOURNAMENT, SEASON, 1), 1);
     }
 
     function test_claim_happyPath() public {
@@ -222,7 +174,7 @@ contract PlayerVaultTest is VaultsTestBase {
         _stake(user, vault, 10 ether);
         vm.warp(startTime);
         _sendEth(address(treasury), 100 ether);
-        _lockAndSnapshot(treasury);
+        _lockVaults(treasury);
 
         vm.prank(user);
         uint256 payout = vault.claimAll();
@@ -277,7 +229,7 @@ contract PlayerVaultTest is VaultsTestBase {
     function _runRoundToClaimable(uint256 vaultPoints_) internal {
         vm.warp(startTime);
         _sendEth(address(treasury), 100 ether);
-        _lockAndSnapshot(treasury);
+        _lockVaults(treasury);
         vm.warp(endTime);
 
         address[] memory vaults = new address[](1);

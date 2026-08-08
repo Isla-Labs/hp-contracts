@@ -55,6 +55,10 @@ abstract contract VaultsTestBase is Test {
         ap.setName(Addresses.PLAYER_SET_REGISTRY, address(playerSetRegistry));
         ap.setName(Addresses.PBR_SETTLE, address(pbrSettle));
 
+        bytes32[] memory tournaments = new bytes32[](1);
+        tournaments[0] = TOURNAMENT;
+        playerSetRegistry.setActiveTournaments(PLAYER, tournaments);
+
         vaultBeacon = new UpgradeableBeacon(address(new PlayerVault(address(ap))), orchestrator);
         treasuryBeacon = new UpgradeableBeacon(address(new PbrTreasury(address(ap))), orchestrator);
 
@@ -84,6 +88,10 @@ abstract contract VaultsTestBase is Test {
         vault = PlayerVault(payable(address(new BeaconProxy(address(vaultBeacon), ""))));
         stToken = new StakedToken("Staked Player", "stPLY", address(vault));
         vault.initialize(playerId, address(playerToken), address(stToken));
+
+        bytes32[] memory tournaments = new bytes32[](1);
+        tournaments[0] = TOURNAMENT;
+        playerSetRegistry.setActiveTournaments(playerId, tournaments);
     }
 
     function _deployTreasury(bytes32 tournamentId, uint16 season) internal returns (PbrTreasury treasury) {
@@ -134,14 +142,13 @@ abstract contract VaultsTestBase is Test {
         require(CreateXAddresses.CREATE_X.code.length > 0, "CreateX etch empty");
     }
 
-    function _lockAndSnapshot(PbrTreasury treasury) internal {
-        treasury.lock();
-        (uint256 processed, bool done) = treasury.snapshotBatch();
-        processed;
-        require(done, "snapshot incomplete");
+    function _lockVaults(PbrTreasury treasury) internal {
+        // Cut-off is previous block — ensure stake checkpoints are in the past.
+        vm.roll(block.number + 1);
+        treasury.lockVaults();
     }
 
-    /// @dev `requestSettle` → apply fixture scores → Claimable. `M_adj` = sum of applied utilized points.
+    /// @dev `requestSettle` → apply fixture scores → Claimable.
     function _settle(PbrTreasury treasury, address[] memory vaults, uint256[] memory points) internal {
         (uint16 season, uint32 round,) = treasury.getCursors();
         RoundStatus status = treasury.getRound(season, round).status;

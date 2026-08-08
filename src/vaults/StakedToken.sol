@@ -6,28 +6,25 @@ import { ERC20Permit } from "@openzeppelin/token/ERC20/extensions/ERC20Permit.so
 
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
-import { ERC20Snapshot } from "@base/abstract/ERC20Snapshot.sol";
+import { ERC20BlockCheckpoint } from "@base/abstract/ERC20BlockCheckpoint.sol";
 
 /**
  * @title StakedToken
  * @notice Soulbound receipt for player-token stakes in a single `PlayerVault`.
- * @dev Transferable only to/from `vault`. Snapshot + mint/burn are vault-gated.
+ * @dev Transferable only to/from `vault`. Block checkpoints enable `balanceOfAt` / `totalSupplyAt`
+ *      for PBR cut-offs without per-round `snapshot()` calls.
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract StakedToken is ERC20, ERC20Snapshot, ERC20Permit {
-    /// @notice PlayerVault that solely controls mint/burn/snapshot and is the only transfer counterparty
+contract StakedToken is ERC20, ERC20BlockCheckpoint, ERC20Permit {
+    /// @notice PlayerVault that solely controls mint/burn and is the only transfer counterparty
     address public immutable vault;
 
     constructor(string memory name_, string memory symbol_, address vault_) ERC20(name_, symbol_) ERC20Permit(name_) {
         if (vault_ == address(0)) revert Errors.ZeroAddress();
         vault = vault_;
-    }
-
-    /// @notice Creates a new balance/supply snapshot. Vault-only.
-    function snapshot() external returns (uint256) {
-        if (msg.sender != vault) revert Errors.OnlyVault();
-        return _snapshot();
+        emit Events.StakedTokenCreated(vault_, address(this), name_, symbol_);
     }
 
     /// @notice Mints staked receipts 1:1 with deposited player tokens. Vault-only.
@@ -43,7 +40,7 @@ contract StakedToken is ERC20, ERC20Snapshot, ERC20Permit {
     }
 
     /// @dev Restrict peer-to-peer transfers; mint/burn and vault legs are allowed.
-    function _update(address from, address to, uint256 value) internal override(ERC20, ERC20Snapshot) {
+    function _update(address from, address to, uint256 value) internal override(ERC20, ERC20BlockCheckpoint) {
         if (from != address(0) && to != address(0)) {
             if (from != vault && to != vault) revert Errors.OnlyVault();
         }

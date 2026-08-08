@@ -15,8 +15,6 @@ library VaultsEvents {
         uint16 indexed season, uint32 roundNumber, uint256 R, uint64 startTime, uint64 endTime, uint32 newTradingRound
     );
     event SeasonWrapped(uint16 indexed settledSeason, uint16 newSeason);
-    event VaultSnapshotted(uint16 indexed season, uint32 roundNumber, address indexed vault, uint256 snapId);
-    event SnapshotBatchProgress(uint16 indexed season, uint32 roundNumber, uint256 cursor, bool done);
     event RoundSettleRequested(
         uint16 indexed season,
         uint32 roundNumber,
@@ -45,9 +43,6 @@ library VaultsEvents {
     event ActiveUpdated(bytes32 indexed playerId, bool isActive);
     event Staked(address indexed user, uint256 amount, uint256 newTotalStaked);
     event Unstaked(address indexed user, uint256 amount, uint256 newTotalStaked);
-    event SnapshotTaken(
-        bytes32 indexed tournamentId, uint16 indexed seasonId, uint32 roundNumber, uint256 snapId, uint256 totalSupply
-    );
     event Claimed(
         address indexed user, bytes32 indexed tournamentId, uint16 indexed seasonId, uint32 roundNumber, uint256 payout
     );

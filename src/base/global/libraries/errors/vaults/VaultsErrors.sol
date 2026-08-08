@@ -20,8 +20,6 @@ library VaultsErrors {
     error ZeroSeason();
     error LengthMismatch();
     error NothingDue();
-    error NothingToSnapshot();
-    error SnapshotPending();
     error NoFixtures();
     error UnknownFixture(bytes32 fixtureId);
     error FixtureAlreadySettled(bytes32 fixtureId);
@@ -42,7 +40,7 @@ library VaultsErrors {
     error OnlyTournamentTreasury();
     error InsufficientStake();
     error MatchweekLock();
-    error NoSnapshot(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber);
+    error RoundNotUtilized(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber);
     error AlreadyClaimed();
     error UnknownTournamentTreasury(bytes32 tournamentId);
 

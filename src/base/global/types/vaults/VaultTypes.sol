@@ -3,13 +3,13 @@ pragma solidity ^0.8.34;
 
 /**
  * @title VaultTypes
- * @notice Shared types for PBR round settlement and vault snapshots.
+ * @notice Shared types for PBR round settlement and vault stake cut-offs.
  */
 
 /// @notice Lifecycle of a cup round's rewards pot
 enum RoundStatus {
     None,
-    /// @dev `R` frozen at mwStartTime; stake snapshots in progress / complete
+    /// @dev `R` + `lockBlock` frozen; stake cut-off is chain block
     Locked,
     /// @dev Per-fixture `SettleDms` jobs open; awaiting zk fulfills
     SettlePending,
@@ -27,4 +27,6 @@ struct RoundState {
     uint64 endTime;
     uint32 fixturesExpected;
     uint32 fixturesSettled;
+    /// @dev Inclusive cut-off: `balanceOfAt` / `totalSupplyAt` use this block (typically `lockTxBlock - 1`)
+    uint64 lockBlock;
 }

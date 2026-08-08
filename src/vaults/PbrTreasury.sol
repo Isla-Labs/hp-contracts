@@ -54,9 +54,11 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     mapping(uint16 season => mapping(uint32 roundNumber => mapping(address vault => bool))) private _isUtilized;
     mapping(uint16 season => mapping(uint32 roundNumber => mapping(address vault => uint256))) private _utilizedIndex; // 1-based
 
-    mapping(uint16 season => mapping(uint32 roundNumber => mapping(bytes32 fixtureId => bool))) private _fixtureExpected;
+    mapping(uint16 season => mapping(uint32 roundNumber => mapping(bytes32 fixtureId => bool))) private
+        _fixtureExpected;
     mapping(uint16 season => mapping(uint32 roundNumber => mapping(bytes32 fixtureId => bool))) private _fixtureSettled;
-    mapping(uint16 season => mapping(uint32 roundNumber => mapping(bytes32 fixtureId => bytes32))) public fixtureDigestOf;
+    mapping(uint16 season => mapping(uint32 roundNumber => mapping(bytes32 fixtureId => bytes32))) public
+        fixtureDigestOf;
 
     address public pbrSettle;
 
@@ -146,10 +148,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
      * @dev Only registered vaults. While active round is Locked/SettlePending, writes go to `tradingRound`.
      *      Caller vault should `noteUtilizedRound` when `joined` (avoids reentrancy into vault stake).
      */
-    function syncVaultStake(uint256 newTotalStaked)
-        external
-        returns (uint16 season, uint32 roundNumber, bool joined)
-    {
+    function syncVaultStake(uint256 newTotalStaked) external returns (uint16 season, uint32 roundNumber, bool joined) {
         if (!isVault[msg.sender]) revert Errors.UnknownVault(msg.sender);
         (season, roundNumber) = _stakeTarget();
 
@@ -333,9 +332,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         }
 
         done = round.fixturesSettled >= round.fixturesExpected;
-        emit Events.FixtureSettlementApplied(
-            season, roundNumber, fixtureId, fixtureDigest, written, round.M_adj, done
-        );
+        emit Events.FixtureSettlementApplied(season, roundNumber, fixtureId, fixtureDigest, written, round.M_adj, done);
 
         if (done) {
             _openClaimable(season, roundNumber, round, _utilizedVaults[season][roundNumber].length);

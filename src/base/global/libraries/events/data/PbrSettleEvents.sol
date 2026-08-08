@@ -33,7 +33,5 @@ library PbrSettleEvents {
         bytes32 indexed requestId, bytes32 indexed tournamentId, bytes32 indexed fixtureId, bytes reason
     );
 
-    event RoundSettleComplete(
-        bytes32 indexed tournamentId, uint16 season, uint32 roundNumber, uint32 fixturesSettled
-    );
+    event RoundSettleComplete(bytes32 indexed tournamentId, uint16 season, uint32 roundNumber, uint32 fixturesSettled);
 }

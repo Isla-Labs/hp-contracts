@@ -101,17 +101,14 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
 
         requestIds = new bytes32[](fixtureCount);
         for (uint256 i; i < fixtureCount;) {
-            requestIds[i] = _settleFixture(
-                treasury, tournamentId, season, roundNumber, schedule.fixtureIds[i], utilizedHash
-            );
+            requestIds[i] =
+                _settleFixture(treasury, tournamentId, season, roundNumber, schedule.fixtureIds[i], utilizedHash);
             unchecked {
                 ++i;
             }
         }
 
-        emit Events.RoundSettleOpened(
-            tournamentId, treasury, season, roundNumber, utilizedHash, uint32(fixtureCount)
-        );
+        emit Events.RoundSettleOpened(tournamentId, treasury, season, roundNumber, utilizedHash, uint32(fixtureCount));
     }
 
     /// @dev Open one `SettleDms` job for `fixtureId`.
@@ -154,9 +151,7 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         f.proofHash = bytes32(0);
         f.requestId = requestId;
 
-        emit Events.FixtureSettleRequested(
-            requestId, tournamentId, fixtureId, season, roundNumber, utilizedHash
-        );
+        emit Events.FixtureSettleRequested(requestId, tournamentId, fixtureId, season, roundNumber, utilizedHash);
     }
 
     // --------------------------------------------
@@ -200,9 +195,7 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         f.fixtureDigest = fixtureDigest;
         f.proofHash = proofHash;
 
-        bool done = IPbrTreasury(p.treasury).applyFixtureSettlement(
-            p.fixtureId, fixtureDigest, vaults, mwPoints
-        );
+        bool done = IPbrTreasury(p.treasury).applyFixtureSettlement(p.fixtureId, fixtureDigest, vaults, mwPoints);
 
         bytes32 rid = roundId(p.tournamentId, p.season, p.roundNumber);
         RoundSettlement storage round = _rounds[rid];
@@ -211,14 +204,10 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         }
         if (done || round.fixturesSettled >= round.fixturesExpected) {
             round.phase = RoundSettlePhase.Complete;
-            emit Events.RoundSettleComplete(
-                p.tournamentId, p.season, p.roundNumber, round.fixturesSettled
-            );
+            emit Events.RoundSettleComplete(p.tournamentId, p.season, p.roundNumber, round.fixturesSettled);
         }
 
-        emit Events.FixtureSettleProven(
-            requestId, p.tournamentId, p.fixtureId, fixtureDigest, proofHash, vaults.length
-        );
+        emit Events.FixtureSettleProven(requestId, p.tournamentId, p.fixtureId, fixtureDigest, proofHash, vaults.length);
     }
 
     // --------------------------------------------
@@ -241,11 +230,11 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
     }
 
     /// @inheritdoc IPbrSettle
-    function getRoundSettlement(bytes32 tournamentId, uint16 season, uint32 roundNumber)
-        external
-        view
-        returns (RoundSettlement memory)
-    {
+    function getRoundSettlement(
+        bytes32 tournamentId,
+        uint16 season,
+        uint32 roundNumber
+    ) external view returns (RoundSettlement memory) {
         return _rounds[roundId(tournamentId, season, roundNumber)];
     }
 

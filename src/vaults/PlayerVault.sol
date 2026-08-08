@@ -49,7 +49,8 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     }
 
     RoundKey[] private _utilizedRounds;
-    mapping(bytes32 tournamentId => mapping(uint16 seasonId => mapping(uint32 roundNumber => bool))) private _notedRound;
+    mapping(bytes32 tournamentId => mapping(uint16 seasonId => mapping(uint32 roundNumber => bool))) private
+        _notedRound;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
@@ -214,9 +215,7 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     function _noteRound(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber) internal {
         if (_notedRound[tournamentId_][seasonId_][roundNumber]) return;
         _notedRound[tournamentId_][seasonId_][roundNumber] = true;
-        _utilizedRounds.push(
-            RoundKey({ tournamentId: tournamentId_, seasonId: seasonId_, roundNumber: roundNumber })
-        );
+        _utilizedRounds.push(RoundKey({ tournamentId: tournamentId_, seasonId: seasonId_, roundNumber: roundNumber }));
     }
 
     function _claim(

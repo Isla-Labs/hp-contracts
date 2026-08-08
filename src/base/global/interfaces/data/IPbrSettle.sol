@@ -31,10 +31,11 @@ interface IPbrSettle {
 
     function pendingRequest(bytes32 fixtureJobId_) external view returns (bytes32 requestId);
 
-    function getRoundSettlement(bytes32 tournamentId, uint16 season, uint32 roundNumber)
-        external
-        view
-        returns (RoundSettlement memory);
+    function getRoundSettlement(
+        bytes32 tournamentId,
+        uint16 season,
+        uint32 roundNumber
+    ) external view returns (RoundSettlement memory);
 
     function getFixtureSettlement(
         bytes32 tournamentId,

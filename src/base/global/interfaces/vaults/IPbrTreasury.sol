@@ -14,9 +14,7 @@ interface IPbrTreasury {
     function syncUnregisterVault(address vault) external;
 
     /// @notice Vault push of live `S`. Returns target round; `joined` if newly utilized.
-    function syncVaultStake(uint256 newTotalStaked)
-        external
-        returns (uint16 season, uint32 roundNumber, bool joined);
+    function syncVaultStake(uint256 newTotalStaked) external returns (uint16 season, uint32 roundNumber, bool joined);
 
     /// @notice Freeze `R` + `lockBlock` + utilized set for the active round (O(1)).
     function lockVaults() external;

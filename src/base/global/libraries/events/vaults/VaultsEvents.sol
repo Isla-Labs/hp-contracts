@@ -16,11 +16,7 @@ library VaultsEvents {
     );
     event SeasonWrapped(uint16 indexed settledSeason, uint16 newSeason);
     event RoundSettleRequested(
-        uint16 indexed season,
-        uint32 roundNumber,
-        address indexed pbrSettle,
-        bytes32 utilizedHash,
-        uint32 fixtureCount
+        uint16 indexed season, uint32 roundNumber, address indexed pbrSettle, bytes32 utilizedHash, uint32 fixtureCount
     );
     event FixtureSettlementApplied(
         uint16 indexed season,

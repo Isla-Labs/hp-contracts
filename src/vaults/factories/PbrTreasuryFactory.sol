@@ -48,19 +48,23 @@ contract PbrTreasuryFactory is Initializable, AddressBook, Ownable, IPbrTreasury
      * @notice Deploy a vanity-capable tournament treasury and initialize it.
      * @param salt CreateX salt for the `BeaconProxy` (mine offchain for `0x99…`).
      */
-    function create(bytes32 tournamentId, uint16 initialSeason, bytes32 salt) external returns (address pbrTreasury) {
+    function create(
+        bytes32 tournamentId,
+        uint16 initialSeasonStartYear,
+        bytes32 salt
+    ) external returns (address pbrTreasury) {
         if (msg.sender != orchestrator) revert Errors.Unauthorized();
         if (tournamentId == bytes32(0)) revert Errors.ZeroId();
-        if (initialSeason == 0) revert Errors.ZeroSeason();
+        if (initialSeasonStartYear == 0) revert Errors.ZeroSeason();
         if (salt == bytes32(0)) revert Errors.ZeroSalt();
 
-        bytes memory initData = abi.encodeCall(PbrTreasury.initialize, (tournamentId, initialSeason));
+        bytes memory initData = abi.encodeCall(PbrTreasury.initialize, (tournamentId, initialSeasonStartYear));
 
         bytes memory initCode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), initData));
 
         pbrTreasury = CREATE_X.deployCreate3(salt, initCode);
 
-        emit Events.PbrTreasuryCreated(tournamentId, pbrTreasury, initialSeason);
+        emit Events.PbrTreasuryCreated(tournamentId, pbrTreasury, initialSeasonStartYear);
     }
 
     /**

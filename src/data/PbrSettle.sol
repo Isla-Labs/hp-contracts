@@ -72,7 +72,7 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
     /// @inheritdoc IPbrSettle
     function startRound(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         bytes32 utilizedHash
     ) external returns (bytes32[] memory requestIds) {
@@ -82,18 +82,18 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         if (treasury == address(0)) revert Errors.TreasuryMissing(tournamentId);
         if (msg.sender != treasury) revert Errors.Unauthorized();
 
-        bytes32 rid = roundId(tournamentId, season, roundNumber);
+        bytes32 rid = roundId(tournamentId, seasonStartYear, roundNumber);
         RoundSettlement storage round = _rounds[rid];
         if (round.phase == RoundSettlePhase.Requested) revert Errors.RoundSettlePending(rid);
 
-        RoundSchedule memory schedule = tournamentRegistry.getRound(tournamentId, season, roundNumber);
+        RoundSchedule memory schedule = tournamentRegistry.getRound(tournamentId, seasonStartYear, roundNumber);
         uint256 fixtureCount = schedule.fixtureIds.length;
         if (fixtureCount == 0) revert Errors.NoFixtures();
 
         round.phase = RoundSettlePhase.Requested;
         round.treasury = treasury;
         round.tournamentId = tournamentId;
-        round.season = season;
+        round.seasonStartYear = seasonStartYear;
         round.roundNumber = roundNumber;
         round.utilizedHash = utilizedHash;
         round.fixturesExpected = uint32(fixtureCount);
@@ -101,28 +101,31 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
 
         requestIds = new bytes32[](fixtureCount);
         for (uint256 i; i < fixtureCount;) {
-            requestIds[i] =
-                _settleFixture(treasury, tournamentId, season, roundNumber, schedule.fixtureIds[i], utilizedHash);
+            requestIds[i] = _settleFixture(
+                treasury, tournamentId, seasonStartYear, roundNumber, schedule.fixtureIds[i], utilizedHash
+            );
             unchecked {
                 ++i;
             }
         }
 
-        emit Events.RoundSettleOpened(tournamentId, treasury, season, roundNumber, utilizedHash, uint32(fixtureCount));
+        emit Events.RoundSettleOpened(
+            tournamentId, treasury, seasonStartYear, roundNumber, utilizedHash, uint32(fixtureCount)
+        );
     }
 
     /// @dev Open one `SettleDms` job for `fixtureId`.
     function _settleFixture(
         address treasury,
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         bytes32 fixtureId,
         bytes32 utilizedHash
     ) internal returns (bytes32 requestId) {
         if (fixtureId == bytes32(0)) revert Errors.ZeroFixture();
 
-        bytes32 fid = fixtureJobId(tournamentId, season, roundNumber, fixtureId);
+        bytes32 fid = fixtureJobId(tournamentId, seasonStartYear, roundNumber, fixtureId);
         bytes32 existing = pendingRequest[fid];
         if (existing != bytes32(0)) revert Errors.FixturePending(fid, existing);
 
@@ -132,13 +135,13 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
             revert Errors.BadFixturePhase(fid, f.phase, FixturePhase.None);
         }
 
-        bytes memory args = abi.encode(tournamentId, season, roundNumber, fixtureId, utilizedHash);
+        bytes memory args = abi.encode(tournamentId, seasonStartYear, roundNumber, fixtureId, utilizedHash);
         requestId = _sendOracleRequest(CvmJob.SettleDms, args);
 
         _pending[requestId] = PendingSettle({
             treasury: treasury,
             tournamentId: tournamentId,
-            season: season,
+            seasonStartYear: seasonStartYear,
             roundNumber: roundNumber,
             fixtureId: fixtureId,
             utilizedHash: utilizedHash
@@ -151,7 +154,9 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         f.proofHash = bytes32(0);
         f.requestId = requestId;
 
-        emit Events.FixtureSettleRequested(requestId, tournamentId, fixtureId, season, roundNumber, utilizedHash);
+        emit Events.FixtureSettleRequested(
+            requestId, tournamentId, fixtureId, seasonStartYear, roundNumber, utilizedHash
+        );
     }
 
     // --------------------------------------------
@@ -163,7 +168,7 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         PendingSettle memory p = _pending[requestId];
         if (p.treasury == address(0)) revert Errors.UnknownOracleRequest(requestId);
 
-        bytes32 fid = fixtureJobId(p.tournamentId, p.season, p.roundNumber, p.fixtureId);
+        bytes32 fid = fixtureJobId(p.tournamentId, p.seasonStartYear, p.roundNumber, p.fixtureId);
         delete _pending[requestId];
         delete pendingRequest[fid];
 
@@ -197,14 +202,14 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
 
         bool done = IPbrTreasury(p.treasury).applyFixtureSettlement(p.fixtureId, fixtureDigest, vaults, mwPoints);
 
-        bytes32 rid = roundId(p.tournamentId, p.season, p.roundNumber);
+        bytes32 rid = roundId(p.tournamentId, p.seasonStartYear, p.roundNumber);
         RoundSettlement storage round = _rounds[rid];
         unchecked {
             ++round.fixturesSettled;
         }
         if (done || round.fixturesSettled >= round.fixturesExpected) {
             round.phase = RoundSettlePhase.Complete;
-            emit Events.RoundSettleComplete(p.tournamentId, p.season, p.roundNumber, round.fixturesSettled);
+            emit Events.RoundSettleComplete(p.tournamentId, p.seasonStartYear, p.roundNumber, round.fixturesSettled);
         }
 
         emit Events.FixtureSettleProven(requestId, p.tournamentId, p.fixtureId, fixtureDigest, proofHash, vaults.length);
@@ -215,36 +220,36 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
     // --------------------------------------------
 
     /// @inheritdoc IPbrSettle
-    function roundId(bytes32 tournamentId, uint16 season, uint32 roundNumber) public pure returns (bytes32) {
-        return keccak256(abi.encode(tournamentId, season, roundNumber));
+    function roundId(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber) public pure returns (bytes32) {
+        return keccak256(abi.encode(tournamentId, seasonStartYear, roundNumber));
     }
 
     /// @inheritdoc IPbrSettle
     function fixtureJobId(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         bytes32 fixtureId
     ) public pure returns (bytes32) {
-        return keccak256(abi.encode(tournamentId, season, roundNumber, fixtureId));
+        return keccak256(abi.encode(tournamentId, seasonStartYear, roundNumber, fixtureId));
     }
 
     /// @inheritdoc IPbrSettle
     function getRoundSettlement(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber
     ) external view returns (RoundSettlement memory) {
-        return _rounds[roundId(tournamentId, season, roundNumber)];
+        return _rounds[roundId(tournamentId, seasonStartYear, roundNumber)];
     }
 
     /// @inheritdoc IPbrSettle
     function getFixtureSettlement(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         bytes32 fixtureId
     ) external view returns (FixtureSettlement memory) {
-        return _fixtures[fixtureJobId(tournamentId, season, roundNumber, fixtureId)];
+        return _fixtures[fixtureJobId(tournamentId, seasonStartYear, roundNumber, fixtureId)];
     }
 }

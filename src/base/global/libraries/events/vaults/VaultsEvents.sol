@@ -6,20 +6,29 @@ library VaultsEvents {
     //  PBRTreasury Events
     // --------------------------------------------
 
-    event PbrTreasuryCreated(bytes32 indexed tournamentId, address indexed pbrTreasury, uint16 initialSeason);
+    event PbrTreasuryCreated(bytes32 indexed tournamentId, address indexed pbrTreasury, uint16 initialSeasonStartYear);
 
     event FeesReceived(uint256 amount);
     event VaultRegistered(address indexed vault);
     event VaultUnregistered(address indexed vault);
     event RoundLocked(
-        uint16 indexed season, uint32 roundNumber, uint256 R, uint64 startTime, uint64 endTime, uint32 newTradingRound
+        uint16 indexed seasonStartYear,
+        uint32 roundNumber,
+        uint256 R,
+        uint64 startTime,
+        uint64 endTime,
+        uint32 newTradingRound
     );
-    event SeasonWrapped(uint16 indexed settledSeason, uint16 newSeason);
+    event SeasonWrapped(uint16 indexed settledSeasonStartYear, uint16 newSeasonStartYear);
     event RoundSettleRequested(
-        uint16 indexed season, uint32 roundNumber, address indexed pbrSettle, bytes32 utilizedHash, uint32 fixtureCount
+        uint16 indexed seasonStartYear,
+        uint32 roundNumber,
+        address indexed pbrSettle,
+        bytes32 utilizedHash,
+        uint32 fixtureCount
     );
     event FixtureSettlementApplied(
-        uint16 indexed season,
+        uint16 indexed seasonStartYear,
         uint32 roundNumber,
         bytes32 indexed fixtureId,
         bytes32 fixtureDigest,
@@ -27,8 +36,10 @@ library VaultsEvents {
         uint256 M_adj,
         bool done
     );
-    event RoundSettled(uint16 indexed season, uint32 roundNumber, uint256 M_adj, uint256 utilizedCount);
-    event ClaimPaid(uint16 indexed season, uint32 roundNumber, address indexed vault, address user, uint256 payout);
+    event RoundSettled(uint16 indexed seasonStartYear, uint32 roundNumber, uint256 M_adj, uint256 utilizedCount);
+    event ClaimPaid(
+        uint16 indexed seasonStartYear, uint32 roundNumber, address indexed vault, address user, uint256 payout
+    );
 
     // --------------------------------------------
     //  PlayerVault Events
@@ -37,10 +48,15 @@ library VaultsEvents {
     event PlayerVaultCreated(bytes32 indexed playerId, address indexed playerVault, address indexed stToken);
 
     event ActiveUpdated(bytes32 indexed playerId, bool isActive);
+    event ActiveTreasuryUpdated(bytes32 indexed tournamentId, address indexed treasury, bool active);
     event Staked(address indexed user, uint256 amount, uint256 newTotalStaked);
     event Unstaked(address indexed user, uint256 amount, uint256 newTotalStaked);
     event Claimed(
-        address indexed user, bytes32 indexed tournamentId, uint16 indexed seasonId, uint32 roundNumber, uint256 payout
+        address indexed user,
+        bytes32 indexed tournamentId,
+        uint16 indexed seasonStartYear,
+        uint32 roundNumber,
+        uint256 payout
     );
 
     // --------------------------------------------

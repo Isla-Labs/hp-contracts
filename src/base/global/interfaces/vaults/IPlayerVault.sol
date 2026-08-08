@@ -12,6 +12,9 @@ interface IPlayerVault {
 
     function totalStaked() external view returns (uint256);
 
+    /// @notice Mirror tournament treasury membership (TournamentRegistry only).
+    function syncActiveTreasury(bytes32 tournamentId, address treasury, bool active) external;
+
     /// @notice Record a round this vault is utilized in (for claimAll / lock tracking).
-    function noteUtilizedRound(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber) external;
+    function noteUtilizedRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber) external;
 }

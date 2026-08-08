@@ -25,7 +25,7 @@ struct RoundSettlement {
     RoundSettlePhase phase;
     address treasury;
     bytes32 tournamentId;
-    uint16 season;
+    uint16 seasonStartYear;
     uint32 roundNumber;
     bytes32 utilizedHash;
     uint32 fixturesExpected;
@@ -44,7 +44,7 @@ struct FixtureSettlement {
 struct PendingSettle {
     address treasury;
     bytes32 tournamentId;
-    uint16 season;
+    uint16 seasonStartYear;
     uint32 roundNumber;
     bytes32 fixtureId;
     bytes32 utilizedHash;

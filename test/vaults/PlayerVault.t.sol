@@ -23,15 +23,18 @@ contract PlayerVaultTest is VaultsTestBase {
     function setUp() public override {
         super.setUp();
         (vault, stToken) = _deployVault(PLAYER);
-        treasury = _deployTreasury(TOURNAMENT, SEASON);
+        treasury = _deployTreasury(TOURNAMENT, SEASON_START_YEAR);
         _registerVault(treasury, address(vault));
 
         startTime = uint64(block.timestamp + 1 days);
         endTime = uint64(block.timestamp + 8 days);
-        _publishRound(TOURNAMENT, SEASON, 1, startTime, endTime, 10);
+        _publishRound(TOURNAMENT, SEASON_START_YEAR, 1, startTime, endTime, 10);
     }
 
     function test_stake_mintsOneToOne_andUtilization() public {
+        assertEq(vault.activeTreasuryCount(), 1);
+        assertEq(vault.treasuryOf(TOURNAMENT), address(treasury));
+
         _stake(user, vault, 10 ether);
 
         assertEq(stToken.balanceOf(user), 10 ether);
@@ -39,7 +42,12 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(vault.totalStaked(), 10 ether);
         assertTrue(playerSetRegistry.lastUtilized());
         assertEq(playerSetRegistry.updateCount(), 1);
-        assertEq(treasury.getUtilizedVaults(SEASON, 1).length, 1);
+        assertEq(treasury.getUtilizedVaults(SEASON_START_YEAR, 1).length, 1);
+    }
+
+    function test_syncActiveTreasury_onlyTournamentRegistry() public {
+        vm.expectRevert(Errors.Unauthorized.selector);
+        vault.syncActiveTreasury(TOURNAMENT, address(treasury), true);
     }
 
     function test_stake_revertsZero() public {
@@ -82,7 +90,7 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(playerToken.balanceOf(user), 10 ether);
         assertEq(vault.totalStaked(), 0);
         assertFalse(playerSetRegistry.lastUtilized());
-        assertEq(treasury.getUtilizedVaults(SEASON, 1).length, 0);
+        assertEq(treasury.getUtilizedVaults(SEASON_START_YEAR, 1).length, 0);
     }
 
     function test_unstake_revertsInsufficient() public {
@@ -112,7 +120,7 @@ contract PlayerVaultTest is VaultsTestBase {
         points[0] = 100;
         _settle(treasury, vaults, points);
 
-        assertEq(uint8(treasury.getRound(SEASON, 1).status), uint8(RoundStatus.Claimable));
+        assertEq(uint8(treasury.getRound(SEASON_START_YEAR, 1).status), uint8(RoundStatus.Claimable));
         assertEq(vault.lockedBalance(user), 0);
 
         vm.prank(user);
@@ -123,12 +131,12 @@ contract PlayerVaultTest is VaultsTestBase {
         _stake(user, vault, 10 ether);
         _runRoundToClaimable(100);
 
-        uint256 preview = treasury.previewClaim(SEASON, 1, address(vault), 10 ether, 10 ether);
+        uint256 preview = treasury.previewClaim(SEASON_START_YEAR, 1, address(vault), user);
         assertEq(preview, 80 ether);
 
         uint256 beforeBal = user.balance;
         vm.prank(user);
-        uint256 payout = vault.claim(TOURNAMENT, SEASON, 1);
+        uint256 payout = vault.claim(TOURNAMENT, SEASON_START_YEAR, 1);
         assertEq(payout, 80 ether);
         assertEq(user.balance, beforeBal + 80 ether);
     }
@@ -138,11 +146,11 @@ contract PlayerVaultTest is VaultsTestBase {
         _runRoundToClaimable(100);
 
         vm.prank(user);
-        vault.claim(TOURNAMENT, SEASON, 1);
+        vault.claim(TOURNAMENT, SEASON_START_YEAR, 1);
 
         vm.prank(user);
         vm.expectRevert(Errors.AlreadyClaimed.selector);
-        vault.claim(TOURNAMENT, SEASON, 1);
+        vault.claim(TOURNAMENT, SEASON_START_YEAR, 1);
     }
 
     function test_claim_nothingToClaim_revertDoesNotPersistClaimed() public {
@@ -151,11 +159,11 @@ contract PlayerVaultTest is VaultsTestBase {
 
         vm.prank(user);
         vm.expectRevert(Errors.NothingToClaim.selector);
-        vault.claim(TOURNAMENT, SEASON, 1);
+        vault.claim(TOURNAMENT, SEASON_START_YEAR, 1);
 
         vm.prank(user);
         vm.expectRevert(Errors.NothingToClaim.selector);
-        vault.claim(TOURNAMENT, SEASON, 1);
+        vault.claim(TOURNAMENT, SEASON_START_YEAR, 1);
     }
 
     function test_claimAll_zeroPoints_marksClaimed() public {
@@ -167,7 +175,7 @@ contract PlayerVaultTest is VaultsTestBase {
 
         vm.prank(user);
         vm.expectRevert(Errors.AlreadyClaimed.selector);
-        vault.claim(TOURNAMENT, SEASON, 1);
+        vault.claim(TOURNAMENT, SEASON_START_YEAR, 1);
     }
 
     function test_claimAll_skipsNonClaimable() public {
@@ -201,7 +209,7 @@ contract PlayerVaultTest is VaultsTestBase {
 
         vm.prank(user);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        vault.claim(TOURNAMENT, SEASON, 1);
+        vault.claim(TOURNAMENT, SEASON_START_YEAR, 1);
     }
 
     function test_setActive_allowsOrchestratorAndPsr() public {

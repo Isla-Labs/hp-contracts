@@ -13,6 +13,7 @@ import { RoundStatus } from "@types/vaults/VaultTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
+import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
 
 /**
  * @title TournamentRegistry
@@ -28,9 +29,10 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
  *      - `PlayerSetRegistry`: vault register/unregister fan-out.
  *      - Tournament `PbrTreasury`: `flushPendingUnregisters` after settle.
  *
- *      Vault membership is the SoT here; each write syncs a local cache on the tournament's
- *      `PbrTreasury`. Unregister while the treasury active round is `Locked` is deferred until
- *      settle so SettlePbr still observes the vault through distribute.
+ *      Vault membership is the SoT here; each write syncs local caches on the tournament's
+ *      `PbrTreasury` and the vault's active-treasury list. Unregister while the treasury active
+ *      round is `Locked` is deferred until settle so SettlePbr still observes the vault through
+ *      distribute.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -560,8 +562,8 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
 
     function _isTreasuryActiveRoundLocked(address treasury) private view returns (bool) {
         if (treasury == address(0)) return false;
-        (uint16 season, uint32 active,) = IPbrTreasury(treasury).getCursors();
-        RoundStatus status = IPbrTreasury(treasury).getRound(season, active).status;
+        (uint16 seasonStartYear, uint32 active,) = IPbrTreasury(treasury).getCursors();
+        RoundStatus status = IPbrTreasury(treasury).getRound(seasonStartYear, active).status;
         // Defer lifecycle unregisters until Claimable (through per-fixture settle).
         return status == RoundStatus.Locked || status == RoundStatus.SettlePending;
     }
@@ -604,6 +606,8 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         _isVaultRegistered[tournamentId][vault] = true;
         emit Events.VaultRegistered(tournamentId, vault);
 
+        // Vault cache first so `noteUtilizedRound` during treasury register sees membership.
+        IPlayerVault(vault).syncActiveTreasury(tournamentId, treasury, true);
         IPbrTreasury(treasury).syncRegisterVault(vault);
     }
 
@@ -627,6 +631,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         emit Events.VaultUnregistered(tournamentId, vault);
 
         IPbrTreasury(treasury).syncUnregisterVault(vault);
+        IPlayerVault(vault).syncActiveTreasury(tournamentId, treasury, false);
     }
 
     /// @dev In-place insertion sort by `seasonStartYear` ascending (stable for equal years).

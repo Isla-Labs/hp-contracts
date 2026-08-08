@@ -56,13 +56,13 @@ struct BootstrapSeason {
 
 /**
  * @param tournamentId Stable tournament id.
- * @param initialSeason Season written into `PbrTreasury.initialize`.
+ * @param initialSeasonStartYear Season written into `PbrTreasury.initialize`.
  * @param treasurySalt CreateX salt for `PbrTreasuryFactory.create` (mine offchain for `0x99…`).
  * @param seasons Optional seasons (`openSeason`); empty skips.
  */
 struct BootstrapParams {
     bytes32 tournamentId;
-    uint16 initialSeason;
+    uint16 initialSeasonStartYear;
     bytes32 treasurySalt;
     BootstrapSeason[] seasons;
 }

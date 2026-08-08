@@ -8,7 +8,7 @@ library DeploymentsEvents {
         bytes32 indexed tournamentId,
         TournamentType tournamentType,
         address indexed pbrTreasury,
-        uint16 initialSeason,
+        uint16 initialSeasonStartYear,
         uint256 hubCount,
         uint256 seasonCount
     );

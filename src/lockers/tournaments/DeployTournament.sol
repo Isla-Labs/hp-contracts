@@ -194,7 +194,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
         pbrTreasury = abi.decode(
             _exec(
                 address(pbrTreasuryFactory),
-                abi.encodeCall(IPbrTreasuryFactory.create, (b.tournamentId, b.initialSeason, b.treasurySalt))
+                abi.encodeCall(IPbrTreasuryFactory.create, (b.tournamentId, b.initialSeasonStartYear, b.treasurySalt))
             ),
             (address)
         );
@@ -236,7 +236,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
         }
 
         emit Events.TournamentDeployed(
-            b.tournamentId, tournamentType, pbrTreasury, b.initialSeason, feeHubs.length, length
+            b.tournamentId, tournamentType, pbrTreasury, b.initialSeasonStartYear, feeHubs.length, length
         );
     }
 
@@ -271,7 +271,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     function _validateBootstrap(BootstrapParams calldata b) internal view {
         if (!factoriesConfigured) revert Errors.NotConfigured();
         if (b.tournamentId == bytes32(0)) revert Errors.ZeroId();
-        if (b.initialSeason == 0) revert Errors.ZeroSeason();
+        if (b.initialSeasonStartYear == 0) revert Errors.ZeroSeason();
         if (b.treasurySalt == bytes32(0)) revert Errors.ZeroSalt();
         // Prevent double-bootstrap of the same tournament id (and league hub for DOMESTIC_LEAGUE).
         if (tournamentRegistry.tournamentExists(b.tournamentId)) revert Errors.AlreadySet();

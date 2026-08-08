@@ -8,7 +8,11 @@ pragma solidity ^0.8.34;
 interface IPbrTreasuryFactory {
     function orchestrator() external view returns (address);
 
-    function create(bytes32 tournamentId, uint16 initialSeason, bytes32 salt) external returns (address pbrTreasury);
+    function create(
+        bytes32 tournamentId,
+        uint16 initialSeasonStartYear,
+        bytes32 salt
+    ) external returns (address pbrTreasury);
 
     function makeSalt(bytes11 entropy) external view returns (bytes32);
 

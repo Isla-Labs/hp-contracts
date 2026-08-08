@@ -22,7 +22,7 @@ import { MockPlayerToken } from "./mocks/MockPlayerToken.sol";
 import { MockTournamentRegistry } from "./mocks/MockTournamentRegistry.sol";
 
 abstract contract VaultsTestBase is Test {
-    uint16 internal constant SEASON = 2025;
+    uint16 internal constant SEASON_START_YEAR = 2025;
     bytes32 internal constant TOURNAMENT = keccak256("tournament-1");
     bytes32 internal constant PLAYER = keccak256("player-1");
 
@@ -94,27 +94,31 @@ abstract contract VaultsTestBase is Test {
         playerSetRegistry.setActiveTournaments(playerId, tournaments);
     }
 
-    function _deployTreasury(bytes32 tournamentId, uint16 season) internal returns (PbrTreasury treasury) {
-        bytes memory initData = abi.encodeCall(PbrTreasury.initialize, (tournamentId, season));
+    function _deployTreasury(bytes32 tournamentId, uint16 seasonStartYear) internal returns (PbrTreasury treasury) {
+        bytes memory initData = abi.encodeCall(PbrTreasury.initialize, (tournamentId, seasonStartYear));
         treasury = PbrTreasury(payable(address(new BeaconProxy(address(treasuryBeacon), initData))));
         tournamentRegistry.setPbrTreasury(tournamentId, address(treasury));
     }
 
     function _registerVault(PbrTreasury treasury, address vault) internal {
+        bytes32 tournamentId = treasury.tournamentId();
+        // Mirror TournamentRegistry order: vault cache before treasury register.
+        vm.prank(address(tournamentRegistry));
+        PlayerVault(payable(vault)).syncActiveTreasury(tournamentId, address(treasury), true);
         vm.prank(address(tournamentRegistry));
         treasury.syncRegisterVault(vault);
     }
 
     function _publishRound(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         uint64 startTime,
         uint64 endTime,
         uint32 finalRound
     ) internal {
-        tournamentRegistry.setRound(tournamentId, season, roundNumber, startTime, endTime, true);
-        tournamentRegistry.setFinalRound(tournamentId, season, finalRound);
+        tournamentRegistry.setRound(tournamentId, seasonStartYear, roundNumber, startTime, endTime, true);
+        tournamentRegistry.setFinalRound(tournamentId, seasonStartYear, finalRound);
     }
 
     function _stake(address staker, PlayerVault vault, uint256 amount) internal {
@@ -150,27 +154,27 @@ abstract contract VaultsTestBase is Test {
 
     /// @dev `requestSettle` → apply fixture scores → Claimable.
     function _settle(PbrTreasury treasury, address[] memory vaults, uint256[] memory points) internal {
-        (uint16 season, uint32 round,) = treasury.getCursors();
-        RoundStatus status = treasury.getRound(season, round).status;
+        (uint16 seasonStartYear, uint32 round,) = treasury.getCursors();
+        RoundStatus status = treasury.getRound(seasonStartYear, round).status;
         if (status == RoundStatus.Locked) {
             treasury.requestSettle();
         } else if (status != RoundStatus.SettlePending) {
             revert("round not ready to settle");
         }
 
-        if (uint8(treasury.getRound(season, round).status) == uint8(RoundStatus.Claimable)) {
+        if (uint8(treasury.getRound(seasonStartYear, round).status) == uint8(RoundStatus.Claimable)) {
             require(vaults.length == 0, "expected empty utilized");
             return;
         }
 
-        address[] memory utilized = treasury.getUtilizedVaults(season, round);
+        address[] memory utilized = treasury.getUtilizedVaults(seasonStartYear, round);
         require(vaults.length == utilized.length, "vaults/utilized length");
         require(points.length == utilized.length, "points/utilized length");
         for (uint256 i; i < utilized.length; ++i) {
             require(vaults[i] == utilized[i], "vault order");
         }
 
-        bytes32[] memory fixtures = tournamentRegistry.getRound(TOURNAMENT, season, round).fixtureIds;
+        bytes32[] memory fixtures = tournamentRegistry.getRound(TOURNAMENT, seasonStartYear, round).fixtureIds;
         require(fixtures.length > 0, "no fixtures");
 
         vm.prank(address(pbrSettle));
@@ -187,6 +191,8 @@ abstract contract VaultsTestBase is Test {
         }
 
         require(done, "settle incomplete");
-        require(uint8(treasury.getRound(season, round).status) == uint8(RoundStatus.Claimable), "not claimable");
+        require(
+            uint8(treasury.getRound(seasonStartYear, round).status) == uint8(RoundStatus.Claimable), "not claimable"
+        );
     }
 }

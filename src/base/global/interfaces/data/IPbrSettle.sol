@@ -15,16 +15,16 @@ interface IPbrSettle {
      */
     function startRound(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         bytes32 utilizedHash
     ) external returns (bytes32[] memory requestIds);
 
-    function roundId(bytes32 tournamentId, uint16 season, uint32 roundNumber) external pure returns (bytes32);
+    function roundId(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber) external pure returns (bytes32);
 
     function fixtureJobId(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         bytes32 fixtureId
     ) external pure returns (bytes32);
@@ -33,13 +33,13 @@ interface IPbrSettle {
 
     function getRoundSettlement(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber
     ) external view returns (RoundSettlement memory);
 
     function getFixtureSettlement(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         bytes32 fixtureId
     ) external view returns (FixtureSettlement memory);

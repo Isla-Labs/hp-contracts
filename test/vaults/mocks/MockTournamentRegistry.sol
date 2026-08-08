@@ -6,9 +6,10 @@ import { RoundSchedule } from "@types/registries/TournamentTypes.sol";
 /// @notice Vault-grade tournament registry stub for PlayerVault / PbrTreasury unit tests.
 contract MockTournamentRegistry {
     mapping(bytes32 tournamentId => address) public pbrTreasuryOf;
-    mapping(bytes32 tournamentId => mapping(uint16 season => mapping(uint32 round => bool))) public published;
-    mapping(bytes32 tournamentId => mapping(uint16 season => mapping(uint32 round => RoundSchedule))) internal _rounds;
-    mapping(bytes32 tournamentId => mapping(uint16 season => uint32)) public finalRoundOf;
+    mapping(bytes32 tournamentId => mapping(uint16 seasonStartYear => mapping(uint32 round => bool))) public published;
+    mapping(bytes32 tournamentId => mapping(uint16 seasonStartYear => mapping(uint32 round => RoundSchedule))) internal
+        _rounds;
+    mapping(bytes32 tournamentId => mapping(uint16 seasonStartYear => uint32)) public finalRoundOf;
 
     bytes32 public lastFlushTournamentId;
     uint256 public flushCount;
@@ -23,50 +24,54 @@ contract MockTournamentRegistry {
 
     function setRound(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         uint64 startTime,
         uint64 endTime,
         bool isPublished
     ) external {
-        published[tournamentId][season][roundNumber] = isPublished;
+        published[tournamentId][seasonStartYear][roundNumber] = isPublished;
         bytes32[] memory fixtures = new bytes32[](1);
-        fixtures[0] = keccak256(abi.encode(tournamentId, season, roundNumber, "fixture-0"));
-        _rounds[tournamentId][season][roundNumber] =
+        fixtures[0] = keccak256(abi.encode(tournamentId, seasonStartYear, roundNumber, "fixture-0"));
+        _rounds[tournamentId][seasonStartYear][roundNumber] =
             RoundSchedule({ roundNumber: roundNumber, startTime: startTime, endTime: endTime, fixtureIds: fixtures });
     }
 
     function setFixtures(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber,
         bytes32[] calldata fixtureIds
     ) external {
-        RoundSchedule storage round = _rounds[tournamentId][season][roundNumber];
+        RoundSchedule storage round = _rounds[tournamentId][seasonStartYear][roundNumber];
         delete round.fixtureIds;
         for (uint256 i; i < fixtureIds.length; ++i) {
             round.fixtureIds.push(fixtureIds[i]);
         }
     }
 
-    function setFinalRound(bytes32 tournamentId, uint16 season, uint32 finalRound) external {
-        finalRoundOf[tournamentId][season] = finalRound;
+    function setFinalRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound) external {
+        finalRoundOf[tournamentId][seasonStartYear] = finalRound;
     }
 
-    function isRoundPublished(bytes32 tournamentId, uint16 season, uint32 roundNumber) external view returns (bool) {
-        return published[tournamentId][season][roundNumber];
+    function isRoundPublished(
+        bytes32 tournamentId,
+        uint16 seasonStartYear,
+        uint32 roundNumber
+    ) external view returns (bool) {
+        return published[tournamentId][seasonStartYear][roundNumber];
     }
 
     function getRound(
         bytes32 tournamentId,
-        uint16 season,
+        uint16 seasonStartYear,
         uint32 roundNumber
     ) external view returns (RoundSchedule memory) {
-        return _rounds[tournamentId][season][roundNumber];
+        return _rounds[tournamentId][seasonStartYear][roundNumber];
     }
 
-    function getFinalRound(bytes32 tournamentId, uint16 season) external view returns (uint32) {
-        return finalRoundOf[tournamentId][season];
+    function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32) {
+        return finalRoundOf[tournamentId][seasonStartYear];
     }
 
     function flushPendingUnregisters(bytes32 tournamentId) external {

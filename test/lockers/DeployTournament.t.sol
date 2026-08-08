@@ -57,7 +57,7 @@ contract DeployTournamentTest is LockersTestBase {
 
     function test_deploy_revertsZeroSeason() public {
         DeployParams memory params = _leagueParams(LEAGUE, SEASON);
-        params.bootstrap.initialSeason = 0;
+        params.bootstrap.initialSeasonStartYear = 0;
         vm.expectRevert(Errors.ZeroSeason.selector);
         _ownerCall(address(deployTournament), abi.encodeCall(DeployTournament.deploy, (params)));
     }
@@ -81,7 +81,7 @@ contract DeployTournamentTest is LockersTestBase {
         params.tournamentType = TournamentType.DOMESTIC_CUP;
         params.bootstrap = BootstrapParams({
             tournamentId: keccak256("cup-1"),
-            initialSeason: 2025,
+            initialSeasonStartYear: 2025,
             treasurySalt: bytes32(uint256(2)),
             seasons: new BootstrapSeason[](0)
         });
@@ -105,7 +105,7 @@ contract DeployTournamentTest is LockersTestBase {
         params.tournamentType = TournamentType.DOMESTIC_CUP;
         params.bootstrap = BootstrapParams({
             tournamentId: keccak256("cup-1"),
-            initialSeason: 2025,
+            initialSeasonStartYear: 2025,
             treasurySalt: bytes32(uint256(3)),
             seasons: new BootstrapSeason[](0)
         });
@@ -139,7 +139,7 @@ contract DeployTournamentTest is LockersTestBase {
 
         params.tournamentType = TournamentType.DOMESTIC_LEAGUE;
         params.bootstrap = BootstrapParams({
-            tournamentId: leagueId, initialSeason: 2025, treasurySalt: bytes32(uint256(1)), seasons: seasons
+            tournamentId: leagueId, initialSeasonStartYear: 2025, treasurySalt: bytes32(uint256(1)), seasons: seasons
         });
         params.leagueIds = new bytes32[](0);
     }

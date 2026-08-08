@@ -13,7 +13,6 @@ import { AddressKeys as Addresses } from "@base/global/libraries/addresses/Addre
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
 import { RoundStatus } from "@types/vaults/VaultTypes.sol";
-import { TournamentData } from "@types/registries/PlayerSetTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { IStakedToken } from "@interfaces/vaults/IStakedToken.sol";
@@ -22,7 +21,7 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
 
 /**
  * @title PlayerVault
- * @notice Stake custody; mirrors `S` to active treasuries; claims use `lockBlock` checkpoints.
+ * @notice Stake custody; mirrors `S` to cached active treasuries; claims use `lockBlock` checkpoints.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -32,6 +31,10 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
     ITournamentRegistry public tournamentRegistry;
     IPlayerSetRegistry public playerSetRegistry;
+
+    // --------------------------------------------
+    //  Config
+    // --------------------------------------------
 
     bytes32 public playerId;
     address public playerToken;
@@ -44,13 +47,29 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
     struct RoundKey {
         bytes32 tournamentId;
-        uint16 seasonId;
+        address treasury;
+        uint16 seasonStartYear;
         uint32 roundNumber;
     }
 
     RoundKey[] private _utilizedRounds;
-    mapping(bytes32 tournamentId => mapping(uint16 seasonId => mapping(uint32 roundNumber => bool))) private
+    mapping(bytes32 tournamentId => mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => bool))) private
         _notedRound;
+
+    struct ActiveTreasury {
+        bytes32 tournamentId;
+        address treasury;
+    }
+
+    /// @dev Live membership for stake/unstake fan-out (updated by TournamentRegistry).
+    ActiveTreasury[] private _activeTreasuries;
+    mapping(address treasury => uint256) private _activeTreasuryIndex; // 1-based
+    /// @dev Survives unregister so historical `claim(tournamentId, …)` still resolves.
+    mapping(bytes32 tournamentId => address treasury) private _treasuryOf;
+
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
@@ -71,6 +90,10 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
         isActive = true;
     }
 
+    // --------------------------------------------
+    //  Admin
+    // --------------------------------------------
+
     function pause() external onlyOwner {
         _pause();
     }
@@ -79,10 +102,44 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
         _unpause();
     }
 
+    // --------------------------------------------
+    //  Lifecycle
+    // --------------------------------------------
+
     function setActive(bool active_) external {
         _checkLifecycleCaller();
         isActive = active_;
         emit Events.ActiveUpdated(playerId, active_);
+    }
+
+    /// @inheritdoc IPlayerVault
+    function syncActiveTreasury(bytes32 tournamentId_, address treasury, bool active) external {
+        if (msg.sender != address(tournamentRegistry)) revert Errors.Unauthorized();
+        if (treasury == address(0)) revert Errors.ZeroAddress();
+        if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
+
+        if (active) {
+            _treasuryOf[tournamentId_] = treasury;
+            if (_activeTreasuryIndex[treasury] != 0) return;
+            _activeTreasuries.push(ActiveTreasury({ tournamentId: tournamentId_, treasury: treasury }));
+            _activeTreasuryIndex[treasury] = _activeTreasuries.length;
+            emit Events.ActiveTreasuryUpdated(tournamentId_, treasury, true);
+            return;
+        }
+
+        uint256 index1 = _activeTreasuryIndex[treasury];
+        if (index1 == 0) return;
+
+        uint256 index0 = index1 - 1;
+        uint256 last = _activeTreasuries.length - 1;
+        if (index0 != last) {
+            ActiveTreasury memory moved = _activeTreasuries[last];
+            _activeTreasuries[index0] = moved;
+            _activeTreasuryIndex[moved.treasury] = index0 + 1;
+        }
+        _activeTreasuries.pop();
+        delete _activeTreasuryIndex[treasury];
+        emit Events.ActiveTreasuryUpdated(tournamentId_, treasury, false);
     }
 
     function _checkLifecycleCaller() internal view {
@@ -133,10 +190,10 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     }
 
     /// @inheritdoc IPlayerVault
-    function noteUtilizedRound(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber) external {
-        address treasury = tournamentRegistry.getPbrTreasury(tournamentId_);
-        if (treasury == address(0) || msg.sender != treasury) revert Errors.OnlyTournamentTreasury();
-        _noteRound(tournamentId_, seasonId_, roundNumber);
+    function noteUtilizedRound(bytes32 tournamentId_, uint16 seasonStartYear_, uint32 roundNumber) external {
+        if (_activeTreasuryIndex[msg.sender] == 0) revert Errors.OnlyTournamentTreasury();
+        if (_treasuryOf[tournamentId_] != msg.sender) revert Errors.OnlyTournamentTreasury();
+        _noteRound(tournamentId_, seasonStartYear_, roundNumber, msg.sender);
     }
 
     // --------------------------------------------
@@ -145,26 +202,21 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
     function claim(
         bytes32 tournamentId_,
-        uint16 seasonId_,
+        uint16 seasonStartYear_,
         uint32 roundNumber
     ) external nonReentrant whenNotPaused returns (uint256) {
-        return _claim(msg.sender, tournamentId_, seasonId_, roundNumber, true);
+        address treasuryAddr = _treasuryOf[tournamentId_];
+        if (treasuryAddr == address(0)) revert Errors.UnknownTournamentTreasury(tournamentId_);
+        return _claim(msg.sender, tournamentId_, treasuryAddr, seasonStartYear_, roundNumber, true);
     }
 
-    function claimAll() external nonReentrant whenNotPaused returns (uint256 totalPayout) {
-        address user = msg.sender;
-        uint256 length = _utilizedRounds.length;
-        for (uint256 i; i < length; ++i) {
-            RoundKey memory key = _utilizedRounds[i];
-            address treasuryAddr = tournamentRegistry.getPbrTreasury(key.tournamentId);
-            if (treasuryAddr == address(0)) continue;
-            if (IPbrTreasury(treasuryAddr).getRound(key.seasonId, key.roundNumber).status != RoundStatus.Claimable) {
-                continue;
-            }
-            if (_isClaimed(user, _claimKey(key.tournamentId, key.seasonId, key.roundNumber))) continue;
-            totalPayout += _claim(user, key.tournamentId, key.seasonId, key.roundNumber, false);
-        }
+    function claimAll() external nonReentrant whenNotPaused returns (uint256) {
+        return _claimAll(msg.sender);
     }
+
+    // --------------------------------------------
+    //  External views
+    // --------------------------------------------
 
     function lockedBalance(address user) external view returns (uint256) {
         return _lockedBalance(user);
@@ -177,10 +229,23 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     function utilizedRoundAt(uint256 index)
         external
         view
-        returns (bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber)
+        returns (bytes32 tournamentId_, address treasury, uint16 seasonStartYear_, uint32 roundNumber)
     {
         RoundKey memory key = _utilizedRounds[index];
-        return (key.tournamentId, key.seasonId, key.roundNumber);
+        return (key.tournamentId, key.treasury, key.seasonStartYear, key.roundNumber);
+    }
+
+    function activeTreasuryCount() external view returns (uint256) {
+        return _activeTreasuries.length;
+    }
+
+    function activeTreasuryAt(uint256 index) external view returns (bytes32 tournamentId_, address treasury) {
+        ActiveTreasury memory link = _activeTreasuries[index];
+        return (link.tournamentId, link.treasury);
+    }
+
+    function treasuryOf(bytes32 tournamentId_) external view returns (address) {
+        return _treasuryOf[tournamentId_];
     }
 
     // --------------------------------------------
@@ -196,50 +261,102 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     }
 
     function _syncTreasuries(uint256 newTotalStaked) internal {
-        TournamentData memory data = playerSetRegistry.getTournamentData(playerId);
-        uint256 n = data.activeTournaments.length;
+        uint256 n = _activeTreasuries.length;
         for (uint256 i; i < n;) {
-            bytes32 tid = data.activeTournaments[i];
-            address treasuryAddr = tournamentRegistry.getPbrTreasury(tid);
-            if (treasuryAddr != address(0)) {
-                (uint16 season, uint32 roundNumber, bool joined) =
-                    IPbrTreasury(treasuryAddr).syncVaultStake(newTotalStaked);
-                if (joined) _noteRound(tid, season, roundNumber);
-            }
+            ActiveTreasury memory link = _activeTreasuries[i];
+            (uint16 year, uint32 roundNumber, bool joined) = IPbrTreasury(link.treasury).syncVaultStake(newTotalStaked);
+            if (joined) _noteRound(link.tournamentId, year, roundNumber, link.treasury);
             unchecked {
                 ++i;
             }
         }
     }
 
-    function _noteRound(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber) internal {
-        if (_notedRound[tournamentId_][seasonId_][roundNumber]) return;
-        _notedRound[tournamentId_][seasonId_][roundNumber] = true;
-        _utilizedRounds.push(RoundKey({ tournamentId: tournamentId_, seasonId: seasonId_, roundNumber: roundNumber }));
+    function _noteRound(bytes32 tournamentId_, uint16 seasonStartYear_, uint32 roundNumber, address treasury) internal {
+        if (_notedRound[tournamentId_][seasonStartYear_][roundNumber]) return;
+        _notedRound[tournamentId_][seasonStartYear_][roundNumber] = true;
+        _utilizedRounds.push(
+            RoundKey({
+                tournamentId: tournamentId_,
+                treasury: treasury,
+                seasonStartYear: seasonStartYear_,
+                roundNumber: roundNumber
+            })
+        );
+    }
+
+    function _claimAll(address user) internal returns (uint256 totalPayout) {
+        uint256 length = _utilizedRounds.length;
+        for (uint256 i; i < length;) {
+            RoundKey memory key = _utilizedRounds[i];
+            address treasuryAddr = key.treasury;
+            if (treasuryAddr == address(0)) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            (RoundStatus status, uint64 lockBlock) =
+                IPbrTreasury(treasuryAddr).getRoundClaimMeta(key.seasonStartYear, key.roundNumber);
+            if (status != RoundStatus.Claimable) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            uint256 claimKey = _claimKey(key.tournamentId, key.seasonStartYear, key.roundNumber);
+            if (_isClaimed(user, claimKey)) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            totalPayout += _claimWithMeta(
+                user, key.tournamentId, treasuryAddr, key.seasonStartYear, key.roundNumber, lockBlock, claimKey, false
+            );
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     function _claim(
         address user,
         bytes32 tournamentId_,
-        uint16 seasonId_,
+        address treasuryAddr,
+        uint16 seasonStartYear_,
         uint32 roundNumber,
         bool revertOnEmpty
     ) internal returns (uint256 payout) {
-        if (!_notedRound[tournamentId_][seasonId_][roundNumber]) {
-            revert Errors.RoundNotUtilized(tournamentId_, seasonId_, roundNumber);
+        if (!_notedRound[tournamentId_][seasonStartYear_][roundNumber]) {
+            revert Errors.RoundNotUtilized(tournamentId_, seasonStartYear_, roundNumber);
         }
 
-        uint256 claimKey = _claimKey(tournamentId_, seasonId_, roundNumber);
+        uint256 claimKey = _claimKey(tournamentId_, seasonStartYear_, roundNumber);
         if (_isClaimed(user, claimKey)) revert Errors.AlreadyClaimed();
 
-        address treasuryAddr = tournamentRegistry.getPbrTreasury(tournamentId_);
-        if (treasuryAddr == address(0)) revert Errors.UnknownTournamentTreasury(tournamentId_);
+        (, uint64 lockBlock) = IPbrTreasury(treasuryAddr).getRoundClaimMeta(seasonStartYear_, roundNumber);
+        payout = _claimWithMeta(
+            user, tournamentId_, treasuryAddr, seasonStartYear_, roundNumber, lockBlock, claimKey, revertOnEmpty
+        );
+    }
 
-        IPbrTreasury treasury = IPbrTreasury(treasuryAddr);
-        uint64 lockBlock = treasury.getRound(seasonId_, roundNumber).lockBlock;
+    function _claimWithMeta(
+        address user,
+        bytes32 tournamentId_,
+        address treasuryAddr,
+        uint16 seasonStartYear_,
+        uint32 roundNumber,
+        uint64 lockBlock,
+        uint256 claimKey,
+        bool revertOnEmpty
+    ) internal returns (uint256 payout) {
         uint256 s = IStakedToken(stToken).balanceOfAt(user, lockBlock);
         uint256 S = IStakedToken(stToken).totalSupplyAt(lockBlock);
-        uint256 m = treasury.getVaultPoints(seasonId_, roundNumber, address(this));
+        uint256 m = IPbrTreasury(treasuryAddr).getVaultPoints(seasonStartYear_, roundNumber, address(this));
 
         if (s == 0 || S == 0 || m == 0) {
             _setClaimed(user, claimKey);
@@ -248,28 +365,32 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
         }
 
         _setClaimed(user, claimKey);
-        payout = treasury.payClaim(seasonId_, roundNumber, user, s, S);
-        emit Events.Claimed(user, tournamentId_, seasonId_, roundNumber, payout);
+        payout = IPbrTreasury(treasuryAddr).payClaim(seasonStartYear_, roundNumber, user);
+        emit Events.Claimed(user, tournamentId_, seasonStartYear_, roundNumber, payout);
     }
 
     function _lockedBalance(address user) internal view returns (uint256 locked) {
         uint256 length = _utilizedRounds.length;
         for (uint256 i; i < length; ++i) {
             RoundKey memory key = _utilizedRounds[i];
-            address treasuryAddr = tournamentRegistry.getPbrTreasury(key.tournamentId);
+            address treasuryAddr = key.treasury;
             if (treasuryAddr == address(0)) continue;
 
-            RoundStatus status = IPbrTreasury(treasuryAddr).getRound(key.seasonId, key.roundNumber).status;
+            (RoundStatus status, uint64 lockBlock) =
+                IPbrTreasury(treasuryAddr).getRoundClaimMeta(key.seasonStartYear, key.roundNumber);
             if (status != RoundStatus.Locked && status != RoundStatus.SettlePending) continue;
 
-            uint64 lockBlock = IPbrTreasury(treasuryAddr).getRound(key.seasonId, key.roundNumber).lockBlock;
             uint256 cutBal = IStakedToken(stToken).balanceOfAt(user, lockBlock);
             if (cutBal > locked) locked = cutBal;
         }
     }
 
-    function _claimKey(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber) internal pure returns (uint256) {
-        return uint256(keccak256(abi.encode(tournamentId_, seasonId_, roundNumber)));
+    function _claimKey(
+        bytes32 tournamentId_,
+        uint16 seasonStartYear_,
+        uint32 roundNumber
+    ) internal pure returns (uint256) {
+        return uint256(keccak256(abi.encode(tournamentId_, seasonStartYear_, roundNumber)));
     }
 
     function _isClaimed(address user, uint256 claimKey) internal view returns (bool) {

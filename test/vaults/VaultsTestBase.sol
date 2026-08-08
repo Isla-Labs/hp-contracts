@@ -22,7 +22,7 @@ import { MockPlayerToken } from "./mocks/MockPlayerToken.sol";
 import { MockTournamentRegistry } from "./mocks/MockTournamentRegistry.sol";
 
 abstract contract VaultsTestBase is Test {
-    uint16 internal constant SEASON_START_YEAR = 2025;
+    uint16 internal constant START_YEAR = 2025;
     bytes32 internal constant TOURNAMENT = keccak256("tournament-1");
     bytes32 internal constant PLAYER = keccak256("player-1");
 

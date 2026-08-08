@@ -30,7 +30,10 @@ import { IStakedToken } from "@interfaces/vaults/IStakedToken.sol";
  */
 contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IPbrTreasury {
     uint256 public constant MAX_FIXTURE_PLAYERS = 32;
+    /// @notice Non-final rounds lock this share of `rewardsR` (remainder carries forward).
     uint256 public constant LOCK_BPS = 8000;
+    /// @notice Final round locks this share so a seed remains for offseason / next season.
+    uint256 public constant FINAL_LOCK_BPS = 9500;
 
     ITournamentRegistry public tournamentRegistry;
     IPlayerSetRegistry public playerSetRegistry;
@@ -232,7 +235,8 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         if (finalRound == 0) revert Errors.NothingDue();
 
         uint256 pot = rewardsR;
-        uint256 R = roundNumber_ >= finalRound ? pot : Math.mulDiv(pot, LOCK_BPS, 10_000);
+        uint256 lockBps = roundNumber_ >= finalRound ? FINAL_LOCK_BPS : LOCK_BPS;
+        uint256 R = Math.mulDiv(pot, lockBps, 10_000);
         rewardsR = pot - R;
 
         round.status = RoundStatus.Locked;

@@ -1,28 +1,45 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { FixtureSettlement, RoundSettlement } from "@types/data/PbrSettleTypes.sol";
+
 /**
  * @title IPbrSettle
- * @notice CVM `SettleDms` pipeline: treasury-gated kickoff → zk-verified fulfill → `finalizeRound`.
+ * @notice Fan-out per-fixture `SettleDms`: treasury `utilizedHash` + round fixtures → zk → apply points.
  */
 interface IPbrSettle {
     /**
-     * @notice Open a `CvmJob.SettleDms` request for a locked round.
+     * @notice Open one `SettleDms` job per round fixture, each bound to `utilizedHash`.
      * @dev Callable only by `TournamentRegistry.getPbrTreasury(tournamentId)`.
-     * @param tournamentId Tournament whose treasury is requesting settle.
-     * @param season Season cursor (matches `PbrTreasury.seasonId` at request time).
-     * @param roundNumber Active round being settled.
-     * @param utilizedVaults Snapshotted utilized vaults (may be empty if no stakers).
-     * @return requestId CVM correlator for the pending fulfill.
+     *      Fixture ids are read from `TournamentRegistry.getRound`.
      */
-    function settleRound(
+    function startRound(
         bytes32 tournamentId,
         uint16 season,
         uint32 roundNumber,
-        address[] calldata utilizedVaults
-    ) external returns (bytes32 requestId);
+        bytes32 utilizedHash
+    ) external returns (bytes32[] memory requestIds);
 
-    function jobId(bytes32 tournamentId, uint16 season, uint32 roundNumber) external pure returns (bytes32);
+    function roundId(bytes32 tournamentId, uint16 season, uint32 roundNumber) external pure returns (bytes32);
 
-    function pendingRequest(bytes32 id) external view returns (bytes32 requestId);
+    function fixtureJobId(
+        bytes32 tournamentId,
+        uint16 season,
+        uint32 roundNumber,
+        bytes32 fixtureId
+    ) external pure returns (bytes32);
+
+    function pendingRequest(bytes32 fixtureJobId_) external view returns (bytes32 requestId);
+
+    function getRoundSettlement(bytes32 tournamentId, uint16 season, uint32 roundNumber)
+        external
+        view
+        returns (RoundSettlement memory);
+
+    function getFixtureSettlement(
+        bytes32 tournamentId,
+        uint16 season,
+        uint32 roundNumber,
+        bytes32 fixtureId
+    ) external view returns (FixtureSettlement memory);
 }

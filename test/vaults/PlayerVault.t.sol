@@ -31,10 +31,6 @@ contract PlayerVaultTest is VaultsTestBase {
         _publishRound(TOURNAMENT, SEASON, 1, startTime, endTime, 10);
     }
 
-    // --------------------------------------------
-    //  Stake / unstake
-    // --------------------------------------------
-
     function test_stake_mintsOneToOne_andUtilization() public {
         _stake(user, vault, 10 ether);
 
@@ -119,13 +115,12 @@ contract PlayerVaultTest is VaultsTestBase {
         vm.expectRevert(Errors.MatchweekLock.selector);
         vault.unstake(1 ether);
 
-        // After settle (Claimable), lock lifts.
         vm.warp(endTime);
         address[] memory vaults = new address[](1);
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
         points[0] = 100;
-        _settle(treasury, vaults, points, 100);
+        _settle(treasury, vaults, points);
 
         assertEq(uint8(treasury.getRound(SEASON, 1).status), uint8(RoundStatus.Claimable));
         assertEq(vault.lockedBalance(user), 0);
@@ -133,10 +128,6 @@ contract PlayerVaultTest is VaultsTestBase {
         vm.prank(user);
         vault.unstake(10 ether);
     }
-
-    // --------------------------------------------
-    //  Snapshot
-    // --------------------------------------------
 
     function test_snapshot_onlyTreasury() public {
         _stake(user, vault, 1 ether);
@@ -176,16 +167,11 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(vault.snapIdOf(TOURNAMENT, SEASON, 1), 1);
     }
 
-    // --------------------------------------------
-    //  Claim
-    // --------------------------------------------
-
     function test_claim_happyPath() public {
         _stake(user, vault, 10 ether);
-        _runRoundToClaimable(100, 100);
+        _runRoundToClaimable(100);
 
         uint256 preview = treasury.previewClaim(SEASON, 1, address(vault), 10 ether, 10 ether);
-        // R = 80% of 100 ether = 80 ether; I = 80 * 100/100 * 10/10 = 80 ether
         assertEq(preview, 80 ether);
 
         uint256 beforeBal = user.balance;
@@ -197,7 +183,7 @@ contract PlayerVaultTest is VaultsTestBase {
 
     function test_claim_alreadyClaimed() public {
         _stake(user, vault, 10 ether);
-        _runRoundToClaimable(100, 100);
+        _runRoundToClaimable(100);
 
         vm.prank(user);
         vault.claim(TOURNAMENT, SEASON, 1);
@@ -209,9 +195,7 @@ contract PlayerVaultTest is VaultsTestBase {
 
     function test_claim_nothingToClaim_revertDoesNotPersistClaimed() public {
         _stake(user, vault, 10 ether);
-        // Settle with m=0 → claim() reverts NothingToClaim; the pre-revert
-        // `_setClaimed` is rolled back, so a retry hits the same error.
-        _runRoundToClaimable(0, 100);
+        _runRoundToClaimable(0);
 
         vm.prank(user);
         vm.expectRevert(Errors.NothingToClaim.selector);
@@ -224,9 +208,8 @@ contract PlayerVaultTest is VaultsTestBase {
 
     function test_claimAll_zeroPoints_marksClaimed() public {
         _stake(user, vault, 10 ether);
-        _runRoundToClaimable(0, 100);
+        _runRoundToClaimable(0);
 
-        // claimAll uses revertOnEmpty=false, so the claimed bit sticks.
         vm.prank(user);
         assertEq(vault.claimAll(), 0);
 
@@ -241,7 +224,6 @@ contract PlayerVaultTest is VaultsTestBase {
         _sendEth(address(treasury), 100 ether);
         _lockAndSnapshot(treasury);
 
-        // Still Locked — claimAll should no-op.
         vm.prank(user);
         uint256 payout = vault.claimAll();
         assertEq(payout, 0);
@@ -251,7 +233,7 @@ contract PlayerVaultTest is VaultsTestBase {
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
         points[0] = 100;
-        _settle(treasury, vaults, points, 100);
+        _settle(treasury, vaults, points);
 
         vm.prank(user);
         payout = vault.claimAll();
@@ -260,7 +242,7 @@ contract PlayerVaultTest is VaultsTestBase {
 
     function test_claim_revertsPaused() public {
         _stake(user, vault, 10 ether);
-        _runRoundToClaimable(100, 100);
+        _runRoundToClaimable(100);
 
         vm.prank(orchestrator);
         vault.pause();
@@ -269,10 +251,6 @@ contract PlayerVaultTest is VaultsTestBase {
         vm.expectRevert(Pausable.EnforcedPause.selector);
         vault.claim(TOURNAMENT, SEASON, 1);
     }
-
-    // --------------------------------------------
-    //  Lifecycle / access
-    // --------------------------------------------
 
     function test_setActive_allowsOrchestratorAndPsr() public {
         vm.prank(orchestrator);
@@ -296,11 +274,7 @@ contract PlayerVaultTest is VaultsTestBase {
         vault.pause();
     }
 
-    // --------------------------------------------
-    //  Helpers
-    // --------------------------------------------
-
-    function _runRoundToClaimable(uint256 vaultPoints, uint256 mAdj) internal {
+    function _runRoundToClaimable(uint256 vaultPoints_) internal {
         vm.warp(startTime);
         _sendEth(address(treasury), 100 ether);
         _lockAndSnapshot(treasury);
@@ -309,7 +283,7 @@ contract PlayerVaultTest is VaultsTestBase {
         address[] memory vaults = new address[](1);
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
-        points[0] = vaultPoints;
-        _settle(treasury, vaults, points, mAdj);
+        points[0] = vaultPoints_;
+        _settle(treasury, vaults, points);
     }
 }

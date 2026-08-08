@@ -13,35 +13,37 @@ import { IPbrSettle } from "@interfaces/data/IPbrSettle.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { CvmJob } from "@types/oracle/CvmTypes.sol";
-import { PendingSettle } from "@types/data/PbrSettleTypes.sol";
+import {
+    FixturePhase,
+    FixtureSettlement,
+    PendingSettle,
+    RoundSettlePhase,
+    RoundSettlement
+} from "@types/data/PbrSettleTypes.sol";
+import { RoundSchedule } from "@types/registries/TournamentTypes.sol";
 import { AddressProvider } from "@src/AddressProvider.sol";
 
 /**
  * @title PbrSettle
- * @notice Global settle pipeline: treasury-gated `settleRound` → `CvmJob.SettleDms` → `finalizeRound`.
- * @dev Only `TournamentRegistry.getPbrTreasury(tournamentId)` may open a settle. The CVM job verifies
- *      DMS/performance via Succinct zk-proof; fulfill decodes `(vaults, mwPoints, adjTotalPoints)` and
- *      calls `PbrTreasury.finalizeRound` on the requesting treasury.
+ * @notice Per-fixture settle: `startRound` fans out `SettleDms` → fulfill writes ≤32 vault points.
+ * @dev Fulfill response:
+ *      `abi.encode(bytes32 utilizedHash, bytes32 fixtureDigest, bytes proof, address[] vaults, uint256[] mwPoints)`.
+ *      See `pbrSettleFlow.md`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
 contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
-    // --------------------------------------------
-    //  Storage
-    // --------------------------------------------
+    uint256 public constant MAX_FIXTURE_PLAYERS = 32;
 
     ITournamentRegistry public tournamentRegistry;
 
     mapping(bytes32 requestId => PendingSettle) private _pending;
-    /// @notice In-flight CVM request per `jobId(tournament, season, round)`; zero when idle.
-    mapping(bytes32 id => bytes32 requestId) public pendingRequest;
+    mapping(bytes32 fixtureJobId_ => bytes32 requestId) public pendingRequest;
 
-    // --------------------------------------------
-    //  Initialization
-    // --------------------------------------------
+    mapping(bytes32 roundId_ => RoundSettlement) private _rounds;
+    mapping(bytes32 fixtureJobId_ => FixtureSettlement) private _fixtures;
 
-    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_)
         AddressBook(addressProvider_)
@@ -52,7 +54,6 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         _disableInitializers();
     }
 
-    /// @notice Resolve registry; ownership → Orchestrator.
     function initialize() external initializer {
         address orch = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
         tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
@@ -69,30 +70,92 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
     // --------------------------------------------
 
     /// @inheritdoc IPbrSettle
-    function settleRound(
+    function startRound(
         bytes32 tournamentId,
         uint16 season,
         uint32 roundNumber,
-        address[] calldata utilizedVaults
-    ) external returns (bytes32 requestId) {
-        // Empty utilized set is allowed (no stakers); CVM still settles the round.
+        bytes32 utilizedHash
+    ) external returns (bytes32[] memory requestIds) {
+        if (utilizedHash == bytes32(0)) revert Errors.ZeroHash();
+
         address treasury = tournamentRegistry.getPbrTreasury(tournamentId);
         if (treasury == address(0)) revert Errors.TreasuryMissing(tournamentId);
         if (msg.sender != treasury) revert Errors.Unauthorized();
 
-        bytes32 id = jobId(tournamentId, season, roundNumber);
-        bytes32 existing = pendingRequest[id];
-        if (existing != bytes32(0)) revert Errors.SettlePending(id, existing);
+        bytes32 rid = roundId(tournamentId, season, roundNumber);
+        RoundSettlement storage round = _rounds[rid];
+        if (round.phase == RoundSettlePhase.Requested) revert Errors.RoundSettlePending(rid);
 
-        bytes memory args = abi.encode(tournamentId, season, roundNumber, utilizedVaults);
+        RoundSchedule memory schedule = tournamentRegistry.getRound(tournamentId, season, roundNumber);
+        uint256 fixtureCount = schedule.fixtureIds.length;
+        if (fixtureCount == 0) revert Errors.NoFixtures();
+
+        round.phase = RoundSettlePhase.Requested;
+        round.treasury = treasury;
+        round.tournamentId = tournamentId;
+        round.season = season;
+        round.roundNumber = roundNumber;
+        round.utilizedHash = utilizedHash;
+        round.fixturesExpected = uint32(fixtureCount);
+        round.fixturesSettled = 0;
+
+        requestIds = new bytes32[](fixtureCount);
+        for (uint256 i; i < fixtureCount;) {
+            requestIds[i] = _settleFixture(
+                treasury, tournamentId, season, roundNumber, schedule.fixtureIds[i], utilizedHash
+            );
+            unchecked {
+                ++i;
+            }
+        }
+
+        emit Events.RoundSettleOpened(
+            tournamentId, treasury, season, roundNumber, utilizedHash, uint32(fixtureCount)
+        );
+    }
+
+    /// @dev Open one `SettleDms` job for `fixtureId`.
+    function _settleFixture(
+        address treasury,
+        bytes32 tournamentId,
+        uint16 season,
+        uint32 roundNumber,
+        bytes32 fixtureId,
+        bytes32 utilizedHash
+    ) internal returns (bytes32 requestId) {
+        if (fixtureId == bytes32(0)) revert Errors.ZeroFixture();
+
+        bytes32 fid = fixtureJobId(tournamentId, season, roundNumber, fixtureId);
+        bytes32 existing = pendingRequest[fid];
+        if (existing != bytes32(0)) revert Errors.FixturePending(fid, existing);
+
+        FixtureSettlement storage f = _fixtures[fid];
+        if (f.phase == FixturePhase.Proven) revert Errors.FixtureAlreadySettled(fixtureId);
+        if (f.phase == FixturePhase.Requested) {
+            revert Errors.BadFixturePhase(fid, f.phase, FixturePhase.None);
+        }
+
+        bytes memory args = abi.encode(tournamentId, season, roundNumber, fixtureId, utilizedHash);
         requestId = _sendOracleRequest(CvmJob.SettleDms, args);
 
-        _pending[requestId] =
-            PendingSettle({ treasury: treasury, tournamentId: tournamentId, season: season, roundNumber: roundNumber });
-        pendingRequest[id] = requestId;
+        _pending[requestId] = PendingSettle({
+            treasury: treasury,
+            tournamentId: tournamentId,
+            season: season,
+            roundNumber: roundNumber,
+            fixtureId: fixtureId,
+            utilizedHash: utilizedHash
+        });
+        pendingRequest[fid] = requestId;
 
-        emit Events.SettleRequested(
-            requestId, tournamentId, treasury, season, roundNumber, utilizedVaults.length
+        f.phase = FixturePhase.Requested;
+        f.fixtureId = fixtureId;
+        f.fixtureDigest = bytes32(0);
+        f.proofHash = bytes32(0);
+        f.requestId = requestId;
+
+        emit Events.FixtureSettleRequested(
+            requestId, tournamentId, fixtureId, season, roundNumber, utilizedHash
         );
     }
 
@@ -105,31 +168,56 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         PendingSettle memory p = _pending[requestId];
         if (p.treasury == address(0)) revert Errors.UnknownOracleRequest(requestId);
 
-        bytes32 id = jobId(p.tournamentId, p.season, p.roundNumber);
+        bytes32 fid = fixtureJobId(p.tournamentId, p.season, p.roundNumber, p.fixtureId);
         delete _pending[requestId];
-        delete pendingRequest[id];
+        delete pendingRequest[fid];
 
         if (err.length != 0) {
-            emit Events.SettleFailed(requestId, p.tournamentId, err);
+            _fixtures[fid].phase = FixturePhase.None;
+            emit Events.FixtureSettleFailed(requestId, p.tournamentId, p.fixtureId, err);
             return;
         }
 
-        (address[] memory vaults, uint256[] memory mwPoints, uint256 adjTotalPoints) =
-            abi.decode(response, (address[], uint256[], uint256));
+        (
+            bytes32 utilizedHash,
+            bytes32 fixtureDigest,
+            bytes memory proof,
+            address[] memory vaults,
+            uint256[] memory mwPoints
+        ) = abi.decode(response, (bytes32, bytes32, bytes, address[], uint256[]));
 
-        if (vaults.length != mwPoints.length) revert Errors.LengthMismatch();
-
-        uint256 sumPoints;
-        for (uint256 i; i < mwPoints.length; ++i) {
-            sumPoints += mwPoints[i];
+        if (utilizedHash != p.utilizedHash) {
+            revert Errors.UtilizedHashMismatch(p.utilizedHash, utilizedHash);
         }
-        // Empty set ⇒ `adjTotalPoints` must be 0; otherwise sum must match (incl. all-zero MW).
-        if (sumPoints != adjTotalPoints) revert Errors.MAdjMismatch(sumPoints, adjTotalPoints);
+        if (fixtureDigest == bytes32(0)) revert Errors.ZeroHash();
+        if (vaults.length != mwPoints.length) revert Errors.LengthMismatch();
+        if (vaults.length > MAX_FIXTURE_PLAYERS) revert Errors.TooManyPlayers(vaults.length);
 
-        IPbrTreasury(p.treasury).finalizeRound(vaults, mwPoints, adjTotalPoints);
+        bytes32 proofHash = keccak256(proof);
 
-        emit Events.SettleFulfilled(
-            requestId, p.tournamentId, p.season, p.roundNumber, adjTotalPoints, vaults.length
+        FixtureSettlement storage f = _fixtures[fid];
+        f.phase = FixturePhase.Proven;
+        f.fixtureDigest = fixtureDigest;
+        f.proofHash = proofHash;
+
+        bool done = IPbrTreasury(p.treasury).applyFixtureSettlement(
+            p.fixtureId, fixtureDigest, vaults, mwPoints
+        );
+
+        bytes32 rid = roundId(p.tournamentId, p.season, p.roundNumber);
+        RoundSettlement storage round = _rounds[rid];
+        unchecked {
+            ++round.fixturesSettled;
+        }
+        if (done || round.fixturesSettled >= round.fixturesExpected) {
+            round.phase = RoundSettlePhase.Complete;
+            emit Events.RoundSettleComplete(
+                p.tournamentId, p.season, p.roundNumber, round.fixturesSettled
+            );
+        }
+
+        emit Events.FixtureSettleProven(
+            requestId, p.tournamentId, p.fixtureId, fixtureDigest, proofHash, vaults.length
         );
     }
 
@@ -138,7 +226,36 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
     // --------------------------------------------
 
     /// @inheritdoc IPbrSettle
-    function jobId(bytes32 tournamentId, uint16 season, uint32 roundNumber) public pure returns (bytes32) {
+    function roundId(bytes32 tournamentId, uint16 season, uint32 roundNumber) public pure returns (bytes32) {
         return keccak256(abi.encode(tournamentId, season, roundNumber));
+    }
+
+    /// @inheritdoc IPbrSettle
+    function fixtureJobId(
+        bytes32 tournamentId,
+        uint16 season,
+        uint32 roundNumber,
+        bytes32 fixtureId
+    ) public pure returns (bytes32) {
+        return keccak256(abi.encode(tournamentId, season, roundNumber, fixtureId));
+    }
+
+    /// @inheritdoc IPbrSettle
+    function getRoundSettlement(bytes32 tournamentId, uint16 season, uint32 roundNumber)
+        external
+        view
+        returns (RoundSettlement memory)
+    {
+        return _rounds[roundId(tournamentId, season, roundNumber)];
+    }
+
+    /// @inheritdoc IPbrSettle
+    function getFixtureSettlement(
+        bytes32 tournamentId,
+        uint16 season,
+        uint32 roundNumber,
+        bytes32 fixtureId
+    ) external view returns (FixtureSettlement memory) {
+        return _fixtures[fixtureJobId(tournamentId, season, roundNumber, fixtureId)];
     }
 }

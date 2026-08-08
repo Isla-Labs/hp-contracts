@@ -209,6 +209,7 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
         return _claim(msg.sender, tournamentId_, seasonId_, roundNumber, true);
     }
 
+    /// @notice Pull all claimable snapshotted rounds for `msg.sender`.
     function claimAll() external nonReentrant whenNotPaused returns (uint256 totalPayout) {
         address user = msg.sender;
         uint256 length = _snapRounds.length;
@@ -298,7 +299,8 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
             address treasuryAddr = tournamentRegistry.getPbrTreasury(key.tournamentId);
             if (treasuryAddr == address(0)) continue;
 
-            if (IPbrTreasury(treasuryAddr).getRound(key.seasonId, key.roundNumber).status != RoundStatus.Locked) {
+            RoundStatus status = IPbrTreasury(treasuryAddr).getRound(key.seasonId, key.roundNumber).status;
+            if (status != RoundStatus.Locked && status != RoundStatus.SettlePending) {
                 continue;
             }
 

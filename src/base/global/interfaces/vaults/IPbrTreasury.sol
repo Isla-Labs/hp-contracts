@@ -6,40 +6,30 @@ import { RoundState } from "@types/vaults/VaultTypes.sol";
 /**
  * @title IPbrTreasury
  * @notice Cross-contract surface for single-tournament PBR pots.
- * @dev Vault membership SoT is `TournamentRegistry`; this contract holds a local cache
- *      updated only via `syncRegisterVault` / `syncUnregisterVault` from the registry.
- *
- *      Crank: `lock` → `snapshotBatch` → `requestSettle` → (PbrSettle / SettleDms) → `finalizeRound`.
- *      `lock` freezes the vault-cache length for the round; `snapshotBatch` records utilized
- *      (staked) vaults; `requestSettle` passes that list; `finalizeRound` requires the oracle
- *      to return the same ordered set.
+ * @dev Crank: `lock` → `snapshotBatch` → `requestSettle` (per-fixture zk) → `applyFixtureSettlement`*
+ *      → Claimable. Claims read `vaultPoints` (simple `claim` / `claimAll`).
  */
 interface IPbrTreasury {
-    // --------------------------------------------
-    //  Vault cache sync — TournamentRegistry only
-    // --------------------------------------------
-
     function syncRegisterVault(address vault) external;
 
     function syncUnregisterVault(address vault) external;
-
-    // --------------------------------------------
-    //  Crank
-    // --------------------------------------------
 
     function lock() external;
 
     function snapshotBatch() external returns (uint256 processed, bool done);
 
-    /// @notice Open settle via `PbrSettle.settleRound` using the snapshotted utilized set.
-    function requestSettle() external returns (bytes32 requestId);
+    function requestSettle() external returns (bytes32[] memory requestIds);
 
-    /// @notice Apply zk-verified points; callable only by `PbrSettle`.
-    function finalizeRound(address[] calldata vaults, uint256[] calldata mwPoints, uint256 adjTotalPoints) external;
-
-    // --------------------------------------------
-    //  Claims (called by PlayerVault)
-    // --------------------------------------------
+    /**
+     * @notice Apply one fixture's zk-proven scores (≤32). Opens Claimable when all fixtures land.
+     * @dev `PbrSettle` only.
+     */
+    function applyFixtureSettlement(
+        bytes32 fixtureId,
+        bytes32 fixtureDigest,
+        address[] calldata vaults,
+        uint256[] calldata mwPoints
+    ) external returns (bool done);
 
     function payClaim(
         uint16 season,
@@ -48,10 +38,6 @@ interface IPbrTreasury {
         uint256 s,
         uint256 S
     ) external returns (uint256 payout);
-
-    // --------------------------------------------
-    //  Views
-    // --------------------------------------------
 
     function tournamentId() external view returns (bytes32);
 

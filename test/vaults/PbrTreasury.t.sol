@@ -31,10 +31,6 @@ contract PbrTreasuryTest is VaultsTestBase {
         _publishRound(TOURNAMENT, SEASON, 1, startTime, endTime, 10);
     }
 
-    // --------------------------------------------
-    //  Accrual / cache
-    // --------------------------------------------
-
     function test_receive_accruesRewards() public {
         _sendEth(address(treasury), 5 ether);
         assertEq(treasury.rewardsR(), 5 ether);
@@ -74,10 +70,6 @@ contract PbrTreasuryTest is VaultsTestBase {
         vm.expectRevert(abi.encodeWithSelector(Errors.UnknownVault.selector, address(vault2)));
         treasury.syncUnregisterVault(address(vault2));
     }
-
-    // --------------------------------------------
-    //  Lock
-    // --------------------------------------------
 
     function test_lock_nonFinal_locks80Percent() public {
         _sendEth(address(treasury), 100 ether);
@@ -123,10 +115,6 @@ contract PbrTreasuryTest is VaultsTestBase {
         treasury.lock();
     }
 
-    // --------------------------------------------
-    //  Snapshot batch
-    // --------------------------------------------
-
     function test_snapshotBatch_snapshotsVault() public {
         _stake(user, vault, 3 ether);
         _sendEth(address(treasury), 10 ether);
@@ -144,7 +132,7 @@ contract PbrTreasuryTest is VaultsTestBase {
     }
 
     function test_snapshotBatch_skipsUnutilized() public {
-        _registerVault(treasury, address(vault2)); // no stake
+        _registerVault(treasury, address(vault2));
         _stake(user, vault, 1 ether);
         _sendEth(address(treasury), 10 ether);
         vm.warp(startTime);
@@ -202,15 +190,12 @@ contract PbrTreasuryTest is VaultsTestBase {
         treasury.lock();
         treasury.snapshotBatch();
 
-        vm.expectRevert(Errors.NothingToSnapshot.selector);
-        treasury.snapshotBatch();
+        (uint256 processed, bool done) = treasury.snapshotBatch();
+        assertEq(processed, 0);
+        assertTrue(done);
     }
 
-    // --------------------------------------------
-    //  Finalize (PbrSettle)
-    // --------------------------------------------
-
-    function test_finalizeRound_byPbrSettle() public {
+    function test_settle_fixture_byPbrSettle() public {
         _stake(user, vault, 1 ether);
         _sendEth(address(treasury), 100 ether);
         vm.warp(startTime);
@@ -221,24 +206,24 @@ contract PbrTreasuryTest is VaultsTestBase {
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
         points[0] = 50;
-
-        vm.prank(pbrSettle);
-        treasury.finalizeRound(vaults, points, 50);
+        _settle(treasury, vaults, points);
 
         assertEq(uint8(treasury.getRound(SEASON, 1).status), uint8(RoundStatus.Claimable));
         assertEq(treasury.getVaultPoints(SEASON, 1, address(vault)), 50);
+        assertEq(treasury.getRound(SEASON, 1).M_adj, 50);
         assertEq(treasury.activeRound(), 2);
         assertEq(tournamentRegistry.flushCount(), 1);
-        assertEq(tournamentRegistry.lastFlushTournamentId(), TOURNAMENT);
     }
 
-    function test_finalizeRound_revertsUnauthorized() public {
+    function test_applyFixtureSettlement_revertsUnauthorized() public {
         _stake(user, vault, 1 ether);
         _sendEth(address(treasury), 1 ether);
         vm.warp(startTime);
         _lockAndSnapshot(treasury);
         vm.warp(endTime);
+        treasury.requestSettle();
 
+        bytes32 fixtureId = tournamentRegistry.getRound(TOURNAMENT, SEASON, 1).fixtureIds[0];
         address[] memory vaults = new address[](1);
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
@@ -246,106 +231,84 @@ contract PbrTreasuryTest is VaultsTestBase {
 
         vm.prank(user);
         vm.expectRevert(Errors.Unauthorized.selector);
-        treasury.finalizeRound(vaults, points, 1);
-
-        vm.prank(orchestrator);
-        vm.expectRevert(Errors.Unauthorized.selector);
-        treasury.finalizeRound(vaults, points, 1);
+        treasury.applyFixtureSettlement(fixtureId, bytes32(uint256(1)), vaults, points);
     }
 
-    function test_finalizeRound_revertsSnapshotPending() public {
+    function test_settle_twoFixtures_accumulates() public {
+        bytes32[] memory fixtures = new bytes32[](2);
+        fixtures[0] = keccak256("fx-a");
+        fixtures[1] = keccak256("fx-b");
+        tournamentRegistry.setFixtures(TOURNAMENT, SEASON, 1, fixtures);
+
+        _stake(user, vault, 1 ether);
+        _registerVault(treasury, address(vault2));
+        _stake(user, vault2, 1 ether);
+        _sendEth(address(treasury), 100 ether);
+        vm.warp(startTime);
+        _lockAndSnapshot(treasury);
+        vm.warp(endTime);
+        treasury.requestSettle();
+
+        address[] memory v1 = new address[](1);
+        v1[0] = address(vault);
+        uint256[] memory p1 = new uint256[](1);
+        p1[0] = 30;
+        vm.prank(address(pbrSettle));
+        bool done = treasury.applyFixtureSettlement(fixtures[0], keccak256("d1"), v1, p1);
+        assertFalse(done);
+
+        address[] memory v2 = new address[](1);
+        v2[0] = address(vault2);
+        uint256[] memory p2 = new uint256[](1);
+        p2[0] = 70;
+        vm.prank(address(pbrSettle));
+        done = treasury.applyFixtureSettlement(fixtures[1], keccak256("d2"), v2, p2);
+        assertTrue(done);
+
+        assertEq(treasury.getVaultPoints(SEASON, 1, address(vault)), 30);
+        assertEq(treasury.getVaultPoints(SEASON, 1, address(vault2)), 70);
+        assertEq(treasury.getRound(SEASON, 1).M_adj, 100);
+        assertEq(uint8(treasury.getRound(SEASON, 1).status), uint8(RoundStatus.Claimable));
+    }
+
+    function test_requestSettle_revertsSnapshotPending() public {
         _sendEth(address(treasury), 1 ether);
         vm.warp(startTime);
         treasury.lock();
         vm.warp(endTime);
 
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(vault);
-        uint256[] memory points = new uint256[](1);
-        points[0] = 1;
-
-        vm.prank(pbrSettle);
         vm.expectRevert(Errors.SnapshotPending.selector);
-        treasury.finalizeRound(vaults, points, 1);
+        treasury.requestSettle();
     }
 
-    function test_finalizeRound_revertsLengthMismatch() public {
-        _stake(user, vault, 1 ether);
+    function test_settle_emptyUtilized_ok() public {
         _sendEth(address(treasury), 1 ether);
         vm.warp(startTime);
         _lockAndSnapshot(treasury);
         vm.warp(endTime);
-
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(vault);
-        uint256[] memory points = new uint256[](0);
-
-        vm.prank(pbrSettle);
-        vm.expectRevert(Errors.LengthMismatch.selector);
-        treasury.finalizeRound(vaults, points, 1);
-    }
-
-    function test_finalizeRound_emptyUtilized_ok() public {
-        // Registered but unstaked → skipped by snapshotBatch; oracle returns empty set.
-        _sendEth(address(treasury), 1 ether);
-        vm.warp(startTime);
-        _lockAndSnapshot(treasury);
-        vm.warp(endTime);
-
-        assertEq(treasury.getUtilizedVaults(SEASON, 1).length, 0);
 
         address[] memory vaults = new address[](0);
         uint256[] memory points = new uint256[](0);
-
-        vm.prank(pbrSettle);
-        treasury.finalizeRound(vaults, points, 0);
+        _settle(treasury, vaults, points);
 
         assertEq(uint8(treasury.getRound(SEASON, 1).status), uint8(RoundStatus.Claimable));
         assertEq(treasury.getRound(SEASON, 1).M_adj, 0);
         assertEq(treasury.activeRound(), 2);
     }
 
-    function test_finalizeRound_revertsUtilizedSetMismatch() public {
-        _stake(user, vault, 1 ether);
-        _sendEth(address(treasury), 1 ether);
-        vm.warp(startTime);
-        _lockAndSnapshot(treasury);
-        vm.warp(endTime);
-
-        address[] memory empty = new address[](0);
-        uint256[] memory emptyPoints = new uint256[](0);
-        vm.prank(pbrSettle);
-        vm.expectRevert(Errors.UtilizedSetMismatch.selector);
-        treasury.finalizeRound(empty, emptyPoints, 0);
-
-        address[] memory wrong = new address[](1);
-        wrong[0] = address(vault2);
-        uint256[] memory points = new uint256[](1);
-        points[0] = 1;
-        vm.prank(pbrSettle);
-        vm.expectRevert(Errors.UtilizedSetMismatch.selector);
-        treasury.finalizeRound(wrong, points, 1);
-    }
-
-    function test_finalizeRound_revertsRoundNotEnded() public {
+    function test_requestSettle_revertsRoundNotEnded() public {
         _stake(user, vault, 1 ether);
         _sendEth(address(treasury), 1 ether);
         vm.warp(startTime);
         _lockAndSnapshot(treasury);
 
-        address[] memory vaults = new address[](1);
-        vaults[0] = address(vault);
-        uint256[] memory points = new uint256[](1);
-        points[0] = 1;
-
-        vm.prank(pbrSettle);
         vm.expectRevert(
             abi.encodeWithSelector(Errors.RoundNotEnded.selector, SEASON, uint32(1), uint256(endTime), block.timestamp)
         );
-        treasury.finalizeRound(vaults, points, 1);
+        treasury.requestSettle();
     }
 
-    function test_finalizeRound_finalRound_wrapsSeason() public {
+    function test_settle_finalRound_wrapsSeason() public {
         _publishRound(TOURNAMENT, SEASON, 1, startTime, endTime, 1);
         _stake(user, vault, 1 ether);
         _sendEth(address(treasury), 10 ether);
@@ -357,15 +320,11 @@ contract PbrTreasuryTest is VaultsTestBase {
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
         points[0] = 10;
-        _settle(treasury, vaults, points, 10);
+        _settle(treasury, vaults, points);
 
         assertEq(treasury.seasonId(), SEASON + 1);
         assertEq(treasury.activeRound(), 1);
     }
-
-    // --------------------------------------------
-    //  payClaim / PBR math
-    // --------------------------------------------
 
     function test_payClaim_pbrFormula() public {
         _stake(user, vault, 25 ether);
@@ -380,11 +339,12 @@ contract PbrTreasuryTest is VaultsTestBase {
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
         points[0] = 200;
-        _settle(treasury, vaults, points, 400);
+        _settle(treasury, vaults, points);
 
         uint256 R = 80 ether;
-        uint256 expectedUser = Math.mulDiv(Math.mulDiv(R, 200, 400), 25 ether, 100 ether);
-        uint256 expectedUser2 = Math.mulDiv(Math.mulDiv(R, 200, 400), 75 ether, 100 ether);
+        // Single utilized vault: M_adj == m == 200
+        uint256 expectedUser = Math.mulDiv(Math.mulDiv(R, 200, 200), 25 ether, 100 ether);
+        uint256 expectedUser2 = Math.mulDiv(Math.mulDiv(R, 200, 200), 75 ether, 100 ether);
 
         assertEq(treasury.previewClaim(SEASON, 1, address(vault), 25 ether, 100 ether), expectedUser);
 
@@ -412,7 +372,7 @@ contract PbrTreasuryTest is VaultsTestBase {
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
         points[0] = 10;
-        _settle(treasury, vaults, points, 10);
+        _settle(treasury, vaults, points);
 
         vm.prank(user);
         vm.expectRevert(Errors.NothingToClaim.selector);
@@ -430,7 +390,7 @@ contract PbrTreasuryTest is VaultsTestBase {
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
         points[0] = 100;
-        _settle(treasury, vaults, points, 100);
+        _settle(treasury, vaults, points);
 
         vm.prank(address(tournamentRegistry));
         treasury.syncUnregisterVault(address(vault));
@@ -455,7 +415,7 @@ contract PbrTreasuryTest is VaultsTestBase {
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
         points[0] = 100;
-        _settle(treasury, vaults, points, 100);
+        _settle(treasury, vaults, points);
 
         vm.expectRevert(Errors.TransferFailed.selector);
         helper.claim(vault, TOURNAMENT, SEASON, 1);
@@ -473,7 +433,7 @@ contract PbrTreasuryTest is VaultsTestBase {
         vaults[0] = address(vault);
         uint256[] memory points = new uint256[](1);
         points[0] = 100;
-        _settle(treasury, vaults, points, 100);
+        _settle(treasury, vaults, points);
 
         vm.prank(user);
         vault.claim(TOURNAMENT, SEASON, 1);
@@ -484,7 +444,6 @@ contract PbrTreasuryTest is VaultsTestBase {
     }
 }
 
-/// @dev Stakes then claims into a contract that rejects ETH.
 contract ClaimRevertHelper {
     receive() external payable {
         revert("no eth");

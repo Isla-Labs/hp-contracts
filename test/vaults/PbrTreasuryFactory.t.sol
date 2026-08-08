@@ -60,6 +60,6 @@ contract PbrTreasuryFactoryTest is VaultsTestBase {
         assertEq(treasury.activeRound(), 1);
         assertEq(treasury.tradingRound(), 1);
         assertEq(treasury.owner(), orchestrator);
-        assertEq(treasury.pbrSettle(), pbrSettle);
+        assertEq(treasury.pbrSettle(), address(pbrSettle));
     }
 }

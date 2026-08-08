@@ -9,12 +9,14 @@ import { TransparentUpgradeableProxy } from "@openzeppelin/proxy/transparent/Tra
 import { AddressProvider } from "@src/AddressProvider.sol";
 import { AddressKeys as Addresses } from "@addresses/AddressKeys.sol";
 import { CreateXAddresses } from "@base/global/libraries/addresses/CreateX.sol";
+import { RoundStatus } from "@types/vaults/VaultTypes.sol";
 import { PlayerVault } from "@vaults/PlayerVault.sol";
 import { PbrTreasury } from "@vaults/PbrTreasury.sol";
 import { StakedToken } from "@vaults/StakedToken.sol";
 import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 import { PbrTreasuryFactory } from "@vaults/factories/PbrTreasuryFactory.sol";
 
+import { MockPbrSettle } from "./mocks/MockPbrSettle.sol";
 import { MockPlayerSetRegistry } from "./mocks/MockPlayerSetRegistry.sol";
 import { MockPlayerToken } from "./mocks/MockPlayerToken.sol";
 import { MockTournamentRegistry } from "./mocks/MockTournamentRegistry.sol";
@@ -26,7 +28,6 @@ abstract contract VaultsTestBase is Test {
 
     address internal dao = makeAddr("dao");
     address internal orchestrator = makeAddr("orchestrator");
-    address internal pbrSettle = makeAddr("pbrSettle");
     address internal user = makeAddr("user");
     address internal user2 = makeAddr("user2");
 
@@ -34,6 +35,7 @@ abstract contract VaultsTestBase is Test {
     MockTournamentRegistry internal tournamentRegistry;
     MockPlayerSetRegistry internal playerSetRegistry;
     MockPlayerToken internal playerToken;
+    MockPbrSettle internal pbrSettle;
 
     UpgradeableBeacon internal vaultBeacon;
     UpgradeableBeacon internal treasuryBeacon;
@@ -46,11 +48,12 @@ abstract contract VaultsTestBase is Test {
         tournamentRegistry = new MockTournamentRegistry();
         playerSetRegistry = new MockPlayerSetRegistry();
         playerToken = new MockPlayerToken();
+        pbrSettle = new MockPbrSettle();
 
         ap.setName(Addresses.ORCHESTRATOR, orchestrator);
         ap.setName(Addresses.TOURNAMENT_REGISTRY, address(tournamentRegistry));
         ap.setName(Addresses.PLAYER_SET_REGISTRY, address(playerSetRegistry));
-        ap.setName(Addresses.PBR_SETTLE, pbrSettle);
+        ap.setName(Addresses.PBR_SETTLE, address(pbrSettle));
 
         vaultBeacon = new UpgradeableBeacon(address(new PlayerVault(address(ap))), orchestrator);
         treasuryBeacon = new UpgradeableBeacon(address(new PbrTreasury(address(ap))), orchestrator);
@@ -120,7 +123,6 @@ abstract contract VaultsTestBase is Test {
         require(ok, "eth send failed");
     }
 
-    /// @dev Etch canonical CreateX without compiling its 0.8.23-pinned sources.
     function _etchCreateX() internal {
         string memory artifact = vm.readFile("lib/doppler/lib/createx/artifacts/src/CreateX.sol/CreateX.json");
         bytes memory creationCode = vm.parseJsonBytes(artifact, ".bytecode");
@@ -139,8 +141,45 @@ abstract contract VaultsTestBase is Test {
         require(done, "snapshot incomplete");
     }
 
-    function _settle(PbrTreasury treasury, address[] memory vaults, uint256[] memory points, uint256 mAdj) internal {
-        vm.prank(pbrSettle);
-        treasury.finalizeRound(vaults, points, mAdj);
+    /// @dev `requestSettle` → apply fixture scores → Claimable. `M_adj` = sum of applied utilized points.
+    function _settle(PbrTreasury treasury, address[] memory vaults, uint256[] memory points) internal {
+        (uint16 season, uint32 round,) = treasury.getCursors();
+        RoundStatus status = treasury.getRound(season, round).status;
+        if (status == RoundStatus.Locked) {
+            treasury.requestSettle();
+        } else if (status != RoundStatus.SettlePending) {
+            revert("round not ready to settle");
+        }
+
+        if (uint8(treasury.getRound(season, round).status) == uint8(RoundStatus.Claimable)) {
+            require(vaults.length == 0, "expected empty utilized");
+            return;
+        }
+
+        address[] memory utilized = treasury.getUtilizedVaults(season, round);
+        require(vaults.length == utilized.length, "vaults/utilized length");
+        require(points.length == utilized.length, "points/utilized length");
+        for (uint256 i; i < utilized.length; ++i) {
+            require(vaults[i] == utilized[i], "vault order");
+        }
+
+        bytes32[] memory fixtures = tournamentRegistry.getRound(TOURNAMENT, season, round).fixtureIds;
+        require(fixtures.length > 0, "no fixtures");
+
+        vm.prank(address(pbrSettle));
+        bool done =
+            treasury.applyFixtureSettlement(fixtures[0], keccak256(abi.encode(fixtures[0], "digest")), vaults, points);
+
+        address[] memory emptyVaults = new address[](0);
+        uint256[] memory emptyPoints = new uint256[](0);
+        for (uint256 i = 1; i < fixtures.length; ++i) {
+            vm.prank(address(pbrSettle));
+            done = treasury.applyFixtureSettlement(
+                fixtures[i], keccak256(abi.encode(fixtures[i], "digest")), emptyVaults, emptyPoints
+            );
+        }
+
+        require(done, "settle incomplete");
+        require(uint8(treasury.getRound(season, round).status) == uint8(RoundStatus.Claimable), "not claimable");
     }
 }

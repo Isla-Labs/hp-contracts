@@ -30,9 +30,24 @@ contract MockTournamentRegistry {
         bool isPublished
     ) external {
         published[tournamentId][season][roundNumber] = isPublished;
+        bytes32[] memory fixtures = new bytes32[](1);
+        fixtures[0] = keccak256(abi.encode(tournamentId, season, roundNumber, "fixture-0"));
         _rounds[tournamentId][season][roundNumber] = RoundSchedule({
-            roundNumber: roundNumber, startTime: startTime, endTime: endTime, fixtureIds: new bytes32[](0)
+            roundNumber: roundNumber, startTime: startTime, endTime: endTime, fixtureIds: fixtures
         });
+    }
+
+    function setFixtures(
+        bytes32 tournamentId,
+        uint16 season,
+        uint32 roundNumber,
+        bytes32[] calldata fixtureIds
+    ) external {
+        RoundSchedule storage round = _rounds[tournamentId][season][roundNumber];
+        delete round.fixtureIds;
+        for (uint256 i; i < fixtureIds.length; ++i) {
+            round.fixtureIds.push(fixtureIds[i]);
+        }
     }
 
     function setFinalRound(bytes32 tournamentId, uint16 season, uint32 finalRound) external {

@@ -561,7 +561,9 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     function _isTreasuryActiveRoundLocked(address treasury) private view returns (bool) {
         if (treasury == address(0)) return false;
         (uint16 season, uint32 active,) = IPbrTreasury(treasury).getCursors();
-        return IPbrTreasury(treasury).getRound(season, active).status == RoundStatus.Locked;
+        RoundStatus status = IPbrTreasury(treasury).getRound(season, active).status;
+        // Defer lifecycle unregisters until Claimable (through per-fixture settle).
+        return status == RoundStatus.Locked || status == RoundStatus.SettlePending;
     }
 
     function _queuePendingUnregister(bytes32 tournamentId, address vault) private {

@@ -18,9 +18,22 @@ library VaultsEvents {
     event VaultSnapshotted(uint16 indexed season, uint32 roundNumber, address indexed vault, uint256 snapId);
     event SnapshotBatchProgress(uint16 indexed season, uint32 roundNumber, uint256 cursor, bool done);
     event RoundSettleRequested(
-        uint16 indexed season, uint32 roundNumber, address indexed pbrSettle, bytes32 requestId, uint256 vaultCount
+        uint16 indexed season,
+        uint32 roundNumber,
+        address indexed pbrSettle,
+        bytes32 utilizedHash,
+        uint32 fixtureCount
     );
-    event RoundSettled(uint16 indexed season, uint32 roundNumber, uint256 M_adj, uint256 vaultCount);
+    event FixtureSettlementApplied(
+        uint16 indexed season,
+        uint32 roundNumber,
+        bytes32 indexed fixtureId,
+        bytes32 fixtureDigest,
+        uint256 written,
+        uint256 M_adj,
+        bool done
+    );
+    event RoundSettled(uint16 indexed season, uint32 roundNumber, uint256 M_adj, uint256 utilizedCount);
     event ClaimPaid(uint16 indexed season, uint32 roundNumber, address indexed vault, address user, uint256 payout);
 
     // --------------------------------------------

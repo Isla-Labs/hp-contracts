@@ -40,9 +40,7 @@ contract TransferLockerTest is LockersTestBase {
         assertEq(transferLocker.eligibilityVerifier(), eligibilityVerifier);
 
         vm.expectRevert(Errors.AlreadySet.selector);
-        _ownerCall(
-            address(transferLocker), abi.encodeCall(TransferLocker.setEligibilityVerifier, (makeAddr("other")))
-        );
+        _ownerCall(address(transferLocker), abi.encodeCall(TransferLocker.setEligibilityVerifier, (makeAddr("other"))));
     }
 
     function test_setQueueWait_revertsZero() public {

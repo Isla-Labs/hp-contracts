@@ -31,10 +31,7 @@ contract MockTournamentRegistry {
     ) external {
         published[tournamentId][season][roundNumber] = isPublished;
         _rounds[tournamentId][season][roundNumber] = RoundSchedule({
-            roundNumber: roundNumber,
-            startTime: startTime,
-            endTime: endTime,
-            fixtureIds: new bytes32[](0)
+            roundNumber: roundNumber, startTime: startTime, endTime: endTime, fixtureIds: new bytes32[](0)
         });
     }
 

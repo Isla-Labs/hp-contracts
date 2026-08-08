@@ -139,12 +139,7 @@ abstract contract VaultsTestBase is Test {
         require(done, "snapshot incomplete");
     }
 
-    function _settle(
-        PbrTreasury treasury,
-        address[] memory vaults,
-        uint256[] memory points,
-        uint256 mAdj
-    ) internal {
+    function _settle(PbrTreasury treasury, address[] memory vaults, uint256[] memory points, uint256 mAdj) internal {
         vm.prank(orchestrator);
         treasury.settle(vaults, points, mAdj);
     }

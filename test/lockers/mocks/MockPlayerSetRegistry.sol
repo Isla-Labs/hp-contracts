@@ -49,10 +49,7 @@ contract MockPlayerSetRegistry {
             tokenData: TokenData({ token: address(0), name: "", symbol: "" }),
             tournamentData: TournamentData({ leagueId: leagueId, activeTournaments: new bytes32[](0) }),
             dopplerData: DopplerData({
-                activePool: pool,
-                hookDoppler: hookDoppler,
-                hookMigrator: hookMigrator,
-                feeRouter: feeRouter
+                activePool: pool, hookDoppler: hookDoppler, hookMigrator: hookMigrator, feeRouter: feeRouter
             }),
             vaultData: VaultData({ playerVault: address(0), stToken: address(0), isUtilized: false }),
             advancedTradeData: AdvancedTradeData({ advancedTradeVault: address(0), markSource: address(0) })

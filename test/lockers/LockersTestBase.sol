@@ -100,9 +100,7 @@ abstract contract LockersTestBase is Test {
     function _deployTransferLocker() internal returns (TransferLocker) {
         TransferLocker impl = new TransferLocker(address(ap));
         return TransferLocker(
-            address(
-                new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(TransferLocker.initialize, ()))
-            )
+            address(new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(TransferLocker.initialize, ())))
         );
     }
 
@@ -167,20 +165,15 @@ abstract contract LockersTestBase is Test {
         return address(feeRouter);
     }
 
-    function _enqueueAsOwner(
-        bytes32[] memory playerIds,
-        LifecycleReason reason,
-        uint32[] memory mins
-    ) internal {
-        _ownerCall(
-            address(transferLocker),
-            abi.encodeCall(TransferLocker.enqueueLifecycle, (playerIds, reason, mins))
-        );
+    function _enqueueAsOwner(bytes32[] memory playerIds, LifecycleReason reason, uint32[] memory mins) internal {
+        _ownerCall(address(transferLocker), abi.encodeCall(TransferLocker.enqueueLifecycle, (playerIds, reason, mins)));
     }
 
-    function _fulfillLeagueTransfer(bytes32 requestId, bytes32 newLeagueId, bytes32[] memory activeTournamentIds)
-        internal
-    {
+    function _fulfillLeagueTransfer(
+        bytes32 requestId,
+        bytes32 newLeagueId,
+        bytes32[] memory activeTournamentIds
+    ) internal {
         bytes memory response = abi.encode(newLeagueId, activeTournamentIds);
         cvmRouter.fulfill(requestId, response, "");
     }

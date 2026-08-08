@@ -9,12 +9,7 @@ import { FeeRouter } from "@markets/FeeRouter.sol";
 import { PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
 
 import { MarketsTestBase } from "./MarketsTestBase.sol";
-import {
-    AcceptingReceiver,
-    MockERC20,
-    RevertingReceiver,
-    ToggleReceiver
-} from "./mocks/ETHReceivers.sol";
+import { AcceptingReceiver, MockERC20, RevertingReceiver, ToggleReceiver } from "./mocks/ETHReceivers.sol";
 
 contract FeeRouterTest is MarketsTestBase {
     bytes32 internal constant PLAYER = keccak256("player-1");
@@ -211,7 +206,7 @@ contract FeeRouterTest is MarketsTestBase {
     }
 
     function test_forward_bypassesMinRelay() public {
-        uint256 dust = 0.00005 ether;
+        uint256 dust = 0.000_05 ether;
         _sendEth(address(router), dust);
         assertEq(address(router).balance, dust);
 
@@ -227,18 +222,18 @@ contract FeeRouterTest is MarketsTestBase {
     // --------------------------------------------
 
     function test_receive_belowMinRelay_holds() public {
-        _sendEth(address(router), 0.00005 ether);
-        assertEq(address(router).balance, 0.00005 ether);
+        _sendEth(address(router), 0.000_05 ether);
+        assertEq(address(router).balance, 0.000_05 ether);
         assertEq(address(hpTreasury).balance, 0);
         assertEq(address(hub).balance, 0);
     }
 
     function test_setMinRelay_triggersRelay() public {
-        _sendEth(address(router), 0.00005 ether);
-        assertEq(address(router).balance, 0.00005 ether);
+        _sendEth(address(router), 0.000_05 ether);
+        assertEq(address(router).balance, 0.000_05 ether);
 
         vm.prank(orchestrator);
-        router.setMinRelay(0.00005 ether);
+        router.setMinRelay(0.000_05 ether);
 
         assertEq(address(router).balance, 0);
         assertTrue(address(hpTreasury).balance > 0);

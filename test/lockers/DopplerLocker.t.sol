@@ -94,7 +94,9 @@ contract DopplerLockerTest is LockersTestBase {
         assertEq(e.symbol, "P1");
         assertEq(uint8(e.status), uint8(DopplerLocker.QueueStatus.ReadyToQueue));
 
-        _ownerCall(address(dopplerLocker), abi.encodeCall(DopplerLocker.queueAssets, (LEAGUE, SEASON, new bytes32[](0))));
+        _ownerCall(
+            address(dopplerLocker), abi.encodeCall(DopplerLocker.queueAssets, (LEAGUE, SEASON, new bytes32[](0)))
+        );
         e = dopplerLocker.queueEntry(PLAYER);
         assertEq(uint8(e.status), uint8(DopplerLocker.QueueStatus.Queued));
     }
@@ -205,6 +207,8 @@ contract DopplerLockerTest is LockersTestBase {
         symbols[0] = "PLY";
         cvmRouter.fulfill(requestId, abi.encode(SEASON, ids, names, symbols), "");
 
-        _ownerCall(address(dopplerLocker), abi.encodeCall(DopplerLocker.queueAssets, (LEAGUE, SEASON, new bytes32[](0))));
+        _ownerCall(
+            address(dopplerLocker), abi.encodeCall(DopplerLocker.queueAssets, (LEAGUE, SEASON, new bytes32[](0)))
+        );
     }
 }

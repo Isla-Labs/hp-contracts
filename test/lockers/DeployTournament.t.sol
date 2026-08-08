@@ -25,8 +25,7 @@ contract DeployTournamentTest is LockersTestBase {
     function test_deploy_domesticLeague() public {
         DeployParams memory params = _leagueParams(LEAGUE, SEASON);
 
-        bytes memory ret =
-            _ownerCall(address(deployTournament), abi.encodeCall(DeployTournament.deploy, (params)));
+        bytes memory ret = _ownerCall(address(deployTournament), abi.encodeCall(DeployTournament.deploy, (params)));
         DeployResult memory result = abi.decode(ret, (DeployResult));
 
         assertTrue(result.pbrTreasury != address(0));
@@ -113,8 +112,7 @@ contract DeployTournamentTest is LockersTestBase {
         params.leagueIds = new bytes32[](1);
         params.leagueIds[0] = LEAGUE;
 
-        bytes memory ret =
-            _ownerCall(address(deployTournament), abi.encodeCall(DeployTournament.deploy, (params)));
+        bytes memory ret = _ownerCall(address(deployTournament), abi.encodeCall(DeployTournament.deploy, (params)));
         DeployResult memory result = abi.decode(ret, (DeployResult));
 
         assertTrue(result.pbrTreasury != address(0));
@@ -141,10 +139,7 @@ contract DeployTournamentTest is LockersTestBase {
 
         params.tournamentType = TournamentType.DOMESTIC_LEAGUE;
         params.bootstrap = BootstrapParams({
-            tournamentId: leagueId,
-            initialSeason: 2025,
-            treasurySalt: bytes32(uint256(1)),
-            seasons: seasons
+            tournamentId: leagueId, initialSeason: 2025, treasurySalt: bytes32(uint256(1)), seasons: seasons
         });
         params.leagueIds = new bytes32[](0);
     }

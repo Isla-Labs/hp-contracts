@@ -32,8 +32,10 @@ import { PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
  *        - `redistributionHubs[i]` receives `feeSplit[i] / WAD` of the post-integrator remainder.
  *        - When `pbrFeeHub != 0`, it MUST appear in `redistributionHubs` (enforced on write).
  *        - Default at init / `setPbrFeeHub`: `{ pbrFeeHub }` / `{ WAD }`.
- *        - When `pbrFeeHub == 0` (unsupported / OOF): hubs cleared; remainder even-splits across
- *          domestic hubs from `TournamentRegistry.getAllDomesticPbrFeeHubs()`.
+ *        - When `status == INACTIVE` (lifecycle deactivate) **or** no hubs configured /
+ *          `pbrFeeHub == 0`: remainder even-splits across domestic hubs
+ *          (`TournamentRegistry.getAllDomesticPbrFeeHubs()`). Hub storage is left intact on
+ *          deactivate so Reactivate / `setLeagueId` can restore without clearing.
  *
  *      Access: `Orchestrator` (owner) for config + `rescueToken`; `setStatus` and
  *      `setPbrFeeHub` also callable by `PlayerSetRegistry` (lifecycle SoT).
@@ -140,7 +142,7 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
         _relay(bal);
     }
 
-    /// @dev Integrator cut from `status`, then remainder by `feeSplit` / OOF even-split.
+    /// @dev Integrator cut from `status`, then remainder by `feeSplit` or OOF even-split.
     function _relay(uint256 amount) internal {
         if (amount == 0) return;
 
@@ -152,6 +154,12 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
         }
 
         if (remainder == 0) return;
+
+        // Soft-inactive / deactivated: ignore stored league hubs; even-split across domestics.
+        if (status == PlayerStatus.INACTIVE) {
+            _relayOof(remainder);
+            return;
+        }
 
         uint256 hubCount = _redistributionHubs.length;
         if (hubCount != 0) {
@@ -165,7 +173,12 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
             return;
         }
 
-        // Unsupported / no configured hubs: even-split remainder across domestic fee hubs
+        // Unsupported / no configured hubs
+        _relayOof(remainder);
+    }
+
+    /// @dev Even-split remainder across all domestic `PbrFeeHub`s.
+    function _relayOof(uint256 remainder) internal {
         address[] memory hubs = tournamentRegistry.getAllDomesticPbrFeeHubs();
         uint256 count = hubs.length;
         if (count == 0) {

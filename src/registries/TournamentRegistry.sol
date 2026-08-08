@@ -9,6 +9,7 @@ import { AddressKeys as Addresses } from "@base/global/libraries/addresses/Addre
 import { RegistryErrors as Errors } from "@errors/registries/RegistryErrors.sol";
 import { RegistryEvents as Events } from "@events/registries/RegistryEvents.sol";
 import { Hub, Season, Tournament, TournamentType, RoundSchedule } from "@types/registries/TournamentTypes.sol";
+import { RoundStatus } from "@types/vaults/VaultTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
@@ -24,9 +25,12 @@ import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
  *      Access:
  *      - Owner (`Orchestrator`): `registerHub`, tournament create, `linkHub`, vault membership,
  *        and season calendar (`openSeason` / `upsertRound(s)`).
+ *      - `PlayerSetRegistry`: vault register/unregister fan-out.
+ *      - Tournament `PbrTreasury`: `flushPendingUnregisters` after settle.
  *
  *      Vault membership is the SoT here; each write syncs a local cache on the tournament's
- *      `PbrTreasury` so crank paths never re-read this registry for the vault set.
+ *      `PbrTreasury`. Unregister while the treasury active round is `Locked` is deferred until
+ *      settle so SettlePbr still observes the vault through distribute.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -53,6 +57,10 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     mapping(bytes32 tournamentId => address[]) private _registeredVaults;
     mapping(bytes32 tournamentId => mapping(address vault => uint256)) private _registeredVaultIndex; // 1-based
     mapping(bytes32 tournamentId => mapping(address vault => bool)) private _isVaultRegistered;
+
+    /// @dev Deferred removals while treasury active round is `Locked` (SoT + cache stay until flush).
+    mapping(bytes32 tournamentId => address[]) private _pendingUnregister;
+    mapping(bytes32 tournamentId => mapping(address vault => uint256)) private _pendingUnregisterIndex; // 1-based
 
     // --------------------------------------------
     //  Initialization
@@ -157,7 +165,10 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         address treasury = t.pbrTreasury;
         uint256 length = vaults.length;
         for (uint256 i; i < length; ++i) {
-            _registerVault(tournamentId, treasury, vaults[i]);
+            address vault = vaults[i];
+            // Cancel deferred removal — vault stays registered for the locked round.
+            if (_cancelPendingUnregister(tournamentId, vault)) continue;
+            _registerVault(tournamentId, treasury, vault);
         }
     }
 
@@ -166,10 +177,37 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         _checkVaultMembershipCaller();
         Tournament storage t = _requireTournament(tournamentId);
         address treasury = t.pbrTreasury;
+        bool locked = _isTreasuryActiveRoundLocked(treasury);
         uint256 length = vaults.length;
         for (uint256 i; i < length; ++i) {
-            _unregisterVault(tournamentId, treasury, vaults[i]);
+            address vault = vaults[i];
+            if (locked) {
+                _queuePendingUnregister(tournamentId, vault);
+            } else {
+                _unregisterVault(tournamentId, treasury, vault);
+            }
         }
+    }
+
+    /// @inheritdoc ITournamentRegistry
+    function flushPendingUnregisters(bytes32 tournamentId) external {
+        Tournament storage t = _requireTournament(tournamentId);
+        if (msg.sender != t.pbrTreasury && msg.sender != owner()) revert Errors.NotAuthorized();
+        // Settle must have moved the round out of `Locked` before flush.
+        if (_isTreasuryActiveRoundLocked(t.pbrTreasury)) revert Errors.RoundStillLocked(tournamentId);
+
+        address[] storage pending = _pendingUnregister[tournamentId];
+        uint256 count = pending.length;
+        address treasury = t.pbrTreasury;
+        while (pending.length != 0) {
+            address vault = pending[pending.length - 1];
+            pending.pop();
+            delete _pendingUnregisterIndex[tournamentId][vault];
+            if (_isVaultRegistered[tournamentId][vault]) {
+                _unregisterVault(tournamentId, treasury, vault);
+            }
+        }
+        if (count != 0) emit Events.VaultUnregisterFlushed(tournamentId, count);
     }
 
     /// @dev Owner or `PlayerSetRegistry` (lifecycle SoT fan-out).
@@ -313,9 +351,28 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     }
 
     /// @inheritdoc ITournamentRegistry
+    function isVaultUnregisterPending(bytes32 tournamentId, address vault) external view returns (bool) {
+        return _pendingUnregisterIndex[tournamentId][vault] != 0;
+    }
+
+    /// @inheritdoc ITournamentRegistry
     function getRegisteredVaults(bytes32 tournamentId) external view returns (address[] memory) {
         _requireTournament(tournamentId);
         return _registeredVaults[tournamentId];
+    }
+
+    /// @inheritdoc ITournamentRegistry
+    function isLeagueLinkedToTournament(bytes32 tournamentId, bytes32 leagueId) external view returns (bool) {
+        if (leagueId == bytes32(0) || _tournaments[tournamentId].tournamentId == bytes32(0)) return false;
+        // Domestic league: tournament id equals league id.
+        if (tournamentId == leagueId) return true;
+
+        Hub[] storage feeHubs = _tournaments[tournamentId].feeHubs;
+        uint256 n = feeHubs.length;
+        for (uint256 i; i < n; ++i) {
+            if (feeHubs[i].leagueId == leagueId) return true;
+        }
+        return false;
     }
 
     function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32) {
@@ -501,6 +558,39 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         emit Events.HubAddedToTournament(tournamentId, hub.leagueId, hub.pbrFeeHub);
     }
 
+    function _isTreasuryActiveRoundLocked(address treasury) private view returns (bool) {
+        if (treasury == address(0)) return false;
+        (uint16 season, uint32 active,) = IPbrTreasury(treasury).getCursors();
+        return IPbrTreasury(treasury).getRound(season, active).status == RoundStatus.Locked;
+    }
+
+    function _queuePendingUnregister(bytes32 tournamentId, address vault) private {
+        if (!_isVaultRegistered[tournamentId][vault]) revert Errors.VaultNotRegistered(tournamentId, vault);
+        if (_pendingUnregisterIndex[tournamentId][vault] != 0) return;
+
+        _pendingUnregister[tournamentId].push(vault);
+        _pendingUnregisterIndex[tournamentId][vault] = _pendingUnregister[tournamentId].length;
+        emit Events.VaultUnregisterPending(tournamentId, vault);
+    }
+
+    /// @return cancelled True if a deferred unregister was cleared (vault remains registered).
+    function _cancelPendingUnregister(bytes32 tournamentId, address vault) private returns (bool cancelled) {
+        uint256 index1 = _pendingUnregisterIndex[tournamentId][vault];
+        if (index1 == 0) return false;
+
+        address[] storage pending = _pendingUnregister[tournamentId];
+        uint256 index0 = index1 - 1;
+        uint256 last = pending.length - 1;
+        if (index0 != last) {
+            address moved = pending[last];
+            pending[index0] = moved;
+            _pendingUnregisterIndex[tournamentId][moved] = index0 + 1;
+        }
+        pending.pop();
+        delete _pendingUnregisterIndex[tournamentId][vault];
+        return true;
+    }
+
     function _registerVault(bytes32 tournamentId, address treasury, address vault) private {
         if (vault == address(0)) revert Errors.ZeroAddress();
         if (vault.code.length == 0) revert Errors.UnknownVault(vault);
@@ -517,6 +607,9 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
 
     function _unregisterVault(bytes32 tournamentId, address treasury, address vault) private {
         if (!_isVaultRegistered[tournamentId][vault]) revert Errors.VaultNotRegistered(tournamentId, vault);
+
+        // Drop any deferred entry if flushing / immediate path races.
+        _cancelPendingUnregister(tournamentId, vault);
 
         uint256 index0 = _registeredVaultIndex[tournamentId][vault] - 1;
         address[] storage vaults = _registeredVaults[tournamentId];

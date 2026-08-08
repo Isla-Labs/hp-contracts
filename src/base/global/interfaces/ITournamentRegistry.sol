@@ -34,10 +34,19 @@ interface ITournamentRegistry {
     // --------------------------------------------
 
     /// @notice Register vaults for `tournamentId` and sync the treasury cache.
+    /// @dev Cancels a deferred unregister if the vault was pending removal during `Locked`.
     function registerVaults(bytes32 tournamentId, address[] calldata vaults) external;
 
-    /// @notice Unregister vaults for `tournamentId` and sync the treasury cache.
+    /**
+     * @notice Unregister vaults for `tournamentId` and sync the treasury cache.
+     * @dev If the tournament treasury's active round is `Locked`, removal is deferred until
+     *      `flushPendingUnregisters` (called from `PbrTreasury.settle`) so SettlePbr still
+     *      sees the vault in `getRegisteredVaults` / treasury `isVault` through distribute.
+     */
     function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external;
+
+    /// @notice Apply deferred unregisters after settle (`Claimable`). Callable by treasury or owner.
+    function flushPendingUnregisters(bytes32 tournamentId) external;
 
     // --------------------------------------------
     //  Season calendar — owner (Orchestrator)
@@ -76,7 +85,15 @@ interface ITournamentRegistry {
 
     function isVaultRegistered(bytes32 tournamentId, address vault) external view returns (bool);
 
+    function isVaultUnregisterPending(bytes32 tournamentId, address vault) external view returns (bool);
+
     function getRegisteredVaults(bytes32 tournamentId) external view returns (address[] memory);
+
+    /**
+     * @notice True if `leagueId` is the domestic tournament itself or listed on its `feeHubs`.
+     * @dev Used to validate TransferLocker oracle `activeTournamentIds` against `newLeagueId`.
+     */
+    function isLeagueLinkedToTournament(bytes32 tournamentId, bytes32 leagueId) external view returns (bool);
 
     function getFinalRound(bytes32 tournamentId, uint16 seasonStartYear) external view returns (uint32);
 

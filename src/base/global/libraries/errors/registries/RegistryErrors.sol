@@ -45,4 +45,6 @@ library RegistryErrors {
     error VaultAlreadyRegistered(bytes32 tournamentId, address vault);
     error VaultNotRegistered(bytes32 tournamentId, address vault);
     error UnknownVault(address vault);
+    /// @dev `flushPendingUnregisters` called while treasury active round is still `Locked`.
+    error RoundStillLocked(bytes32 tournamentId);
 }

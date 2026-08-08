@@ -358,6 +358,8 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
             if (tournamentId == bytes32(0)) return false;
             if (!tournamentRegistry.tournamentExists(tournamentId)) return false;
             if (tournamentRegistry.getPbrTreasury(tournamentId) == address(0)) return false;
+            // Domestic league itself, or a cup/continental that lists this league's hub.
+            if (!tournamentRegistry.isLeagueLinkedToTournament(tournamentId, newLeagueId)) return false;
             for (uint256 j; j < i; ++j) {
                 if (activeTournamentIds[j] == tournamentId) return false;
             }

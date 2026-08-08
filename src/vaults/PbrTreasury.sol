@@ -30,7 +30,8 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  *      `isVault` cache so crank paths never external-call the registry for the set.
  *      Live distribution (`settle` / snapshots) requires `isVault`; historical `payClaim`
  *      gates on snapshot-era `vaultPoints[season][round][vault] > 0` so unregister does not
- *      strand claimable rounds.
+ *      strand claimable rounds. Lifecycle unregisters during `Locked` stay in SoT until
+ *      `settle` → `TournamentRegistry.flushPendingUnregisters`.
  *
  *      Crank: `lock()` → `snapshotBatch()` → `settle(...)`.
  *      Wrap: lock of `finalRound` sets `tradingRound = 1`; settle advances `seasonId`.
@@ -295,6 +296,9 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         }
 
         emit Events.RoundSettled(season, roundNumber, adjTotalPoints, length);
+
+        // Apply lifecycle unregisters deferred while this round was `Locked` (SoT stayed aligned for settle).
+        tournamentRegistry.flushPendingUnregisters(tournamentId);
     }
 
     // --------------------------------------------

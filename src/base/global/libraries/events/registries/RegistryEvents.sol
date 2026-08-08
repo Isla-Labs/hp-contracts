@@ -41,4 +41,7 @@ library RegistryEvents {
     event RoundUpserted(bytes32 indexed tournamentId, uint16 indexed seasonStartYear, uint32 roundNumber);
     event VaultRegistered(bytes32 indexed tournamentId, address indexed vault);
     event VaultUnregistered(bytes32 indexed tournamentId, address indexed vault);
+    /// @notice Unregister deferred while treasury active round is `Locked` (flushed after settle).
+    event VaultUnregisterPending(bytes32 indexed tournamentId, address indexed vault);
+    event VaultUnregisterFlushed(bytes32 indexed tournamentId, uint256 count);
 }

@@ -193,6 +193,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
 
         address feeRouter = set.dopplerData.feeRouter;
         if (feeRouter != address(0)) {
+            // `INACTIVE` → FeeRouter OOF even-split via status (hub config left for Reactivate).
             IFeeRouterLifecycle(feeRouter).setStatus(status);
         }
 
@@ -202,6 +203,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
         }
 
         if (status == PlayerStatus.INACTIVE) {
+            // May defer unregister while treasuries are `Locked` (flushed after settle).
             _syncVaultMembership(set, vault, false);
             _clearTournamentMembership(playerId, set);
         } else {

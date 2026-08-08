@@ -22,7 +22,7 @@ enum LifecycleQueueStatus {
     None,
     /// @dev In the review window (`queuedAt + queueWait`).
     Queued,
-    /// @dev `CvmJob.LeagueTransfer` in flight (ChangedLeague only).
+    /// @dev `CvmJob.LeagueTransfer` in flight (ChangedLeague or Reactivate).
     AwaitingLeagueTransfer
 }
 

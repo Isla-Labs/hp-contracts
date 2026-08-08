@@ -11,7 +11,7 @@ enum RoundStatus {
     None,
     /// @dev `R` frozen at mwStartTime; stake snapshots in progress / complete
     Locked,
-    /// @dev `m` / `M_adj` written; users may pull-claim (challenge window can gate this later)
+    /// @dev `m` / `M_adj` written; users may pull-claim (challenge window: see pbrTreasuryHardening.md)
     Claimable
 }
 

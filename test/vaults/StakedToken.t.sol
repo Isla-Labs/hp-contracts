@@ -49,8 +49,9 @@ contract StakedTokenTest is VaultsTestBase {
         address fakeTreasury = makeAddr("fakeTreasury");
         tournamentRegistry.setPbrTreasury(TOURNAMENT, fakeTreasury);
         vm.prank(fakeTreasury);
-        uint256 snapId = vault.snapshot(TOURNAMENT, SEASON, 1);
+        (uint256 snapId, bool didSnap) = vault.snapshot(TOURNAMENT, SEASON, 1);
         assertEq(snapId, 1);
+        assertTrue(didSnap);
 
         assertEq(stToken.balanceOfAt(user, snapId), 10 ether);
         assertEq(stToken.totalSupplyAt(snapId), 10 ether);

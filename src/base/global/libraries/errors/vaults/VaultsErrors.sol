@@ -21,11 +21,13 @@ library VaultsErrors {
     error LengthMismatch();
     error NothingDue();
     error NothingToSnapshot();
+    error SnapshotPending();
     error BadRoundStatus(uint16 season, uint32 roundNumber, RoundStatus actual, RoundStatus expected);
     error RoundNotEnded(uint16 season, uint32 roundNumber, uint256 endTime, uint256 currentTime);
     error UnknownVault(address vault);
     error VaultAlreadyRegistered(address vault);
     error ZeroMAdj();
+    error UtilizedSetMismatch();
     error InsufficientRoundFunds();
     error TransferFailed();
 
@@ -38,7 +40,6 @@ library VaultsErrors {
     error OnlyTournamentTreasury();
     error InsufficientStake();
     error MatchweekLock();
-    error AlreadySnapshotted(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber);
     error NoSnapshot(bytes32 tournamentId, uint16 seasonId, uint32 roundNumber);
     error AlreadyClaimed();
     error UnknownTournamentTreasury(bytes32 tournamentId);

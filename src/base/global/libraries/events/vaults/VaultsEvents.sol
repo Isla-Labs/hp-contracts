@@ -17,6 +17,9 @@ library VaultsEvents {
     event SeasonWrapped(uint16 indexed settledSeason, uint16 newSeason);
     event VaultSnapshotted(uint16 indexed season, uint32 roundNumber, address indexed vault, uint256 snapId);
     event SnapshotBatchProgress(uint16 indexed season, uint32 roundNumber, uint256 cursor, bool done);
+    event RoundSettleRequested(
+        uint16 indexed season, uint32 roundNumber, address indexed pbrSettle, bytes32 requestId, uint256 vaultCount
+    );
     event RoundSettled(uint16 indexed season, uint32 roundNumber, uint256 M_adj, uint256 vaultCount);
     event ClaimPaid(uint16 indexed season, uint32 roundNumber, address indexed vault, address user, uint256 payout);
 

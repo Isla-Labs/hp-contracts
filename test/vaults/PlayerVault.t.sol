@@ -139,19 +139,29 @@ contract PlayerVaultTest is VaultsTestBase {
     // --------------------------------------------
 
     function test_snapshot_onlyTreasury() public {
+        _stake(user, vault, 1 ether);
         vm.expectRevert(Errors.OnlyTournamentTreasury.selector);
         vault.snapshot(TOURNAMENT, SEASON, 1);
     }
 
-    function test_snapshot_doubleReverts() public {
+    function test_snapshot_unutilizedReturnsFalse() public {
+        vm.prank(address(treasury));
+        (uint256 snapId, bool didSnap) = vault.snapshot(TOURNAMENT, SEASON, 1);
+        assertEq(snapId, 0);
+        assertFalse(didSnap);
+    }
+
+    function test_snapshot_idempotentForTreasury() public {
+        _stake(user, vault, 1 ether);
         vm.warp(startTime);
         _sendEth(address(treasury), 10 ether);
         treasury.lock();
         treasury.snapshotBatch();
 
         vm.prank(address(treasury));
-        vm.expectRevert(abi.encodeWithSelector(Errors.AlreadySnapshotted.selector, TOURNAMENT, SEASON, uint32(1)));
-        vault.snapshot(TOURNAMENT, SEASON, 1);
+        (uint256 snapId, bool didSnap) = vault.snapshot(TOURNAMENT, SEASON, 1);
+        assertEq(snapId, 1);
+        assertTrue(didSnap);
     }
 
     function test_snapshot_worksWhilePaused() public {

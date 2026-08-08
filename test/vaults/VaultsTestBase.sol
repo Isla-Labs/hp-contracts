@@ -140,7 +140,7 @@ abstract contract VaultsTestBase is Test {
     }
 
     function _settle(PbrTreasury treasury, address[] memory vaults, uint256[] memory points, uint256 mAdj) internal {
-        vm.prank(orchestrator);
-        treasury.settle(vaults, points, mAdj);
+        vm.prank(pbrSettle);
+        treasury.finalizeRound(vaults, points, mAdj);
     }
 }

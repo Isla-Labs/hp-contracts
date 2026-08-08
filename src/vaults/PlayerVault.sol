@@ -169,17 +169,28 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     //  Snapshot
     // --------------------------------------------
 
-    /// @dev Not pausable — settlement crank must still snapshot while user flows are halted.
-    function snapshot(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber) external returns (uint256 snapId) {
+    /**
+     * @notice Snapshot staked balances for a tournament round (mwStart cut).
+     * @dev Not pausable — settlement crank must still run while user flows are halted.
+     *      Only `TournamentRegistry.getPbrTreasury(tournamentId_)` may call.
+     *      Unutilized (`totalStaked == 0`) → `(0, false)`. Already snapshotted → existing id + `true`.
+     */
+    function snapshot(bytes32 tournamentId_, uint16 seasonId_, uint32 roundNumber)
+        external
+        returns (uint256 snapId, bool didSnap)
+    {
         address treasury = tournamentRegistry.getPbrTreasury(tournamentId_);
         if (treasury == address(0) || msg.sender != treasury) revert Errors.OnlyTournamentTreasury();
-        if (snapIdOf[tournamentId_][seasonId_][roundNumber] != 0) {
-            revert Errors.AlreadySnapshotted(tournamentId_, seasonId_, roundNumber);
-        }
+
+        if (totalStaked == 0) return (0, false);
+
+        snapId = snapIdOf[tournamentId_][seasonId_][roundNumber];
+        if (snapId != 0) return (snapId, true);
 
         snapId = IStakedToken(stToken).snapshot();
         snapIdOf[tournamentId_][seasonId_][roundNumber] = snapId;
         _snapRounds.push(RoundKey({ tournamentId: tournamentId_, seasonId: seasonId_, roundNumber: roundNumber }));
+        didSnap = true;
 
         emit Events.SnapshotTaken(
             tournamentId_, seasonId_, roundNumber, snapId, IStakedToken(stToken).totalSupplyAt(snapId)

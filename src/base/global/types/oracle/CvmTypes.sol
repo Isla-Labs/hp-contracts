@@ -30,7 +30,12 @@ enum CvmJob {
     /// @dev One-time / bootstrap DMS ingest (batched per request).
     HistoricalDms,
     /// @dev DopplerLocker launch: pin IPFS metadata + mine `0x22`/`0x42` salts; returns `baseURI`.
-    FinalConfig
+    FinalConfig,
+    /// @dev TransferLocker ChangedLeague: resolve destination league + `activeTournamentIds[]`.
+    ///      Args: `abi.encode(bytes32 playerId)`
+    ///      Response: `abi.encode(bytes32 newLeagueId, bytes32[] activeTournamentIds)`
+    ///      (`activeTournamentIds` must include `newLeagueId`; TransferLocker validates before apply.)
+    LeagueTransfer
 }
 
 /// @notice Which vanity salt set `CvmJob.VanitySalts` should mine.

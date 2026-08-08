@@ -35,8 +35,8 @@ import { PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
  *        - When `pbrFeeHub == 0` (unsupported / OOF): hubs cleared; remainder even-splits across
  *          domestic hubs from `TournamentRegistry.getAllDomesticPbrFeeHubs()`.
  *
- *      Access: `Orchestrator` (owner) for config + `rescueToken`; `setStatus` also callable
- *      by `PlayerSetRegistry`.
+ *      Access: `Orchestrator` (owner) for config + `rescueToken`; `setStatus` and
+ *      `setPbrFeeHub` also callable by `PlayerSetRegistry` (lifecycle SoT).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -279,8 +279,10 @@ contract FeeRouter is Initializable, AddressBook, Ownable, ReentrancyGuard {
     /**
      * @notice Updates league `PbrFeeHub` and resets redistribution to `{ hub } / { WAD }` (or clears if zero).
      * @dev Pass zero when the market is unsupported / has no league.
+     *      Callable by owner or `PlayerSetRegistry` (ChangedLeague SoT).
      */
-    function setPbrFeeHub(address newHub) external onlyOwner nonReentrant {
+    function setPbrFeeHub(address newHub) external nonReentrant {
+        _checkStatusCaller();
         _setPbrFeeHub(newHub);
         _relay(address(this).balance);
     }

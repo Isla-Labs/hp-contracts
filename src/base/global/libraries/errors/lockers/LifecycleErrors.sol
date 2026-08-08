@@ -3,9 +3,18 @@ pragma solidity ^0.8.34;
 
 library LifecycleErrors {
     error ZeroAddress();
+    error ZeroId();
     error Unauthorized();
     error AlreadySet();
+    error NotConfigured();
     error LengthMismatch(uint256 left, uint256 right);
+
+    error NothingReady();
+    error NotQueued(bytes32 playerId);
+    error BadQueueStatus(bytes32 playerId, uint8 actual);
+    error OracleInFlight(bytes32 requestId);
+    error UnknownOracleRequest(bytes32 requestId);
+    error UnknownMarketPhase(bytes32 playerId, address hooks);
 
     /// @notice Player has no domestic `leagueId` on `PlayerSet.tournamentData`.
     error MissingLeagueId(bytes32 playerId);

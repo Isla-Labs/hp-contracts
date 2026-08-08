@@ -254,6 +254,7 @@ contract CvmRouter is Initializable, Ownable, Pausable, ICvmRouter {
         _setJobExclusive(CvmJob.HistoricalRoundSync, _EXCLUSIVE_FAST);
         _setJobExclusive(CvmJob.HistoricalDms, _EXCLUSIVE_HISTORICAL_DMS);
         _setJobExclusive(CvmJob.FinalConfig, _EXCLUSIVE_FAST);
+        _setJobExclusive(CvmJob.LeagueTransfer, _EXCLUSIVE_FAST);
     }
 
     function _setJobExclusive(CvmJob job, uint32 exclusiveSeconds) internal {

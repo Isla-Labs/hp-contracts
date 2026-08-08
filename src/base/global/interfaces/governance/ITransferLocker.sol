@@ -5,9 +5,9 @@ import { LifecycleReason, PendingLifecycle } from "@types/lockers/LifecycleTypes
 
 /**
  * @title ITransferLocker
- * @notice Waiting-room intake for deployed players flagged for deactivate / reactivate.
- * @dev Mirrors DopplerLocker waiting room. Actual status writes happen later after
- *      manual review (Orchestrator path), not at enqueue time.
+ * @notice Waiting-room intake for deployed players flagged for deactivate / reactivate / transfer.
+ * @dev Mirrors DopplerLocker: enqueue → 24h review → permissionless `processLifecycle`.
+ *      Status / league writes go through `PlayerSetRegistry` (SoT) via Orchestrator.
  */
 interface ITransferLocker {
     /**
@@ -22,6 +22,18 @@ interface ITransferLocker {
         uint32[] calldata effectiveMins
     ) external;
 
+    /// @notice Owner manual override during the review window (`Queued` only).
+    function unqueueAsset(bytes32 playerId) external;
+
+    /**
+     * @notice Finalize the next mature `Queued` entry (anyone; rate-limited).
+     * @dev Continuity / LeftLeague → `INACTIVE`. Reactivate → `BONDING`/`GRADUATED`.
+     *      ChangedLeague → `CvmJob.LeagueTransfer` (returns `requestId`; apply on fulfill).
+     */
+    function processLifecycle() external returns (bytes32 requestId);
+
+    function setQueueWait(uint256 queueWait_) external;
+
     function pendingCount() external view returns (uint256);
 
     /// @notice True if queued for deactivate and/or reactivate.
@@ -34,7 +46,7 @@ interface ITransferLocker {
 
     /**
      * @notice Reverts unless `leagueId → FeeRouter.pbrFeeHub / PbrTreasury` topology matches.
-     * @dev Used by `confirmReactivate` and offchain scanners before cross-league / continuity restore.
+     * @dev Used before reactivate and by offchain scanners.
      */
     function requireFeeTopologyConsistent(bytes32 playerId) external view;
 }

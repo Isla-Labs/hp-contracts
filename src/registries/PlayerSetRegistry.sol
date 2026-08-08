@@ -20,9 +20,15 @@ import {
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 
-/// @dev Minimal FeeRouter surface for status cache sync (avoids markets import).
-interface IFeeRouterStatus {
+/// @dev Minimal FeeRouter surface (avoids markets import).
+interface IFeeRouterLifecycle {
     function setStatus(PlayerStatus status_) external;
+    function setPbrFeeHub(address newHub) external;
+}
+
+/// @dev Minimal PlayerVault surface (avoids vaults import cycle).
+interface IPlayerVaultLifecycle {
+    function setActive(bool active_) external;
 }
 
 /**
@@ -31,9 +37,9 @@ interface IFeeRouterStatus {
  * @dev Access:
  *      - Owner (`Orchestrator`): registration, status, league / optional `activeTournaments`
  *        index, and Doppler updates.
- *      - Vault membership SoT is `TournamentRegistry` (not mirrored here).
+ *      - Vault membership SoT is `TournamentRegistry`; `setStatus` / `setLeagueId` fan out
+ *        register/unregister + FeeRouter + `PlayerVault.setActive`.
  *      - Registered vaults: `updateUtilization` via `onlyVault`.
- *      - `setStatus` always syncs `FeeRouter.status` (integrator share cache).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -174,21 +180,80 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
     }
 
     /**
-     * @notice Updates lifecycle status and syncs the per-market `FeeRouter.status` cache.
-     * @dev Migration / eligibility listeners → Orchestrator → here.
+     * @notice Updates lifecycle status and fans out FeeRouter / vault active / treasury membership.
+     * @dev TransferLocker / Orchestrator → here (SoT).
      */
     function setStatus(bytes32 playerId, PlayerStatus status) external onlyOwner {
         PlayerSet storage set = _requirePlayer(playerId);
         set.status = status;
         emit Events.StatusUpdated(playerId, status);
 
-        IFeeRouterStatus(set.dopplerData.feeRouter).setStatus(status);
+        address feeRouter = set.dopplerData.feeRouter;
+        if (feeRouter != address(0)) {
+            IFeeRouterLifecycle(feeRouter).setStatus(status);
+        }
+
+        address vault = set.vaultData.playerVault;
+        if (vault != address(0)) {
+            IPlayerVaultLifecycle(vault).setActive(status != PlayerStatus.INACTIVE);
+        }
+
+        if (status == PlayerStatus.INACTIVE) {
+            _syncVaultMembership(set, vault, false);
+        } else {
+            _syncVaultMembership(set, vault, true);
+        }
     }
 
-    function setLeagueId(bytes32 playerId, bytes32 leagueId) external onlyOwner {
-        _requirePlayer(playerId);
-        _playerSets[playerId].tournamentData.leagueId = leagueId;
-        emit Events.LeagueIdUpdated(playerId, leagueId);
+    /**
+     * @notice Remap domestic league + replace `activeTournamentIds` (ChangedLeague oracle fulfill).
+     * @dev Caller (TransferLocker via Orchestrator) must pre-validate the oracle payload.
+     */
+    function setLeagueId(
+        bytes32 playerId,
+        bytes32 newLeagueId,
+        bytes32[] calldata activeTournamentIds
+    ) external onlyOwner {
+        if (newLeagueId == bytes32(0)) revert Errors.ZeroId();
+        uint256 n = activeTournamentIds.length;
+        if (n == 0) revert Errors.LengthMismatch();
+
+        PlayerSet storage set = _requirePlayer(playerId);
+
+        address vault = set.vaultData.playerVault;
+        _syncVaultMembership(set, vault, false);
+
+        bytes32[] storage active = set.tournamentData.activeTournaments;
+        while (active.length != 0) {
+            bytes32 removed = active[active.length - 1];
+            active.pop();
+            emit Events.ActiveTournamentRemoved(playerId, removed);
+        }
+
+        set.tournamentData.leagueId = newLeagueId;
+        emit Events.LeagueIdUpdated(playerId, newLeagueId);
+
+        bool hasLeague;
+        for (uint256 i; i < n; ++i) {
+            bytes32 tournamentId = activeTournamentIds[i];
+            if (tournamentId == bytes32(0)) revert Errors.ZeroId();
+            for (uint256 j; j < i; ++j) {
+                if (activeTournamentIds[j] == tournamentId) revert Errors.TournamentAlreadyActive(tournamentId);
+            }
+            if (tournamentId == newLeagueId) hasLeague = true;
+            active.push(tournamentId);
+            emit Events.ActiveTournamentAdded(playerId, tournamentId);
+        }
+        if (!hasLeague) revert Errors.TournamentNotActive(newLeagueId);
+
+        address hub = tournamentRegistry.pbrFeeHubOf(newLeagueId);
+        if (hub == address(0)) revert Errors.HubNotRegistered(newLeagueId);
+
+        address feeRouter = set.dopplerData.feeRouter;
+        if (feeRouter == address(0)) revert Errors.ZeroAddress();
+        IFeeRouterLifecycle(feeRouter).setPbrFeeHub(hub);
+
+        _syncVaultMembership(set, vault, true);
     }
 
     function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyOwner {
@@ -296,5 +361,43 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
     function _requirePlayer(bytes32 playerId) internal view returns (PlayerSet storage set) {
         set = _playerSets[playerId];
         if (set.tokenData.token == address(0)) revert Errors.NotFound();
+    }
+
+    /**
+     * @dev Register or unregister `vault` on `leagueId` and each `activeTournaments` entry.
+     *      Skips missing tournaments / already-(un)registered vaults.
+     */
+    function _syncVaultMembership(PlayerSet storage set, address vault, bool register) private {
+        if (vault == address(0)) return;
+
+        bytes32 leagueId = set.tournamentData.leagueId;
+        if (leagueId != bytes32(0)) {
+            _syncVaultOnTournament(leagueId, vault, register);
+        }
+
+        bytes32[] storage active = set.tournamentData.activeTournaments;
+        uint256 length = active.length;
+        for (uint256 i; i < length; ++i) {
+            bytes32 tournamentId = active[i];
+            if (tournamentId == bytes32(0) || tournamentId == leagueId) continue;
+            _syncVaultOnTournament(tournamentId, vault, register);
+        }
+    }
+
+    function _syncVaultOnTournament(bytes32 tournamentId, address vault, bool register) private {
+        if (!tournamentRegistry.tournamentExists(tournamentId)) return;
+
+        bool registered = tournamentRegistry.isVaultRegistered(tournamentId, vault);
+        if (register) {
+            if (registered) return;
+            address[] memory vaults = new address[](1);
+            vaults[0] = vault;
+            tournamentRegistry.registerVaults(tournamentId, vaults);
+        } else {
+            if (!registered) return;
+            address[] memory vaults = new address[](1);
+            vaults[0] = vault;
+            tournamentRegistry.unregisterVaults(tournamentId, vaults);
+        }
     }
 }

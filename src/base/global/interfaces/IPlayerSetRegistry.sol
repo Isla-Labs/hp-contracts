@@ -39,10 +39,15 @@ interface IPlayerSetRegistry {
 
     function updateUtilization(bool isUtilized) external;
 
-    /// @dev Always syncs `FeeRouter.status` (integrator share cache).
+    /// @dev Syncs FeeRouter + PlayerVault.isActive + TournamentRegistry vault membership.
     function setStatus(bytes32 playerId, PlayerStatus status) external;
 
-    function setLeagueId(bytes32 playerId, bytes32 leagueId) external;
+    /**
+     * @notice Remap domestic league + `activeTournamentIds` (ChangedLeague / oracle fulfill).
+     * @dev Unregisters vault from old topology, writes new ids, sets FeeRouter hub, registers new.
+     *      `activeTournamentIds` must be non-empty and include `newLeagueId`.
+     */
+    function setLeagueId(bytes32 playerId, bytes32 newLeagueId, bytes32[] calldata activeTournamentIds) external;
 
     /// @dev Optional discovery index; vault membership SoT is `TournamentRegistry`.
     function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external;

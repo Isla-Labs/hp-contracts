@@ -5,14 +5,19 @@ import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
+import { Oracle } from "@base/abstract/Oracle.sol";
+import { RateLimit } from "@base/abstract/RateLimit.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { LifecycleErrors as Errors } from "@errors/lockers/LifecycleErrors.sol";
 import { LifecycleEvents as Events } from "@events/lockers/LifecycleEvents.sol";
+import { IOrchestrator } from "@interfaces/IOrchestrator.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
-import { LifecycleReason, PendingLifecycle } from "@types/lockers/LifecycleTypes.sol";
-import { PlayerSet } from "@types/registries/PlayerSetTypes.sol";
+import { CvmJob } from "@types/oracle/CvmTypes.sol";
+import { LifecycleQueueStatus, LifecycleReason, PendingLifecycle } from "@types/lockers/LifecycleTypes.sol";
+import { DopplerData, PlayerSet, PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
+import { AddressProvider } from "@src/AddressProvider.sol";
 
 /// @dev Minimal FeeRouter surface for hub consistency checks (no markets import).
 interface IFeeRouterHub {
@@ -21,38 +26,42 @@ interface IFeeRouterHub {
 
 /**
  * @title TransferLocker
- * @notice Waiting room for soft-inactivity / reactivation candidates (mirrors DopplerLocker).
+ * @notice Waiting room for soft-inactivity / reactivation / cross-league transfer (mirrors DopplerLocker).
  * @dev Flow:
- *      0) EligibilityVerifier (or Orchestrator admin) enqueues continuity failures, league-leavers,
- *         cross-league moves (`ChangedLeague`), or reactivations.
- *      1) Offchain / manual review (webhook + email — TBD) confirms or rejects.
- *      2) Confirmed deactivate → owner → `setStatus(INACTIVE)` (not wired yet).
- *      3) Confirmed reactivate → owner → `setStatus(BONDING|GRADUATED)` (not wired yet).
+ *      0) EligibilityVerifier (or Orchestrator) enqueues via `enqueueLifecycle`.
+ *      1) 24h review window (`queueWait`); owner may `unqueueAsset`.
+ *      2) Anyone calls `processLifecycle` after wait (rate-limited):
+ *           - ContinuityUnderThreshold / LeftLeague → `PlayerSetRegistry.setStatus(INACTIVE)`
+ *           - Reactivate → topology check + `BONDING`/`GRADUATED` from `activePool.hooks`
+ *           - ChangedLeague → `CvmJob.LeagueTransfer` → fulfill → `setLeagueId`
  *
- *      Reactivation status (important):
- *        Markets can go `INACTIVE` while still on the bonding curve or after migrate.
- *        Do NOT hardcode `GRADUATED` on reactivate. Resolve live market phase from
- *        `DopplerData.activePool` vs hooks:
- *          - `activePool.hooks == hookDoppler`  → `setStatus(BONDING)`
- *          - `activePool.hooks == hookMigrator` → `setStatus(GRADUATED)`
- *        `PlayerSetRegistry.setStatus` then syncs `FeeRouter.status` (integrator share).
+ *      Registry writes relay through `Orchestrator.execute` (this proxy must hold
+ *      `AUTHORIZED_CONTRACT`).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker {
+contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit, ITransferLocker {
+    // --------------------------------------------
+    //  Constants
+    // --------------------------------------------
+
+    uint256 public constant DEFAULT_QUEUE_WAIT = 24 hours;
+    uint256 public constant DEFAULT_PROCESS_COOLDOWN = 5 minutes;
+
     // --------------------------------------------
     //  Config
     // --------------------------------------------
 
-    /// @notice Canonical player market index (resolved in `initialize`).
     IPlayerSetRegistry public playerSetRegistry;
-
-    /// @notice Domestic hub + tournament treasury topology (resolved in `initialize`).
     ITournamentRegistry public tournamentRegistry;
+    IOrchestrator public orchestrator;
 
     /// @notice Enqueue writer (set once); owner may also enqueue.
     address public eligibilityVerifier;
+
+    /// @notice Seconds after `Queued` before `processLifecycle` may finalize.
+    uint256 public queueWait;
 
     // --------------------------------------------
     //  Storage
@@ -63,6 +72,7 @@ contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker 
     mapping(bytes32 playerId => bool) private _queuedDeactivate;
     /// @dev Reactivate — pending restore-from-INACTIVE review.
     mapping(bytes32 playerId => bool) private _queuedReactivate;
+    mapping(bytes32 requestId => bytes32 playerId) private _oraclePlayerId;
 
     // --------------------------------------------
     //  Initialization
@@ -70,18 +80,34 @@ contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker 
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
+    constructor(address addressProvider_)
+        AddressBook(addressProvider_)
+        Ownable(msg.sender)
+        Oracle(_cvmRouter(addressProvider_))
+        RateLimit(DEFAULT_PROCESS_COOLDOWN)
+    {
+        if (addressProvider_ == address(0)) revert Errors.ZeroAddress();
         _disableInitializers();
     }
 
     /**
-     * @notice Resolve registries from AddressProvider; ownership → Orchestrator.
-     * @dev `PLAYER_SET_REGISTRY` / `TOURNAMENT_REGISTRY` / `ORCHESTRATOR` must already be registered.
+     * @notice Resolve registries + Orchestrator; ownership → Orchestrator.
+     * @dev This proxy must hold `AUTHORIZED_CONTRACT` on Orchestrator for registry relays.
      */
     function initialize() external initializer {
+        queueWait = DEFAULT_QUEUE_WAIT;
+
+        address orch = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
+        orchestrator = IOrchestrator(orch);
         playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
         tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
+
+        _transferOwnership(orch);
+    }
+
+    function _cvmRouter(address addressProvider_) private view returns (address router) {
+        router = AddressProvider(payable(addressProvider_)).get(keccak256(bytes(Addresses.CVM_ROUTER)));
+        if (router == address(0)) revert Errors.ZeroAddress();
     }
 
     // --------------------------------------------
@@ -94,6 +120,14 @@ contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker 
         if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
         eligibilityVerifier = eligibilityVerifier_;
         emit Events.EligibilityVerifierSet(eligibilityVerifier_);
+    }
+
+    /// @inheritdoc ITransferLocker
+    function setQueueWait(uint256 queueWait_) external onlyOwner {
+        if (queueWait_ == 0) revert Errors.NotConfigured();
+        uint256 previous = queueWait;
+        queueWait = queueWait_;
+        emit Events.QueueWaitUpdated(previous, queueWait_);
     }
 
     // --------------------------------------------
@@ -158,6 +192,7 @@ contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker 
         }
 
         bool isReactivate = reason == LifecycleReason.Reactivate;
+        uint64 now_ = uint64(block.timestamp);
         uint256 added;
         for (uint256 i; i < length; ++i) {
             bytes32 playerId = playerIds[i];
@@ -172,7 +207,15 @@ contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker 
             }
 
             uint32 mins = effectiveMins.length == 0 ? 0 : effectiveMins[i];
-            _pending.push(PendingLifecycle({ playerId: playerId, reason: reason, effectiveMins: mins }));
+            _pending.push(
+                PendingLifecycle({
+                    playerId: playerId,
+                    reason: reason,
+                    effectiveMins: mins,
+                    queuedAt: now_,
+                    status: LifecycleQueueStatus.Queued
+                })
+            );
             unchecked {
                 ++added;
             }
@@ -182,24 +225,150 @@ contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker 
     }
 
     // --------------------------------------------
-    //  Queue end
+    //  Queue end / process
     // --------------------------------------------
 
-    function confirmInactive( /* playerId */ ) external {
-        // gated: manual review + owner setStatus(INACTIVE)
+    /// @inheritdoc ITransferLocker
+    function unqueueAsset(bytes32 playerId) external onlyOwner {
+        if (playerId == bytes32(0)) revert Errors.ZeroId();
+        uint256 index = _findQueuedIndex(playerId);
+        if (index == type(uint256).max) revert Errors.NotQueued(playerId);
+
+        PendingLifecycle storage e = _pending[index];
+        if (e.status != LifecycleQueueStatus.Queued) {
+            revert Errors.BadQueueStatus(playerId, uint8(e.status));
+        }
+
+        _removeAt(index);
+        emit Events.AssetUnqueued(playerId);
     }
 
-    function confirmReactivate(bytes32 playerId) external view {
-        // gated: manual review + topology check, then setStatus from active pool phase:
-        //   activePool.hooks == hookDoppler  → BONDING
-        //   activePool.hooks == hookMigrator → GRADUATED
-        // (do not assume GRADUATED — bonding markets can also reactivate)
-        _requireFeeTopologyConsistent(playerId);
+    /// @inheritdoc ITransferLocker
+    function processLifecycle() external rateLimited returns (bytes32 requestId) {
+        uint256 length = _pending.length;
+        uint256 wait_ = queueWait;
+        for (uint256 i; i < length; ++i) {
+            PendingLifecycle storage e = _pending[i];
+            if (e.status != LifecycleQueueStatus.Queued) continue;
+            if (block.timestamp < uint256(e.queuedAt) + wait_) continue;
+
+            LifecycleReason reason = e.reason;
+            bytes32 playerId = e.playerId;
+
+            if (reason == LifecycleReason.ChangedLeague) {
+                requestId = _sendOracleRequest(CvmJob.LeagueTransfer, abi.encode(playerId));
+                _oraclePlayerId[requestId] = playerId;
+                e.status = LifecycleQueueStatus.AwaitingLeagueTransfer;
+                emit Events.LeagueTransferRequested(requestId, playerId);
+                return requestId;
+            }
+
+            PlayerStatus status;
+            if (reason == LifecycleReason.Reactivate) {
+                _requireFeeTopologyConsistent(playerId);
+                status = _resolveReactivateStatus(playerId);
+            } else {
+                // ContinuityUnderThreshold / LeftLeague
+                status = PlayerStatus.INACTIVE;
+            }
+
+            _exec(address(playerSetRegistry), abi.encodeCall(IPlayerSetRegistry.setStatus, (playerId, status)));
+            emit Events.LifecycleApplied(playerId, reason, status);
+            _removeAt(i);
+            return bytes32(0);
+        }
+
+        revert Errors.NothingReady();
+    }
+
+    // --------------------------------------------
+    //  Oracle callback
+    // --------------------------------------------
+
+    /// @inheritdoc Oracle
+    function _fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
+        bytes32 playerId = _oraclePlayerId[requestId];
+        if (playerId == bytes32(0)) revert Errors.UnknownOracleRequest(requestId);
+        delete _oraclePlayerId[requestId];
+
+        uint256 index = _findAwaitingIndex(playerId);
+        if (index == type(uint256).max) revert Errors.NotQueued(playerId);
+
+        emit Events.LeagueTransferFulfilled(requestId, playerId, err);
+
+        if (err.length != 0) {
+            _rearmQueued(index);
+            return;
+        }
+
+        (bytes32 newLeagueId, bytes32[] memory activeTournamentIds) = abi.decode(response, (bytes32, bytes32[]));
+
+        // Validate oracle payload before registry fan-out (hub, tournaments, league in set).
+        if (!_tryValidateLeagueTransfer(playerId, newLeagueId, activeTournamentIds)) {
+            _rearmQueued(index);
+            return;
+        }
+
+        _exec(
+            address(playerSetRegistry),
+            abi.encodeCall(IPlayerSetRegistry.setLeagueId, (playerId, newLeagueId, activeTournamentIds))
+        );
+        emit Events.LifecycleApplied(
+            playerId, LifecycleReason.ChangedLeague, playerSetRegistry.getPlayerSet(playerId).status
+        );
+        _removeAt(index);
     }
 
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
+
+    function _resolveReactivateStatus(bytes32 playerId) private view returns (PlayerStatus) {
+        DopplerData memory d = playerSetRegistry.getDopplerData(playerId);
+        address hooks = address(d.activePool.hooks);
+        if (hooks == d.hookDoppler) return PlayerStatus.BONDING;
+        if (hooks == d.hookMigrator) return PlayerStatus.GRADUATED;
+        revert Errors.UnknownMarketPhase(playerId, hooks);
+    }
+
+    /**
+     * @dev Pre-flight for `setLeagueId`: non-zero league + hub, non-empty unique tournament
+     *      ids that exist onchain, and `newLeagueId` present in `activeTournamentIds`.
+     */
+    function _tryValidateLeagueTransfer(
+        bytes32 playerId,
+        bytes32 newLeagueId,
+        bytes32[] memory activeTournamentIds
+    ) private view returns (bool) {
+        if (newLeagueId == bytes32(0)) return false;
+        if (tournamentRegistry.pbrFeeHubOf(newLeagueId) == address(0)) return false;
+        if (!tournamentRegistry.tournamentExists(newLeagueId)) return false;
+
+        PlayerSet memory set = playerSetRegistry.getPlayerSet(playerId);
+        if (set.dopplerData.feeRouter == address(0)) return false;
+
+        uint256 n = activeTournamentIds.length;
+        if (n == 0) return false;
+
+        bool hasLeague;
+        for (uint256 i; i < n; ++i) {
+            bytes32 tournamentId = activeTournamentIds[i];
+            if (tournamentId == bytes32(0)) return false;
+            if (!tournamentRegistry.tournamentExists(tournamentId)) return false;
+            if (tournamentRegistry.getPbrTreasury(tournamentId) == address(0)) return false;
+            for (uint256 j; j < i; ++j) {
+                if (activeTournamentIds[j] == tournamentId) return false;
+            }
+            if (tournamentId == newLeagueId) hasLeague = true;
+        }
+        return hasLeague;
+    }
+
+    function _rearmQueued(uint256 index) private {
+        PendingLifecycle storage e = _pending[index];
+        e.status = LifecycleQueueStatus.Queued;
+        e.queuedAt = uint64(block.timestamp);
+    }
 
     function _requireFeeTopologyConsistent(bytes32 playerId) internal view {
         PlayerSet memory set = playerSetRegistry.getPlayerSet(playerId);
@@ -224,5 +393,44 @@ contract TransferLocker is Initializable, AddressBook, Ownable, ITransferLocker 
         if (vault != address(0) && !tournamentRegistry.isVaultRegistered(leagueId, vault)) {
             revert Errors.VaultNotOnLeagueTreasury(playerId, leagueId, domesticTreasury, vault);
         }
+    }
+
+    function _findQueuedIndex(bytes32 playerId) private view returns (uint256) {
+        uint256 length = _pending.length;
+        for (uint256 i; i < length; ++i) {
+            if (_pending[i].playerId == playerId && _pending[i].status == LifecycleQueueStatus.Queued) {
+                return i;
+            }
+        }
+        return type(uint256).max;
+    }
+
+    function _findAwaitingIndex(bytes32 playerId) private view returns (uint256) {
+        uint256 length = _pending.length;
+        for (uint256 i; i < length; ++i) {
+            if (_pending[i].playerId == playerId && _pending[i].status == LifecycleQueueStatus.AwaitingLeagueTransfer) {
+                return i;
+            }
+        }
+        return type(uint256).max;
+    }
+
+    function _removeAt(uint256 index) private {
+        PendingLifecycle memory e = _pending[index];
+        if (e.reason == LifecycleReason.Reactivate) {
+            _queuedReactivate[e.playerId] = false;
+        } else {
+            _queuedDeactivate[e.playerId] = false;
+        }
+
+        uint256 last = _pending.length - 1;
+        if (index != last) {
+            _pending[index] = _pending[last];
+        }
+        _pending.pop();
+    }
+
+    function _exec(address target, bytes memory data) private returns (bytes memory) {
+        return orchestrator.execute(target, 0, data);
     }
 }

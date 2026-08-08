@@ -112,10 +112,18 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     /**
      * @notice Mark the vault as supported or unsupported for new stakes.
      * @dev Unstake and claim remain available when inactive.
+     *      Callable by owner or `PlayerSetRegistry` (lifecycle SoT).
      */
-    function setActive(bool active_) external onlyOwner {
+    function setActive(bool active_) external {
+        _checkLifecycleCaller();
         isActive = active_;
         emit Events.ActiveUpdated(playerId, active_);
+    }
+
+    function _checkLifecycleCaller() internal view {
+        if (msg.sender == owner()) return;
+        if (msg.sender == _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY))) return;
+        revert Errors.Unauthorized();
     }
 
     // --------------------------------------------

@@ -151,7 +151,8 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     // --------------------------------------------
 
     /// @inheritdoc ITournamentRegistry
-    function registerVaults(bytes32 tournamentId, address[] calldata vaults) external onlyOwner {
+    function registerVaults(bytes32 tournamentId, address[] calldata vaults) external {
+        _checkVaultMembershipCaller();
         Tournament storage t = _requireTournament(tournamentId);
         address treasury = t.pbrTreasury;
         uint256 length = vaults.length;
@@ -161,13 +162,21 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     }
 
     /// @inheritdoc ITournamentRegistry
-    function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external onlyOwner {
+    function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external {
+        _checkVaultMembershipCaller();
         Tournament storage t = _requireTournament(tournamentId);
         address treasury = t.pbrTreasury;
         uint256 length = vaults.length;
         for (uint256 i; i < length; ++i) {
             _unregisterVault(tournamentId, treasury, vaults[i]);
         }
+    }
+
+    /// @dev Owner or `PlayerSetRegistry` (lifecycle SoT fan-out).
+    function _checkVaultMembershipCaller() internal view {
+        if (msg.sender == owner()) return;
+        if (msg.sender == address(playerSetRegistry)) return;
+        revert Errors.NotAuthorized();
     }
 
     // --------------------------------------------

@@ -17,13 +17,24 @@ enum LifecycleReason {
     Reactivate
 }
 
+/// @notice TransferLocker waiting-room phase for one pending entry.
+enum LifecycleQueueStatus {
+    None,
+    /// @dev In the review window (`queuedAt + queueWait`).
+    Queued,
+    /// @dev `CvmJob.LeagueTransfer` in flight (ChangedLeague only).
+    AwaitingLeagueTransfer
+}
+
 /**
- * @notice One TransferLocker waiting-room entry (manual review before status change).
- * @dev Mirrors DopplerLocker pending intake for deactivate / reactivate paths.
+ * @notice One TransferLocker waiting-room entry.
+ * @dev Mirrors DopplerLocker pending intake for deactivate / reactivate / transfer paths.
  */
 struct PendingLifecycle {
     bytes32 playerId;
     LifecycleReason reason;
     /// @dev Effective weighted minutes at enqueue time (0 for LeftLeague / unknown).
     uint32 effectiveMins;
+    uint64 queuedAt;
+    LifecycleQueueStatus status;
 }

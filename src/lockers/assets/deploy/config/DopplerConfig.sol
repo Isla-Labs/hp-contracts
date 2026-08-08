@@ -6,10 +6,10 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
-import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
+import { DeploymentsErrors as Errors } from "@errors/lockers/DeploymentsErrors.sol";
+import { DeploymentsEvents as Events } from "@events/lockers/DeploymentsEvents.sol";
 import { IDopplerConfig } from "@interfaces/governance/IDopplerConfig.sol";
-import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
+import { DopplerTypes } from "@types/lockers/DopplerTypes.sol";
 
 import { CreateParams } from "@doppler/src/Airlock.sol";
 import { FeeDistributionInfo, FeeRoutingMode } from "@doppler/src/types/RehypeTypes.sol";

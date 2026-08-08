@@ -6,13 +6,13 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { LifecycleErrors as Errors } from "@errors/governance/LifecycleErrors.sol";
-import { LifecycleEvents as Events } from "@events/governance/LifecycleEvents.sol";
+import { LifecycleErrors as Errors } from "@errors/lockers/LifecycleErrors.sol";
+import { LifecycleEvents as Events } from "@events/lockers/LifecycleEvents.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
-import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTypes.sol";
-import { PlayerSet } from "@types/PlayerSetTypes.sol";
+import { LifecycleReason, PendingLifecycle } from "@types/lockers/LifecycleTypes.sol";
+import { PlayerSet } from "@types/registries/PlayerSetTypes.sol";
 
 /// @dev Minimal FeeRouter surface for hub consistency checks (no markets import).
 interface IFeeRouterHub {

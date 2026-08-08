@@ -6,7 +6,7 @@ interface IStakeVesting {
 
     function setBeneficiaries(address[] calldata accounts, uint256[] calldata sharesWad) external;
 
-    function releaseAdvancedTrade(address token, address to, uint256 amount) external;
+    function releaseAdvancedTrade(address token) external;
 
     function unlock(address token) external;
 

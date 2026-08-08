@@ -9,11 +9,13 @@ import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
-import { DeploymentsEvents as Events } from "@events/governance/DeploymentsEvents.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
-import { VaultData } from "@types/PlayerSetTypes.sol";
+import { AdvancedTradeData, VaultData } from "@types/registries/PlayerSetTypes.sol";
 import { PlayerVault } from "@vaults/PlayerVault.sol";
+
+import { StakeVestingErrors as Errors } from "@errors/governance/StakeVestingErrors.sol";
+import { StakeVestingEvents as Events } from "@events/governance/StakeVestingEvents.sol";
+import { Beneficiary, Position } from "@types/governance/StakeVestingTypes.sol";
 
 /**
  * @title StakeVesting
@@ -33,31 +35,13 @@ import { PlayerVault } from "@vaults/PlayerVault.sol";
 contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
+    // -------------------------------------------------------------------------
+    //  Config
+    // -------------------------------------------------------------------------
+
     uint256 public constant WAD = 1e18;
     uint256 public constant TRANCHE_COUNT = 4;
     uint256 public constant TRANCHE_DURATION = 365 days;
-
-    struct Beneficiary {
-        address account;
-        uint256 shareWad;
-    }
-
-    struct Position {
-        bytes32 playerId;
-        address vault;
-        /// @dev Ringfenced AdvancedTrade inventory (still held as ERC20 on this contract).
-        uint256 advancedTradeReserve;
-        /// @dev Vault-side principal at allocate (50% of excess).
-        uint256 vaultPrincipal;
-        /// @dev Underlying still staked in the PlayerVault (1:1 stToken).
-        uint256 stakedRemaining;
-        /// @dev Unstaked underlying ready to distribute to beneficiaries.
-        uint256 unlockedClaimable;
-        uint64 allocatedAt;
-        /// @dev Next tranche index to unlock (`0..TRANCHE_COUNT`).
-        uint8 nextTranche;
-        bool allocated;
-    }
 
     IPlayerSetRegistry public playerSetRegistry;
 
@@ -65,13 +49,15 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
 
     mapping(address token => Position) public positions;
 
+    // -------------------------------------------------------------------------
+    //  Initialization
+    // -------------------------------------------------------------------------
+
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
         _disableInitializers();
     }
-
-    receive() external payable { }
 
     /**
      * @notice Resolve registry; default beneficiary = HP Treasury (100%); ownership → Orchestrator.
@@ -81,10 +67,17 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
 
         address hpTreasury = _getAddress(_addressKey(Addresses.HP_TREASURY));
         if (hpTreasury == address(0)) revert Errors.ZeroAddress();
-        _setBeneficiaries(_single(hpTreasury), _singleShare());
+
+        address[] memory accounts = new address[](1);
+        accounts[0] = hpTreasury;
+        uint256[] memory sharesWad = new uint256[](1);
+        sharesWad[0] = WAD;
+        _setBeneficiaries(accounts, sharesWad);
 
         _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
     }
+
+    receive() external payable { }
 
     // -------------------------------------------------------------------------
     //  Admin
@@ -99,30 +92,44 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Release ringfenced AdvancedTrade inventory once the AT vault exists.
+     * @notice Release full ringfenced AT inventory to the registry `advancedTradeVault`.
+     * @dev Reverts if AT vault unset, reserve is zero, or ERC20 balance is below reserve.
      */
-    function releaseAdvancedTrade(address token, address to, uint256 amount) external onlyOwner nonReentrant {
-        if (token == address(0) || to == address(0)) revert Errors.ZeroAddress();
+    function releaseAdvancedTrade(address token) external onlyOwner nonReentrant {
+        if (token == address(0)) revert Errors.ZeroAddress();
         Position storage p = positions[token];
-        if (amount == 0 || amount > p.advancedTradeReserve) revert Errors.InsufficientExcessReserve();
-        p.advancedTradeReserve -= amount;
-        IERC20(token).safeTransfer(to, amount);
-        emit Events.AdvancedTradeReleased(token, to, amount);
+        if (!p.allocated) revert Errors.NotConfigured();
+
+        uint256 amount = p.advancedTradeReserve;
+        if (amount == 0) revert Errors.ZeroAmount();
+        if (IERC20(token).balanceOf(address(this)) < amount) revert Errors.InsufficientExcessReserve();
+
+        AdvancedTradeData memory at = playerSetRegistry.getAdvancedTradeData(p.playerId);
+        address vault = at.advancedTradeVault;
+        if (vault == address(0)) revert Errors.VaultMissing(p.playerId);
+
+        p.advancedTradeReserve = 0;
+        IERC20(token).safeTransfer(vault, amount);
+        emit Events.AdvancedTradeReleased(token, vault, amount);
     }
 
     /**
-     * @notice Owner escape hatch for non-position balances / ops.
-     * @dev Cannot pull ringfenced AT reserve or unlocked claimable tracked in `positions`
-     *      beyond free balance; prefer `releaseAdvancedTrade` / `distributeUnlocked`.
+     * @notice Owner escape hatch: send all free ERC20 balance of `token` → HP Treasury.
+     * @dev Leaves `advancedTradeReserve` and `unlockedClaimable` untouched. Staked principal
+     *      remains in the PlayerVault. Prefer `releaseAdvancedTrade` / `distributeUnlocked`.
      */
-    function rescueToken(address token, address to, uint256 amount) external onlyOwner nonReentrant {
-        if (token == address(0) || to == address(0)) revert Errors.ZeroAddress();
-        if (amount == 0) return;
+    function rescueToken(address token) external onlyOwner nonReentrant {
+        if (token == address(0)) revert Errors.ZeroAddress();
+
+        address hpTreasury = _getAddress(_addressKey(Addresses.HP_TREASURY));
+        if (hpTreasury == address(0)) revert Errors.ZeroAddress();
+
         Position storage p = positions[token];
         uint256 free = IERC20(token).balanceOf(address(this)) - p.advancedTradeReserve - p.unlockedClaimable;
-        if (amount > free) revert Errors.InsufficientExcessReserve();
-        IERC20(token).safeTransfer(to, amount);
-        emit Events.ExcessTokenRescued(token, to, amount);
+        if (free == 0) revert Errors.ZeroAmount();
+
+        IERC20(token).safeTransfer(hpTreasury, free);
+        emit Events.ExcessTokenRescued(token, hpTreasury, free);
     }
 
     // -------------------------------------------------------------------------
@@ -313,26 +320,24 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
         uint256 length = accounts.length;
         if (length == 0) revert Errors.EmptyBeneficiaries();
         if (length != sharesWad.length) revert Errors.LengthMismatch(length, sharesWad.length);
+        _requireSharesSumToWad(sharesWad);
 
-        uint256 total;
         delete _beneficiaries;
         for (uint256 i; i < length; ++i) {
             if (accounts[i] == address(0)) revert Errors.ZeroAddress();
             if (sharesWad[i] == 0) revert Errors.InvalidBeneficiaryShares();
-            total += sharesWad[i];
             _beneficiaries.push(Beneficiary({ account: accounts[i], shareWad: sharesWad[i] }));
         }
-        if (total != WAD) revert Errors.InvalidBeneficiaryShares();
         emit Events.ExcessBeneficiariesUpdated(length);
     }
 
-    function _single(address account) private pure returns (address[] memory accounts) {
-        accounts = new address[](1);
-        accounts[0] = account;
-    }
-
-    function _singleShare() private pure returns (uint256[] memory shares) {
-        shares = new uint256[](1);
-        shares[0] = WAD;
+    /// @dev Reverts unless `sharesWad` sums exactly to `WAD` (100%).
+    function _requireSharesSumToWad(uint256[] memory sharesWad) private pure {
+        uint256 total;
+        uint256 length = sharesWad.length;
+        for (uint256 i; i < length; ++i) {
+            total += sharesWad[i];
+        }
+        if (total != WAD) revert Errors.InvalidBeneficiaryShares();
     }
 }

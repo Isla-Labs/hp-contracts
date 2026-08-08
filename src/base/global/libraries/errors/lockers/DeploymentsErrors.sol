@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { TournamentType } from "@types/TournamentTypes.sol";
+import { TournamentType } from "@types/registries/TournamentTypes.sol";
 
 library DeploymentsErrors {
     error ZeroAddress();
@@ -48,12 +48,4 @@ library DeploymentsErrors {
     error InvalidCurve();
     error InvalidCurveShares(uint256 totalShares);
     error InvalidFeeDistribution();
-
-    //  StakeVesting
-    error ZeroAmount();
-    error TransferFailed();
-    error EmptyBeneficiaries();
-    error InvalidBeneficiaryShares();
-    error NothingToUnlock();
-    error InsufficientExcessReserve();
 }

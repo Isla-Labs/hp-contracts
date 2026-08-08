@@ -6,9 +6,9 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
-import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
-import { Hub, Season, Tournament, TournamentType, RoundSchedule } from "@types/TournamentTypes.sol";
+import { RegistryErrors as Errors } from "@errors/registries/RegistryErrors.sol";
+import { RegistryEvents as Events } from "@events/registries/RegistryEvents.sol";
+import { Hub, Season, Tournament, TournamentType, RoundSchedule } from "@types/registries/TournamentTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";

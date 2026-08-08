@@ -12,7 +12,7 @@ import { AddressKeys as Addresses } from "@base/global/libraries/addresses/Addre
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
-import { PlayerStatus } from "@types/PlayerSetTypes.sol";
+import { PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
 
 /**
  * @title FeeRouter

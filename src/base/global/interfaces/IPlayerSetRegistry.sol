@@ -9,7 +9,7 @@ import {
     TokenData,
     TournamentData,
     VaultData
-} from "@types/PlayerSetTypes.sol";
+} from "@types/registries/PlayerSetTypes.sol";
 
 /**
  * @title IPlayerSetRegistry

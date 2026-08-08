@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { LifecycleReason } from "@types/governance/LifecycleTypes.sol";
+import { LifecycleReason } from "@types/lockers/LifecycleTypes.sol";
 
 library LifecycleEvents {
     /// @notice Enqueue writer (`EligibilityVerifier`).

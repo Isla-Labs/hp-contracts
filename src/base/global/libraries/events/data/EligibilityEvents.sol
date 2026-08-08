@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Position } from "@types/PlayerSetTypes.sol";
+import { Position } from "@types/registries/PlayerSetTypes.sol";
 
 library EligibilityEvents {
     event AppearancesRecorded(uint256 count);

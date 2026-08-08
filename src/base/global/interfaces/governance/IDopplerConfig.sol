@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import { CreateParams } from "@doppler/src/Airlock.sol";
 import { FeeDistributionInfo } from "@doppler/src/types/RehypeTypes.sol";
-import { DopplerTypes } from "@types/governance/DopplerTypes.sol";
+import { DopplerTypes } from "@types/lockers/DopplerTypes.sol";
 
 /**
  * @title IDopplerConfig

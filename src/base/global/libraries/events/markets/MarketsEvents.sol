@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { PlayerStatus } from "@types/PlayerSetTypes.sol";
-import { TournamentType } from "@types/TournamentTypes.sol";
+import { PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
+import { TournamentType } from "@types/registries/TournamentTypes.sol";
 
 library MarketsEvents {
     // --------------------------------------------

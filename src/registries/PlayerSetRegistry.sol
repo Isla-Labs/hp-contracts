@@ -6,8 +6,8 @@ import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { RegistryErrors as Errors } from "@errors/RegistryErrors.sol";
-import { RegistryEvents as Events } from "@events/RegistryEvents.sol";
+import { RegistryErrors as Errors } from "@errors/registries/RegistryErrors.sol";
+import { RegistryEvents as Events } from "@events/registries/RegistryEvents.sol";
 import {
     AdvancedTradeData,
     DopplerData,
@@ -16,7 +16,7 @@ import {
     TokenData,
     TournamentData,
     VaultData
-} from "@types/PlayerSetTypes.sol";
+} from "@types/registries/PlayerSetTypes.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 

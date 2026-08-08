@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Hub, RoundSchedule, Season, TournamentType } from "@types/TournamentTypes.sol";
+import { Hub, RoundSchedule, Season, TournamentType } from "@types/registries/TournamentTypes.sol";
 
 /**
  * @title ITournamentRegistry

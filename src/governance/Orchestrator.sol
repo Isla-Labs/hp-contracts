@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 
-import { DeploymentsErrors as Errors } from "@errors/governance/DeploymentsErrors.sol";
+import { DeploymentsErrors as Errors } from "@errors/lockers/DeploymentsErrors.sol";
 import { IOrchestrator } from "@interfaces/IOrchestrator.sol";
 
 /**

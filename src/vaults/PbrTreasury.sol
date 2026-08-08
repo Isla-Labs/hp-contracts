@@ -10,7 +10,7 @@ import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
-import { RoundSchedule } from "@types/TournamentTypes.sol";
+import { RoundSchedule } from "@types/registries/TournamentTypes.sol";
 import { RoundState, RoundStatus } from "@types/vaults/VaultTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";

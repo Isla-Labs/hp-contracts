@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { LifecycleReason, PendingLifecycle } from "@types/governance/LifecycleTypes.sol";
+import { LifecycleReason, PendingLifecycle } from "@types/lockers/LifecycleTypes.sol";
 
 /**
  * @title ITransferLocker

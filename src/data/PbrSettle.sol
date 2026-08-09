@@ -25,7 +25,7 @@ import { AddressProvider } from "@src/AddressProvider.sol";
 
 /**
  * @title PbrSettle
- * @notice Per-fixture settle: `startRound` fans out `SettleDms` → fulfill writes ≤32 vault points.
+ * @notice Per-fixture settle: `startRound` fans out `SettleDms` → fulfill applies vault points.
  * @dev Fulfill response:
  *      `abi.encode(bytes32 utilizedHash, bytes32 fixtureDigest, bytes proof, address[] vaults, uint256[] mwPoints)`.
  *      See `pbrSettleFlow.md`.
@@ -34,8 +34,6 @@ import { AddressProvider } from "@src/AddressProvider.sol";
  * @custom:security-contact security@islalabs.co
  */
 contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
-    uint256 public constant MAX_FIXTURE_PLAYERS = 32;
-
     ITournamentRegistry public tournamentRegistry;
 
     mapping(bytes32 requestId => PendingSettle) private _pending;
@@ -191,7 +189,6 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         }
         if (fixtureDigest == bytes32(0)) revert Errors.ZeroHash();
         if (vaults.length != mwPoints.length) revert Errors.LengthMismatch();
-        if (vaults.length > MAX_FIXTURE_PLAYERS) revert Errors.TooManyPlayers(vaults.length);
 
         bytes32 proofHash = keccak256(proof);
 

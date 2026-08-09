@@ -28,13 +28,11 @@ import { IStakedToken } from "@interfaces/vaults/IStakedToken.sol";
  * @custom:security-contact security@islalabs.co
  */
 contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IPbrTreasury {
-    uint256 public constant MAX_FIXTURE_PLAYERS = 32;
-    /// @notice Non-final rounds lock this share of `rewardsR` (remainder carries forward).
-    uint256 public constant LOCK_BPS = 8000;
-    /// @notice Final round locks this share so a seed remains for offseason / next season.
-    uint256 public constant FINAL_LOCK_BPS = 9500;
-
     ITournamentRegistry public tournamentRegistry;
+
+    // --------------------------------------------
+    //  Config
+    // --------------------------------------------
 
     bytes32 public tournamentId;
 
@@ -44,6 +42,17 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
 
     uint256 public rewardsR;
     uint256 public totalRewardsR;
+
+    // --------------------------------------------
+    //  Internal constants
+    // --------------------------------------------
+
+    uint256 public constant LOCK_BPS = 8000;
+    uint256 public constant FINAL_LOCK_BPS = 9500;
+
+    // --------------------------------------------
+    //  Storage
+    // --------------------------------------------
 
     mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => RoundState)) private _rounds;
     mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => mapping(address vault => uint256))) public
@@ -79,6 +88,10 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
 
     address public pbrSettle;
 
+    // --------------------------------------------
+    //  Access control
+    // --------------------------------------------
+
     modifier onlyTournamentRegistry() {
         if (msg.sender != address(tournamentRegistry)) revert Errors.Unauthorized();
         _;
@@ -88,6 +101,10 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         if (msg.sender != pbrSettle) revert Errors.Unauthorized();
         _;
     }
+
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
@@ -170,107 +187,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     function syncUtilization(bool utilized_) external {
         if (!isVault[msg.sender]) revert Errors.UnknownVault(msg.sender);
         _setLiveUtilized(msg.sender, utilized_);
-    }
-
-    function _setLiveUtilized(address vault_, bool utilized_) internal {
-        uint32 id = vaultId[vault_];
-        if (id == 0) return;
-
-        (uint256 word, uint256 mask) = _bitPosition(id);
-        uint256 cur = _liveUtilizedBits[word];
-        bool was = (cur & mask) != 0;
-
-        if (utilized_) {
-            if (was) return;
-            _liveUtilizedBits[word] = cur | mask;
-            unchecked {
-                ++liveUtilizedCount;
-            }
-        } else {
-            if (!was) return;
-            _liveUtilizedBits[word] = cur & ~mask;
-            unchecked {
-                --liveUtilizedCount;
-            }
-        }
-    }
-
-    /// @dev Copy live bitmap words into the round (~`ceil(vaultIdCount / 256)` SSTOREs).
-    function _freezeUtilized(uint16 seasonStartYear_, uint32 roundNumber_) internal {
-        uint32 hi = vaultIdCount;
-        _roundVaultIdCount[seasonStartYear_][roundNumber_] = hi;
-        _roundUtilizedCount[seasonStartYear_][roundNumber_] = liveUtilizedCount;
-
-        uint256 words = _wordCount(hi);
-        for (uint256 i; i < words;) {
-            _roundUtilizedBits[seasonStartYear_][roundNumber_][i] = _liveUtilizedBits[i];
-            unchecked {
-                ++i;
-            }
-        }
-        _roundUtilizedHash[seasonStartYear_][roundNumber_] = _hashBitmap(seasonStartYear_, roundNumber_, hi, words);
-    }
-
-    function _bitPosition(uint32 id) internal pure returns (uint256 word, uint256 mask) {
-        uint256 bit;
-        unchecked {
-            bit = uint256(id - 1);
-        }
-        word = bit >> 8;
-        mask = uint256(1) << (bit & 0xff);
-    }
-
-    function _wordCount(uint32 hi) internal pure returns (uint256) {
-        if (hi == 0) return 0;
-        unchecked {
-            return (uint256(hi) + 255) / 256;
-        }
-    }
-
-    function _hashBitmap(
-        uint16 seasonStartYear_,
-        uint32 roundNumber_,
-        uint32 hi,
-        uint256 words
-    ) internal view returns (bytes32) {
-        uint256[] memory packed = new uint256[](words);
-        for (uint256 i; i < words;) {
-            packed[i] = _roundUtilizedBits[seasonStartYear_][roundNumber_][i];
-            unchecked {
-                ++i;
-            }
-        }
-        return keccak256(abi.encode(hi, packed));
-    }
-
-    function _isUtilized(uint16 seasonStartYear_, uint32 roundNumber_, address vault_) internal view returns (bool) {
-        uint32 id = vaultId[vault_];
-        if (id == 0 || id > _roundVaultIdCount[seasonStartYear_][roundNumber_]) return false;
-        (uint256 word, uint256 mask) = _bitPosition(id);
-        return (_roundUtilizedBits[seasonStartYear_][roundNumber_][word] & mask) != 0;
-    }
-
-    function _collectFromBits(
-        mapping(uint256 => uint256) storage bits,
-        uint32 hi,
-        uint32 count
-    ) internal view returns (address[] memory out) {
-        out = new address[](count);
-        if (count == 0 || hi == 0) return out;
-
-        uint256 n;
-        for (uint32 id = 1; id <= hi && n < count;) {
-            (uint256 word, uint256 mask) = _bitPosition(id);
-            if ((bits[word] & mask) != 0) {
-                out[n] = vaultById[id];
-                unchecked {
-                    ++n;
-                }
-            }
-            unchecked {
-                ++id;
-            }
-        }
     }
 
     // --------------------------------------------
@@ -379,7 +295,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
             revert Errors.ZeroId();
         }
         if (vaults_.length != mwPoints_.length) revert Errors.LengthMismatch();
-        if (vaults_.length > MAX_FIXTURE_PLAYERS) revert Errors.TooManyPlayers(vaults_.length);
 
         uint16 seasonStartYear_ = seasonStartYear;
         uint32 roundNumber_ = activeRound;
@@ -494,6 +409,111 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         if (!ok) revert Errors.TransferFailed();
 
         emit Events.ClaimPaid(seasonStartYear_, roundNumber_, msg.sender, user_, payout_);
+    }
+
+    // --------------------------------------------
+    //  Internal
+    // --------------------------------------------
+
+    function _setLiveUtilized(address vault_, bool utilized_) internal {
+        uint32 id = vaultId[vault_];
+        if (id == 0) return;
+
+        (uint256 word, uint256 mask) = _bitPosition(id);
+        uint256 cur = _liveUtilizedBits[word];
+        bool was = (cur & mask) != 0;
+
+        if (utilized_) {
+            if (was) return;
+            _liveUtilizedBits[word] = cur | mask;
+            unchecked {
+                ++liveUtilizedCount;
+            }
+        } else {
+            if (!was) return;
+            _liveUtilizedBits[word] = cur & ~mask;
+            unchecked {
+                --liveUtilizedCount;
+            }
+        }
+    }
+
+    /// @dev Copy live bitmap words into the round (~`ceil(vaultIdCount / 256)` SSTOREs).
+    function _freezeUtilized(uint16 seasonStartYear_, uint32 roundNumber_) internal {
+        uint32 hi = vaultIdCount;
+        _roundVaultIdCount[seasonStartYear_][roundNumber_] = hi;
+        _roundUtilizedCount[seasonStartYear_][roundNumber_] = liveUtilizedCount;
+
+        uint256 words = _wordCount(hi);
+        for (uint256 i; i < words;) {
+            _roundUtilizedBits[seasonStartYear_][roundNumber_][i] = _liveUtilizedBits[i];
+            unchecked {
+                ++i;
+            }
+        }
+        _roundUtilizedHash[seasonStartYear_][roundNumber_] = _hashBitmap(seasonStartYear_, roundNumber_, hi, words);
+    }
+
+    function _bitPosition(uint32 id) internal pure returns (uint256 word, uint256 mask) {
+        uint256 bit;
+        unchecked {
+            bit = uint256(id - 1);
+        }
+        word = bit >> 8;
+        mask = uint256(1) << (bit & 0xff);
+    }
+
+    function _wordCount(uint32 hi) internal pure returns (uint256) {
+        if (hi == 0) return 0;
+        unchecked {
+            return (uint256(hi) + 255) / 256;
+        }
+    }
+
+    function _hashBitmap(
+        uint16 seasonStartYear_,
+        uint32 roundNumber_,
+        uint32 hi,
+        uint256 words
+    ) internal view returns (bytes32) {
+        uint256[] memory packed = new uint256[](words);
+        for (uint256 i; i < words;) {
+            packed[i] = _roundUtilizedBits[seasonStartYear_][roundNumber_][i];
+            unchecked {
+                ++i;
+            }
+        }
+        return keccak256(abi.encode(hi, packed));
+    }
+
+    function _isUtilized(uint16 seasonStartYear_, uint32 roundNumber_, address vault_) internal view returns (bool) {
+        uint32 id = vaultId[vault_];
+        if (id == 0 || id > _roundVaultIdCount[seasonStartYear_][roundNumber_]) return false;
+        (uint256 word, uint256 mask) = _bitPosition(id);
+        return (_roundUtilizedBits[seasonStartYear_][roundNumber_][word] & mask) != 0;
+    }
+
+    function _collectFromBits(
+        mapping(uint256 => uint256) storage bits,
+        uint32 hi,
+        uint32 count
+    ) internal view returns (address[] memory out) {
+        out = new address[](count);
+        if (count == 0 || hi == 0) return out;
+
+        uint256 n;
+        for (uint32 id = 1; id <= hi && n < count;) {
+            (uint256 word, uint256 mask) = _bitPosition(id);
+            if ((bits[word] & mask) != 0) {
+                out[n] = vaultById[id];
+                unchecked {
+                    ++n;
+                }
+            }
+            unchecked {
+                ++id;
+            }
+        }
     }
 
     // --------------------------------------------

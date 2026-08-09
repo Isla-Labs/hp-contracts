@@ -9,7 +9,6 @@ library PbrSettleErrors {
     error ZeroHash();
     error ZeroFixture();
     error NoFixtures();
-    error TooManyPlayers(uint256 length);
     error LengthMismatch();
     error TreasuryMissing(bytes32 tournamentId);
     error RoundSettlePending(bytes32 roundId);

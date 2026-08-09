@@ -252,9 +252,8 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
             bytes32 tid = _tournamentIdOf[row.treasury];
             uint256 claimKey = _claimKey(tid, row.seasonStartYear, row.roundNumber);
             if (!_isClaimed(user, claimKey) && IStakedToken(stToken).balanceOfAt(user, row.lockBlock) > 0) {
-                total += IPbrTreasury(row.treasury).previewClaim(
-                    row.seasonStartYear, row.roundNumber, address(this), user
-                );
+                total += IPbrTreasury(row.treasury)
+                    .previewClaim(row.seasonStartYear, row.roundNumber, address(this), user);
             }
             unchecked {
                 ++i;

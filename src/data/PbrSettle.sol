@@ -36,11 +36,19 @@ import { AddressProvider } from "@src/AddressProvider.sol";
 contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
     ITournamentRegistry public tournamentRegistry;
 
+    // --------------------------------------------
+    //  Storage
+    // --------------------------------------------
+
     mapping(bytes32 requestId => PendingSettle) private _pending;
     mapping(bytes32 fixtureJobId_ => bytes32 requestId) public pendingRequest;
 
     mapping(bytes32 roundId_ => RoundSettlement) private _rounds;
     mapping(bytes32 fixtureJobId_ => FixtureSettlement) private _fixtures;
+
+    // --------------------------------------------
+    //  Initialization
+    // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address addressProvider_)

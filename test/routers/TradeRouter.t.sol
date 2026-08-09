@@ -375,7 +375,8 @@ contract TradeRouterTest is Test {
 
         vm.startPrank(user);
         playerToken.approve(address(router), 2 ether);
-        uint256 amountOut = router.swapPlayers(address(playerToken), address(playerTokenB), 2 ether, 0, block.timestamp + 1);
+        uint256 amountOut =
+            router.swapPlayers(address(playerToken), address(playerTokenB), 2 ether, 0, block.timestamp + 1);
         vm.stopPrank();
 
         assertEq(amountOut, 2 ether);

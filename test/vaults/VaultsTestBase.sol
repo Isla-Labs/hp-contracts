@@ -54,6 +54,8 @@ abstract contract VaultsTestBase is Test {
         ap.setName(Addresses.TOURNAMENT_REGISTRY, address(tournamentRegistry));
         ap.setName(Addresses.PLAYER_SET_REGISTRY, address(playerSetRegistry));
         ap.setName(Addresses.PBR_SETTLE, address(pbrSettle));
+        // PlayerVault.initialize caches STAKE_ROUTER; real router tests overwrite before deploy.
+        ap.setName(Addresses.STAKE_ROUTER, makeAddr("stakeRouter"));
 
         bytes32[] memory tournaments = new bytes32[](1);
         tournaments[0] = TOURNAMENT;

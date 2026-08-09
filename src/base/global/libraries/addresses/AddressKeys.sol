@@ -11,6 +11,12 @@ library AddressKeys {
     // Governance
     string internal constant STAKE_VESTING = "STAKE_VESTING";
 
+    // Routers
+    string internal constant STAKE_ROUTER = "STAKE_ROUTER";
+    string internal constant TRADE_ROUTER = "TRADE_ROUTER";
+    /// @dev External multi-AMM router (e.g. zRouter) for non-player ERC20 ↔ ETH legs.
+    string internal constant Z_ROUTER = "Z_ROUTER";
+
     // Registries
     string internal constant TOURNAMENT_REGISTRY = "TOURNAMENT_REGISTRY";
     string internal constant PLAYER_SET_REGISTRY = "PLAYER_SET_REGISTRY";

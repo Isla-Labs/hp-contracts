@@ -32,6 +32,8 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     ITournamentRegistry public tournamentRegistry;
     IPlayerSetRegistry public playerSetRegistry;
 
+    address public stakeRouter;
+
     // --------------------------------------------
     //  Config
     // --------------------------------------------
@@ -105,8 +107,11 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
         _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
 
+        stakeRouter = _getAddress(_addressKey(Addresses.STAKE_ROUTER));
+
         tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
         playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+        
         playerId = playerId_;
         playerToken = playerToken_;
         stToken = stToken_;
@@ -177,14 +182,41 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     }
 
     // --------------------------------------------
+    //  Router
+    // --------------------------------------------
+
+    /// @inheritdoc IPlayerVault
+    /// @dev Pulls `playerToken` from `user` (user must approve this vault). Mint stToken to `user`.
+    function stakeFor(address user, uint256 amount) external nonReentrant whenNotPaused {
+        if (msg.sender != stakeRouter) revert Errors.Unauthorized();
+        _stake(user, amount);
+    }
+
+    /// @inheritdoc IPlayerVault
+    function unstakeFor(address user, uint256 amount) external nonReentrant whenNotPaused {
+        if (msg.sender != stakeRouter) revert Errors.Unauthorized();
+        _unstake(user, amount);
+    }
+
+    /// @inheritdoc IPlayerVault
+    function claimFor(address user) external nonReentrant whenNotPaused returns (uint256) {
+        if (msg.sender != stakeRouter) revert Errors.Unauthorized();
+        return _claim(user);
+    }
+
+    // --------------------------------------------
     //  Stake / Unstake
     // --------------------------------------------
 
     function stake(uint256 amount) external nonReentrant whenNotPaused {
+        _stake(msg.sender, amount);
+    }
+
+    function _stake(address user, uint256 amount) internal {
+        if (user == address(0)) revert Errors.ZeroAddress();
         if (!isActive) revert Errors.VaultInactive();
         if (amount == 0) revert Errors.ZeroAmount();
 
-        address user = msg.sender;
         IERC20(playerToken).safeTransferFrom(user, address(this), amount);
         IStakedToken(stToken).mint(user, amount);
 
@@ -197,9 +229,13 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     }
 
     function unstake(uint256 amount) external nonReentrant whenNotPaused {
+        _unstake(msg.sender, amount);
+    }
+
+    function _unstake(address user, uint256 amount) internal {
+        if (user == address(0)) revert Errors.ZeroAddress();
         if (amount == 0) revert Errors.ZeroAmount();
 
-        address user = msg.sender;
         uint256 bal = IStakedToken(stToken).balanceOf(user);
         if (amount > bal) revert Errors.InsufficientStake();
         if (bal - amount < _lockedBalance(user)) revert Errors.MatchweekLock();
@@ -233,8 +269,13 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
     /// @notice Sync cache, then pay each cached round where caller had cut-off stake.
     function claim() external nonReentrant whenNotPaused returns (uint256) {
+        return _claim(msg.sender);
+    }
+
+    function _claim(address user) internal returns (uint256) {
+        if (user == address(0)) revert Errors.ZeroAddress();
         _syncClaimableCache();
-        return _claimFromCache(msg.sender);
+        return _claimFromCache(user);
     }
 
     // --------------------------------------------

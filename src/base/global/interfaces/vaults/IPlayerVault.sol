@@ -3,10 +3,12 @@ pragma solidity ^0.8.34;
 
 /**
  * @title IPlayerVault
- * @notice Minimal vault surface used by treasuries / registries.
+ * @notice Minimal vault surface used by treasuries / registries / StakeRouter.
  */
 interface IPlayerVault {
     function playerId() external view returns (bytes32);
+
+    function playerToken() external view returns (address);
 
     function stToken() external view returns (address);
 
@@ -14,4 +16,13 @@ interface IPlayerVault {
 
     /// @notice Mirror tournament treasury membership (TournamentRegistry only).
     function syncActiveTreasury(bytes32 tournamentId, address treasury, bool active) external;
+
+    /// @notice StakeRouter-only: pull `playerToken` from `user`, mint stToken to `user`.
+    function stakeFor(address user, uint256 amount) external;
+
+    /// @notice StakeRouter-only: burn `user` stToken and return `playerToken` to `user`.
+    function unstakeFor(address user, uint256 amount) external;
+
+    /// @notice StakeRouter-only: claim PBR for `user` (ETH paid to `user`).
+    function claimFor(address user) external returns (uint256);
 }

@@ -13,7 +13,6 @@ import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
 import { RoundSchedule } from "@types/registries/TournamentTypes.sol";
 import { RoundState, RoundStatus } from "@types/vaults/VaultTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
-import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { IPbrSettle } from "@interfaces/data/IPbrSettle.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
@@ -21,9 +20,9 @@ import { IStakedToken } from "@interfaces/vaults/IStakedToken.sol";
 
 /**
  * @title PbrTreasury
- * @notice Single-tournament PBR pot: O(1) lock / per-fixture zk settle / pull claims.
+ * @notice Single-tournament PBR pot: O(bitmap-words) lock / per-fixture zk settle / pull claims.
  * @dev Crank: `lockVaults` → `requestSettle` → `applyFixtureSettlement`* → Claimable.
- *      Vaults sync live utilization (`S > 0`) on 0↔nonzero; `lockVaults` freezes that live set.
+ *      Vaults sync live utilization (`S > 0`) on 0↔nonzero; `lockVaults` freezes the live bitmap.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -36,7 +35,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     uint256 public constant FINAL_LOCK_BPS = 9500;
 
     ITournamentRegistry public tournamentRegistry;
-    IPlayerSetRegistry public playerSetRegistry;
 
     bytes32 public tournamentId;
 
@@ -51,20 +49,26 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => mapping(address vault => uint256))) public
         vaultPoints;
 
+    /// @dev Currently registered vaults (swap-and-pop). Indices are not bitmap ids.
     mapping(address vault => bool) public isVault;
     address[] private _vaults;
-    mapping(address vault => uint256) private _vaultIndex; // 1-based
+    mapping(address vault => uint256) private _vaultIndex; // 1-based into `_vaults`
 
-    /// @dev Live registered vaults with `totalStaked > 0` (updated on 0↔nonzero sync).
-    address[] private _liveUtilized;
-    mapping(address vault => uint256) private _liveUtilizedIndex; // 1-based
+    /// @dev Append-only stable ids for utilization bitmaps (never reused). `0` = unassigned.
+    uint32 public vaultIdCount;
+    mapping(address vault => uint32) public vaultId;
+    mapping(uint32 id => address) public vaultById;
 
-    /// @dev Per-round freeze of `_liveUtilized` at `lockVaults` (cut-off membership).
-    mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => address[])) private _utilizedVaults;
-    mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => mapping(address vault => bool))) private
-        _isUtilized;
-    mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => mapping(address vault => uint256))) private
-        _utilizedIndex; // 1-based
+    /// @dev Live utilization bitmap keyed by `stableId - 1` (updated on 0↔nonzero sync).
+    uint32 public liveUtilizedCount;
+    mapping(uint256 word => uint256) private _liveUtilizedBits;
+
+    /// @dev Per-round freeze of the live bitmap at `lockVaults`.
+    mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => mapping(uint256 word => uint256))) private
+        _roundUtilizedBits;
+    mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => uint32)) private _roundVaultIdCount;
+    mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => uint32)) private _roundUtilizedCount;
+    mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => bytes32)) private _roundUtilizedHash;
 
     mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => mapping(bytes32 fixtureId => bool))) private
         _fixtureExpected;
@@ -99,7 +103,6 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         if (pbrSettle_ != address(0)) pbrSettle = pbrSettle_;
 
         tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
 
         tournamentId = tournamentId_;
         seasonStartYear = initialSeasonStartYear_;
@@ -125,6 +128,16 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         isVault[vault_] = true;
         _vaults.push(vault_);
         _vaultIndex[vault_] = _vaults.length;
+
+        if (vaultId[vault_] == 0) {
+            uint32 id;
+            unchecked {
+                id = ++vaultIdCount;
+            }
+            vaultId[vault_] = id;
+            vaultById[id] = vault_;
+        }
+
         emit Events.VaultRegistered(vault_);
 
         if (IPlayerVault(vault_).totalStaked() > 0) {
@@ -152,7 +165,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
 
     /**
      * @notice Update live utilization membership.
-     * @dev Call on 0↔nonzero only. Does not write per-round membership; `lockVaults` freezes `_liveUtilized`.
+     * @dev Call on 0↔nonzero only. Does not write per-round membership; `lockVaults` freezes the live bitmap.
      */
     function syncUtilization(bool utilized_) external {
         if (!isVault[msg.sender]) revert Errors.UnknownVault(msg.sender);
@@ -160,34 +173,102 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     }
 
     function _setLiveUtilized(address vault_, bool utilized_) internal {
+        uint32 id = vaultId[vault_];
+        if (id == 0) return;
+
+        (uint256 word, uint256 mask) = _bitPosition(id);
+        uint256 cur = _liveUtilizedBits[word];
+        bool was = (cur & mask) != 0;
+
         if (utilized_) {
-            if (_liveUtilizedIndex[vault_] != 0) return;
-            _liveUtilized.push(vault_);
-            _liveUtilizedIndex[vault_] = _liveUtilized.length;
-        } else {
-            uint256 index1 = _liveUtilizedIndex[vault_];
-            if (index1 == 0) return;
-            uint256 index0 = index1 - 1;
-            uint256 last = _liveUtilized.length - 1;
-            if (index0 != last) {
-                address moved = _liveUtilized[last];
-                _liveUtilized[index0] = moved;
-                _liveUtilizedIndex[moved] = index0 + 1;
+            if (was) return;
+            _liveUtilizedBits[word] = cur | mask;
+            unchecked {
+                ++liveUtilizedCount;
             }
-            _liveUtilized.pop();
-            delete _liveUtilizedIndex[vault_];
+        } else {
+            if (!was) return;
+            _liveUtilizedBits[word] = cur & ~mask;
+            unchecked {
+                --liveUtilizedCount;
+            }
         }
     }
 
+    /// @dev Copy live bitmap words into the round (~`ceil(vaultIdCount / 256)` SSTOREs).
     function _freezeUtilized(uint16 seasonStartYear_, uint32 roundNumber_) internal {
-        uint256 n = _liveUtilized.length;
-        for (uint256 i; i < n;) {
-            address vault_ = _liveUtilized[i];
-            _isUtilized[seasonStartYear_][roundNumber_][vault_] = true;
-            _utilizedVaults[seasonStartYear_][roundNumber_].push(vault_);
-            _utilizedIndex[seasonStartYear_][roundNumber_][vault_] = i + 1;
+        uint32 hi = vaultIdCount;
+        _roundVaultIdCount[seasonStartYear_][roundNumber_] = hi;
+        _roundUtilizedCount[seasonStartYear_][roundNumber_] = liveUtilizedCount;
+
+        uint256 words = _wordCount(hi);
+        for (uint256 i; i < words;) {
+            _roundUtilizedBits[seasonStartYear_][roundNumber_][i] = _liveUtilizedBits[i];
             unchecked {
                 ++i;
+            }
+        }
+        _roundUtilizedHash[seasonStartYear_][roundNumber_] = _hashBitmap(seasonStartYear_, roundNumber_, hi, words);
+    }
+
+    function _bitPosition(uint32 id) internal pure returns (uint256 word, uint256 mask) {
+        uint256 bit;
+        unchecked {
+            bit = uint256(id - 1);
+        }
+        word = bit >> 8;
+        mask = uint256(1) << (bit & 0xff);
+    }
+
+    function _wordCount(uint32 hi) internal pure returns (uint256) {
+        if (hi == 0) return 0;
+        unchecked {
+            return (uint256(hi) + 255) / 256;
+        }
+    }
+
+    function _hashBitmap(
+        uint16 seasonStartYear_,
+        uint32 roundNumber_,
+        uint32 hi,
+        uint256 words
+    ) internal view returns (bytes32) {
+        uint256[] memory packed = new uint256[](words);
+        for (uint256 i; i < words;) {
+            packed[i] = _roundUtilizedBits[seasonStartYear_][roundNumber_][i];
+            unchecked {
+                ++i;
+            }
+        }
+        return keccak256(abi.encode(hi, packed));
+    }
+
+    function _isUtilized(uint16 seasonStartYear_, uint32 roundNumber_, address vault_) internal view returns (bool) {
+        uint32 id = vaultId[vault_];
+        if (id == 0 || id > _roundVaultIdCount[seasonStartYear_][roundNumber_]) return false;
+        (uint256 word, uint256 mask) = _bitPosition(id);
+        return (_roundUtilizedBits[seasonStartYear_][roundNumber_][word] & mask) != 0;
+    }
+
+    function _collectFromBits(
+        mapping(uint256 => uint256) storage bits,
+        uint32 hi,
+        uint32 count
+    ) internal view returns (address[] memory out) {
+        out = new address[](count);
+        if (count == 0 || hi == 0) return out;
+
+        uint256 n;
+        for (uint32 id = 1; id <= hi && n < count;) {
+            (uint256 word, uint256 mask) = _bitPosition(id);
+            if ((bits[word] & mask) != 0) {
+                out[n] = vaultById[id];
+                unchecked {
+                    ++n;
+                }
+            }
+            unchecked {
+                ++id;
             }
         }
     }
@@ -197,8 +278,8 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     // --------------------------------------------
 
     /**
-     * @notice Freeze rewards, stake cut-off, and the live utilized set for the active round.
-     * @dev Storage-only copy of `_liveUtilized` into the round (no vault fan-out).
+     * @notice Freeze rewards, stake cut-off, and the live utilized bitmap for the active round.
+     * @dev Copies `ceil(vaultIdCount / 256)` bitmap words (no vault fan-out).
      *      Sets `lockBlock = block.number - 1` (or 0 on genesis).
      */
     function lockVaults() external {
@@ -256,10 +337,11 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
             revert Errors.RoundNotEnded(seasonStartYear_, roundNumber_, round.endTime, block.timestamp);
         }
 
-        bytes32 utilizedHash = keccak256(abi.encode(_utilizedVaults[seasonStartYear_][roundNumber_]));
+        bytes32 utilizedHash = _roundUtilizedHash[seasonStartYear_][roundNumber_];
+        uint32 utilizedCount = _roundUtilizedCount[seasonStartYear_][roundNumber_];
         round.status = RoundStatus.SettlePending;
 
-        if (_utilizedVaults[seasonStartYear_][roundNumber_].length == 0) {
+        if (utilizedCount == 0) {
             round.M_adj = 0;
             round.fixturesExpected = 0;
             round.fixturesSettled = 0;
@@ -318,7 +400,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         for (uint256 i; i < vaults_.length;) {
             address vault_ = vaults_[i];
             if (vault_ == address(0)) revert Errors.ZeroAddress();
-            if (_isUtilized[seasonStartYear_][roundNumber_][vault_]) {
+            if (_isUtilized(seasonStartYear_, roundNumber_, vault_)) {
                 uint256 m = mwPoints_[i];
                 vaultPoints[seasonStartYear_][roundNumber_][vault_] += m;
                 added += m;
@@ -342,9 +424,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         );
 
         if (done_) {
-            _openClaimable(
-                seasonStartYear_, roundNumber_, round, _utilizedVaults[seasonStartYear_][roundNumber_].length
-            );
+            _openClaimable(seasonStartYear_, roundNumber_, round, _roundUtilizedCount[seasonStartYear_][roundNumber_]);
         }
     }
 
@@ -376,7 +456,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
 
     /**
      * @notice Vault-only PBR payout. Called by `PlayerVault.claim`.
-     * @dev Caller must be in the frozen utilized set for the round (valid after unregister).
+     * @dev Caller must be in the frozen utilized bitmap for the round (valid after unregister).
      *      Returns `0` when nothing is owed (zero points / stake / dust). Reverts if not claimable.
      *      Loads `s`/`S` from the calling vault's stToken at `lockBlock`.
      */
@@ -386,7 +466,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         address user_
     ) external nonReentrant returns (uint256 payout_) {
         if (user_ == address(0)) revert Errors.ZeroAddress();
-        if (!_isUtilized[seasonStartYear_][roundNumber_][msg.sender]) revert Errors.UnknownVault(msg.sender);
+        if (!_isUtilized(seasonStartYear_, roundNumber_, msg.sender)) revert Errors.UnknownVault(msg.sender);
 
         RoundState storage round = _rounds[seasonStartYear_][roundNumber_];
         if (round.status != RoundStatus.Claimable) {
@@ -454,12 +534,20 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     }
 
     function getUtilizedVaults(uint16 seasonStartYear_, uint32 roundNumber_) external view returns (address[] memory) {
-        return _utilizedVaults[seasonStartYear_][roundNumber_];
+        return _collectFromBits(
+            _roundUtilizedBits[seasonStartYear_][roundNumber_],
+            _roundVaultIdCount[seasonStartYear_][roundNumber_],
+            _roundUtilizedCount[seasonStartYear_][roundNumber_]
+        );
     }
 
     /// @notice Registered vaults currently with `S > 0` (pre-freeze live set).
     function getLiveUtilizedVaults() external view returns (address[] memory) {
-        return _liveUtilized;
+        return _collectFromBits(_liveUtilizedBits, vaultIdCount, liveUtilizedCount);
+    }
+
+    function getUtilizedHash(uint16 seasonStartYear_, uint32 roundNumber_) external view returns (bytes32) {
+        return _roundUtilizedHash[seasonStartYear_][roundNumber_];
     }
 
     function isFixtureSettled(

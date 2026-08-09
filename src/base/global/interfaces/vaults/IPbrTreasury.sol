@@ -13,10 +13,10 @@ interface IPbrTreasury {
 
     function syncUnregisterVault(address vault_) external;
 
-    /// @notice Update live utilization. Call on 0↔nonzero only; `lockVaults` freezes the live set.
+    /// @notice Update live utilization. Call on 0↔nonzero only; `lockVaults` freezes the live bitmap.
     function syncUtilization(bool utilized_) external;
 
-    /// @notice Freeze `R`, `lockBlock`, and a snapshot of live-utilized vaults for the active round.
+    /// @notice Freeze `R`, `lockBlock`, and a bitmap snapshot of live-utilized vaults for the active round.
     function lockVaults() external;
 
     function requestSettle() external returns (bytes32[] memory requestIds_);
@@ -61,6 +61,9 @@ interface IPbrTreasury {
     function getUtilizedVaults(uint16 seasonStartYear_, uint32 roundNumber_) external view returns (address[] memory);
 
     function getLiveUtilizedVaults() external view returns (address[] memory);
+
+    /// @notice Commitment frozen at `lockVaults`: `keccak256(abi.encode(vaultIdCountAtLock, bitmapWords))`.
+    function getUtilizedHash(uint16 seasonStartYear_, uint32 roundNumber_) external view returns (bytes32);
 
     function getCursors() external view returns (uint16 seasonStartYear_, uint32 active_, uint32 trading_);
 }

@@ -106,6 +106,8 @@ library DopplerTypes {
     uint32 internal constant DEFAULT_MIN_BONDING_DURATION = 30 days;
 
     /// @dev DN404 unit: 1000 whole tokens → 1 NFT (matches Doppler DN404 factory tests).
+    ///      Must divide `initialSupply`. PlayerVault is a contract proxy so DN404 `skipNFT`
+    ///      defaults true — stake/unstake stay ERC-20 amount-exact without vault-side NFT mint.
     uint256 internal constant DEFAULT_DN404_UNIT = 1000 ether;
 
     /// @dev Doppler `MIN_PROTOCOL_OWNER_SHARES` = WAD / 20 (5%) — StreamableFeesLocker.

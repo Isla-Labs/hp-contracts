@@ -421,9 +421,9 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
         uint256 claimKey
     ) internal returns (uint256 payout) {
         payout = IPbrTreasury(treasuryAddr).payClaim(seasonStartYear_, roundNumber, user);
+        _setClaimed(user, claimKey);
         if (payout == 0) return 0;
 
-        _setClaimed(user, claimKey);
         emit Events.Claimed(user, tournamentId_, seasonStartYear_, roundNumber, payout);
     }
 

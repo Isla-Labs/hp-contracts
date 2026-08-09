@@ -188,6 +188,25 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(vault.claimCursor(user), 1);
     }
 
+    function test_claim_marksClaimedOnDustPayout() public {
+        _stake(user2, vault, 1e30);
+        playerToken.mint(user, 1);
+        vm.startPrank(user);
+        playerToken.approve(address(vault), 1);
+        vault.stake(1);
+        vm.stopPrank();
+
+        _runRoundToClaimable(100);
+
+        vm.prank(user);
+        assertEq(vault.claim(), 0);
+        assertEq(vault.claimCursor(user), 1);
+
+        uint256 claimKey = uint256(keccak256(abi.encode(TOURNAMENT, START_YEAR, uint32(1))));
+        uint256 bit = uint256(1) << (claimKey & 0xff);
+        assertTrue((vault.claimedWords(user, claimKey >> 8) & bit) != 0);
+    }
+
     function test_claim_skipsZeroVaultShare() public {
         _stake(user, vault, 10 ether);
         _runRoundToClaimable(0);

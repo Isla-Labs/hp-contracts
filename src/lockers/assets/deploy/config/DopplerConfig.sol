@@ -53,6 +53,8 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
     string public baseURI;
 
     /// @notice DN404 fungible→NFT unit (must divide `initialSupply`).
+    /// @dev Validated in `_applyLaunchConfig`. Vault custody uses the ERC-20 face; NFT sync is
+    ///      skipped for the vault contract by DN404 default (`skipNFT` for contracts).
     uint256 public dn404Unit;
 
     /// @notice Soft ETH floor for the time-based graduation path.

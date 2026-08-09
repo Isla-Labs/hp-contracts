@@ -171,6 +171,23 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(vault.claim(), 0);
     }
 
+    function test_claim_advancesCursor() public {
+        _stake(user, vault, 10 ether);
+        _runRoundToClaimable(100);
+
+        assertEq(vault.claimCursor(user), 0);
+
+        vm.prank(user);
+        assertEq(vault.claim(), 80 ether);
+        assertEq(vault.claimCursor(user), vault.cachedRoundCount());
+        assertEq(vault.claimCursor(user), 1);
+
+        // Second claim must not re-walk history; cursor stays at tip.
+        vm.prank(user);
+        assertEq(vault.claim(), 0);
+        assertEq(vault.claimCursor(user), 1);
+    }
+
     function test_claim_skipsZeroVaultShare() public {
         _stake(user, vault, 10 ether);
         _runRoundToClaimable(0);
@@ -212,6 +229,69 @@ contract PlayerVaultTest is VaultsTestBase {
         vm.prank(user);
         vm.expectRevert(Pausable.EnforcedPause.selector);
         vault.claim();
+    }
+
+    function test_syncClaimableCache_permissionless_preparesClaim() public {
+        _stake(user, vault, 10 ether);
+        _runRoundToClaimable(100);
+
+        assertEq(vault.cachedRoundCount(), 0);
+        vault.syncClaimableCache();
+        assertEq(vault.cachedRoundCount(), 1);
+
+        uint256 beforeBal = user.balance;
+        vm.prank(user);
+        assertEq(vault.claim(), 80 ether);
+        assertEq(user.balance, beforeBal + 80 ether);
+    }
+
+    function test_syncClaimableCache_cooldown() public {
+        vault.syncClaimableCache();
+
+        vm.expectRevert(Errors.SyncCooldown.selector);
+        vault.syncClaimableCache();
+
+        vm.warp(block.timestamp + vault.SYNC_COOLDOWN());
+        vault.syncClaimableCache();
+    }
+
+    function test_syncClaimableCache_walksAllPastSeasons() public {
+        _stake(user, vault, 10 ether);
+
+        // Season 2025 final round → claimable, wrap to 2026.
+        _publishRound(TOURNAMENT, START_YEAR, 1, startTime, endTime, 1);
+        _runRoundToClaimable(100);
+
+        // Season 2026 final round → claimable, wrap to 2027.
+        uint64 y2Start = uint64(block.timestamp + 1 days);
+        uint64 y2End = uint64(block.timestamp + 8 days);
+        _publishRound(TOURNAMENT, START_YEAR + 1, 1, y2Start, y2End, 1);
+        vm.warp(y2Start);
+        _sendEth(address(treasury), 100 ether);
+        _lockVaults(treasury);
+        vm.warp(y2End);
+        {
+            address[] memory vaults = new address[](1);
+            vaults[0] = address(vault);
+            uint256[] memory points = new uint256[](1);
+            points[0] = 100;
+            _settle(treasury, vaults, points);
+        }
+
+        (uint16 cursorSeason,,) = treasury.getCursors();
+        assertEq(cursorSeason, START_YEAR + 2);
+
+        // Cold tip must discover both prior seasons (not only season-1).
+        vault.syncClaimableCache();
+        assertEq(vault.cachedRoundCount(), 2);
+
+        // Final rounds use FINAL_LOCK_BPS (95%): 95 + mulDiv(105e18, 9500, 1e4).
+        uint256 expected = 95 ether + (105 ether * 9500) / 10_000;
+        uint256 beforeBal = user.balance;
+        vm.prank(user);
+        uint256 payout = vault.claim();
+        assertEq(payout, expected);
+        assertEq(user.balance, beforeBal + expected);
     }
 
     function test_setActive_allowsOrchestratorAndPsr() public {

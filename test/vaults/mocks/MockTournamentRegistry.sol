@@ -10,6 +10,7 @@ contract MockTournamentRegistry {
     mapping(bytes32 tournamentId => mapping(uint16 seasonStartYear => mapping(uint32 round => RoundSchedule))) internal
         _rounds;
     mapping(bytes32 tournamentId => mapping(uint16 seasonStartYear => uint32)) public finalRoundOf;
+    mapping(bytes32 tournamentId => uint16[]) internal _seasonYears;
 
     bytes32 public lastFlushTournamentId;
     uint256 public flushCount;
@@ -51,7 +52,47 @@ contract MockTournamentRegistry {
     }
 
     function setFinalRound(bytes32 tournamentId, uint16 seasonStartYear, uint32 finalRound) external {
+        if (finalRoundOf[tournamentId][seasonStartYear] == 0) {
+            uint16[] storage seasonYears = _seasonYears[tournamentId];
+            uint256 len = seasonYears.length;
+            uint256 insertAt = len;
+            for (uint256 i; i < len; ++i) {
+                if (seasonYears[i] == seasonStartYear) {
+                    insertAt = type(uint256).max;
+                    break;
+                }
+                if (seasonYears[i] > seasonStartYear) {
+                    insertAt = i;
+                    break;
+                }
+            }
+            if (insertAt != type(uint256).max) {
+                seasonYears.push(seasonStartYear);
+                for (uint256 j = len; j > insertAt;) {
+                    seasonYears[j] = seasonYears[j - 1];
+                    unchecked {
+                        --j;
+                    }
+                }
+                seasonYears[insertAt] = seasonStartYear;
+            }
+        }
         finalRoundOf[tournamentId][seasonStartYear] = finalRound;
+    }
+
+    function getSeasonsOldestFirst(bytes32 tournamentId)
+        external
+        view
+        returns (bytes32[] memory seasonIds, uint16[] memory seasonStartYears)
+    {
+        uint16[] storage seasonYears = _seasonYears[tournamentId];
+        uint256 len = seasonYears.length;
+        seasonIds = new bytes32[](len);
+        seasonStartYears = new uint16[](len);
+        for (uint256 i; i < len; ++i) {
+            seasonStartYears[i] = seasonYears[i];
+            seasonIds[i] = keccak256(abi.encode(tournamentId, seasonYears[i]));
+        }
     }
 
     function isRoundPublished(

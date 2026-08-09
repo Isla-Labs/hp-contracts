@@ -42,6 +42,7 @@ library VaultsErrors {
     error RoundNotUtilized(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber);
     error AlreadyClaimed();
     error UnknownTournamentTreasury(bytes32 tournamentId);
+    error SyncCooldown();
 
     // --------------------------------------------
     //  StakedToken Errors

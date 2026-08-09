@@ -43,7 +43,16 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
     bool public isActive;
 
+    // --------------------------------------------
+    //  Storage
+    // --------------------------------------------
+
+    uint64 public constant SYNC_COOLDOWN = 1 days;
+    uint64 public lastSyncClaimableCacheAt;
+
     mapping(address user => mapping(uint256 word => uint256)) public claimedWords;
+    /// @dev Next `_cachedRounds` index to process for `user` (append-only cache; skips history on later claims).
+    mapping(address user => uint256) public claimCursor;
 
     struct ActiveTreasury {
         bytes32 tournamentId;
@@ -61,7 +70,7 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     address[] private _knownTreasuries;
     mapping(address treasury => bool) private _isKnownTreasury;
 
-    /// @dev Lazy cache of payable claimable rounds this vault participated in (filled on claim).
+    /// @dev Lazy cache of payable claimable rounds this vault participated in (filled on sync/claim).
     struct CachedRound {
         address treasury;
         uint16 seasonStartYear;
@@ -210,6 +219,18 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     //  Claim
     // --------------------------------------------
 
+    /// @notice Advance claimable-round cache for all known treasuries (permissionless keeper).
+    /// @dev 24h cooldown on this entrypoint only; `claim()` still syncs without the gate.
+    ///      `lastSyncClaimableCacheAt == 0` means never synced (not unix-epoch).
+    function syncClaimableCache() external nonReentrant {
+        uint64 last = lastSyncClaimableCacheAt;
+        if (last != 0 && block.timestamp < uint256(last) + SYNC_COOLDOWN) {
+            revert Errors.SyncCooldown();
+        }
+        _syncClaimableCache();
+        lastSyncClaimableCacheAt = uint64(block.timestamp);
+    }
+
     /// @notice Sync cache, then pay each cached round where caller had cut-off stake.
     function claim() external nonReentrant whenNotPaused returns (uint256) {
         _syncClaimableCache();
@@ -235,6 +256,10 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
     function treasuryOf(bytes32 tournamentId_) external view returns (address) {
         return _treasuryOf[tournamentId_];
+    }
+
+    function cachedRoundCount() external view returns (uint256) {
+        return _cachedRounds.length;
     }
 
     // --------------------------------------------
@@ -274,38 +299,46 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
         (uint16 season, uint32 active,) = treasury.getCursors();
         ScanTip memory tip = _scanTip[treasuryAddr];
 
+        (, uint16[] memory seasonYears) = tournamentRegistry.getSeasonsOldestFirst(tid);
+
         if (tip.nextRound == 0) {
-            if (season > 0) {
-                uint32 prevFinal = tournamentRegistry.getFinalRound(tid, season - 1);
-                if (prevFinal > 0) {
-                    (uint32 next,, bool blocked) = _scanRangePersist(treasuryAddr, treasury, season - 1, 1, prevFinal);
-                    if (blocked) {
-                        _scanTip[treasuryAddr] = ScanTip({ season: season - 1, nextRound: next });
-                        return;
-                    }
-                }
-            }
-            tip = ScanTip({ season: season, nextRound: 1 });
+            tip = ScanTip({ season: seasonYears.length == 0 ? season : seasonYears[0], nextRound: 1 });
         }
 
-        while (tip.season < season) {
-            uint32 tipFinal = tournamentRegistry.getFinalRound(tid, tip.season);
+        // Past calendar seasons (strictly before the treasury cursor season).
+        uint256 i;
+        while (i < seasonYears.length && seasonYears[i] < tip.season) {
+            unchecked {
+                ++i;
+            }
+        }
+        for (; i < seasonYears.length;) {
+            uint16 y = seasonYears[i];
+            if (y >= season) break;
+
+            uint32 tipFinal = tournamentRegistry.getFinalRound(tid, y);
             if (tipFinal == 0) break;
-            if (tip.nextRound <= tipFinal) {
-                (uint32 next,, bool blocked) =
-                    _scanRangePersist(treasuryAddr, treasury, tip.season, tip.nextRound, tipFinal);
-                tip.nextRound = next;
+
+            uint32 from = y == tip.season ? tip.nextRound : 1;
+            if (from <= tipFinal) {
+                (uint32 next,, bool blocked) = _scanRangePersist(treasuryAddr, treasury, y, from, tipFinal);
+                tip = ScanTip({ season: y, nextRound: next });
                 if (blocked) {
                     _scanTip[treasuryAddr] = tip;
                     return;
                 }
             }
+
             unchecked {
-                tip.season += 1;
+                ++i;
             }
-            tip.nextRound = 1;
+            tip = ScanTip({ season: i < seasonYears.length ? seasonYears[i] : season, nextRound: 1 });
         }
 
+        // Current treasury season up to `active` (stops on Locked / SettlePending).
+        if (tip.season < season) {
+            tip = ScanTip({ season: season, nextRound: 1 });
+        }
         if (tip.season == season && active > 0 && tip.nextRound <= active) {
             (uint32 next,, bool blocked) = _scanRangePersist(treasuryAddr, treasury, season, tip.nextRound, active);
             tip.nextRound = next;
@@ -363,7 +396,8 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
     function _claimFromCache(address user) internal returns (uint256 totalPayout) {
         uint256 length = _cachedRounds.length;
-        for (uint256 i; i < length;) {
+        uint256 i = claimCursor[user];
+        for (; i < length;) {
             CachedRound memory row = _cachedRounds[i];
             bytes32 tid = _tournamentIdOf[row.treasury];
             uint256 claimKey = _claimKey(tid, row.seasonStartYear, row.roundNumber);
@@ -374,6 +408,8 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
                 ++i;
             }
         }
+        // Advance even for zero-payout / already-claimed rows so later claims only walk new cache entries.
+        claimCursor[user] = length;
     }
 
     function _payClaim(

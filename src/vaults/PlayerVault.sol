@@ -53,7 +53,7 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     /// @dev Live membership for stake/unstake fan-out (updated by TournamentRegistry).
     ActiveTreasury[] private _activeTreasuries;
     mapping(address treasury => uint256) private _activeTreasuryIndex; // 1-based
-    /// @dev Survives unregister so historical `claim(tournamentId, …)` still resolves.
+    /// @dev Tournament → treasury; kept after unlink for `treasuryOf` discovery.
     mapping(bytes32 tournamentId => address treasury) private _treasuryOf;
     /// @dev Reverse of `_treasuryOf` (kept after unlink).
     mapping(address treasury => bytes32 tournamentId) private _tournamentIdOf;

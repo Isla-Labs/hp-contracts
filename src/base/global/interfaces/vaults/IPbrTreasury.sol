@@ -43,6 +43,13 @@ interface IPbrTreasury {
         uint32 roundNumber_
     ) external view returns (RoundStatus status_, uint64 lockBlock_);
 
+    /// @notice True when this vault has a non-zero share of the round pot (`R > 0` and `m > 0`).
+    function hasPayableVaultShare(
+        uint16 seasonStartYear_,
+        uint32 roundNumber_,
+        address vault_
+    ) external view returns (bool);
+
     function getVaultPoints(
         uint16 seasonStartYear_,
         uint32 roundNumber_,

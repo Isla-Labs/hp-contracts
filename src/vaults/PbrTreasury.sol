@@ -375,7 +375,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     // --------------------------------------------
 
     /**
-     * @notice Vault-only PBR payout. Called by `PlayerVault.claim` / `claimAll`.
+     * @notice Vault-only PBR payout. Called by `PlayerVault.claim`.
      * @dev Caller must be in the frozen utilized set for the round (valid after unregister).
      *      Returns `0` when nothing is owed (zero points / stake / dust). Reverts if not claimable.
      *      Loads `s`/`S` from the calling vault's stToken at `lockBlock`.
@@ -430,6 +430,15 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     ) external view returns (RoundStatus status_, uint64 lockBlock_) {
         RoundState storage round = _rounds[seasonStartYear_][roundNumber_];
         return (round.status, round.lockBlock);
+    }
+
+    function hasPayableVaultShare(
+        uint16 seasonStartYear_,
+        uint32 roundNumber_,
+        address vault_
+    ) external view returns (bool) {
+        RoundState storage round = _rounds[seasonStartYear_][roundNumber_];
+        return round.R > 0 && vaultPoints[seasonStartYear_][roundNumber_][vault_] > 0;
     }
 
     function getVaultPoints(

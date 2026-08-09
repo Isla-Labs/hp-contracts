@@ -149,7 +149,7 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(rows[0].previewPayout, 80 ether);
 
         vm.prank(user);
-        vault.claim(rows[0].tournamentId, rows[0].seasonStartYear, rows[0].roundNumber);
+        vault.claim();
 
         rows = vault.outstandingClaims(user);
         assertEq(rows.length, 0);
@@ -168,26 +168,6 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(rows[0].previewPayout, 80 ether);
     }
 
-    function test_claimMany_fromOutstanding() public {
-        _stake(user, vault, 10 ether);
-        _runRoundToClaimable(100);
-
-        OutstandingClaim[] memory rows = vault.outstandingClaims(user);
-        bytes32[] memory tids = new bytes32[](1);
-        uint16[] memory years_ = new uint16[](1);
-        uint32[] memory rounds = new uint32[](1);
-        tids[0] = rows[0].tournamentId;
-        years_[0] = rows[0].seasonStartYear;
-        rounds[0] = rows[0].roundNumber;
-
-        uint256 beforeBal = user.balance;
-        vm.prank(user);
-        uint256 payout = vault.claimMany(tids, years_, rounds);
-        assertEq(payout, 80 ether);
-        assertEq(user.balance, beforeBal + 80 ether);
-        assertEq(vault.outstandingClaims(user).length, 0);
-    }
-
     function test_stake_midAmount_skipsTreasurySync() public {
         _stake(user, vault, 1 ether);
         assertEq(treasury.getLiveUtilizedVaults().length, 1);
@@ -197,12 +177,13 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(vault.totalStaked(), 3 ether);
     }
 
-    function test_outstandingClaims_excludesZeroPreview() public {
+    function test_outstandingClaims_excludesZeroVaultShare() public {
         _stake(user, vault, 10 ether);
         _runRoundToClaimable(0);
 
-        OutstandingClaim[] memory rows = vault.outstandingClaims(user);
-        assertEq(rows.length, 0);
+        vault.refreshClaimable();
+        assertEq(vault.cachedRoundCount(), 0);
+        assertEq(vault.outstandingClaims(user).length, 0);
     }
 
     function test_claim_happyPath() public {
@@ -214,57 +195,41 @@ contract PlayerVaultTest is VaultsTestBase {
 
         uint256 beforeBal = user.balance;
         vm.prank(user);
-        uint256 payout = vault.claim(TOURNAMENT, START_YEAR, 1);
+        uint256 payout = vault.claim();
         assertEq(payout, 80 ether);
         assertEq(user.balance, beforeBal + 80 ether);
+        assertEq(vault.outstandingClaims(user).length, 0);
     }
 
-    function test_claim_alreadyClaimed() public {
+    function test_claim_idempotentWhenNothingLeft() public {
         _stake(user, vault, 10 ether);
         _runRoundToClaimable(100);
 
         vm.prank(user);
-        vault.claim(TOURNAMENT, START_YEAR, 1);
+        assertEq(vault.claim(), 80 ether);
 
         vm.prank(user);
-        vm.expectRevert(Errors.AlreadyClaimed.selector);
-        vault.claim(TOURNAMENT, START_YEAR, 1);
+        assertEq(vault.claim(), 0);
     }
 
-    function test_claim_nothingToClaim_revertDoesNotPersistClaimed() public {
+    function test_claim_skipsZeroVaultShare() public {
         _stake(user, vault, 10 ether);
         _runRoundToClaimable(0);
 
         vm.prank(user);
-        vm.expectRevert(Errors.NothingToClaim.selector);
-        vault.claim(TOURNAMENT, START_YEAR, 1);
-
-        vm.prank(user);
-        vm.expectRevert(Errors.NothingToClaim.selector);
-        vault.claim(TOURNAMENT, START_YEAR, 1);
-    }
-
-    function test_claimAll_skipsZeroPreview() public {
-        _stake(user, vault, 10 ether);
-        _runRoundToClaimable(0);
-
-        vm.prank(user);
-        assertEq(vault.claimAll(), 0);
+        assertEq(vault.claim(), 0);
+        assertEq(vault.cachedRoundCount(), 0);
         assertEq(vault.outstandingClaims(user).length, 0);
-
-        vm.prank(user);
-        vm.expectRevert(Errors.NothingToClaim.selector);
-        vault.claim(TOURNAMENT, START_YEAR, 1);
     }
 
-    function test_claimAll_skipsNonClaimable() public {
+    function test_claim_skipsNonClaimableUntilSettled() public {
         _stake(user, vault, 10 ether);
         vm.warp(startTime);
         _sendEth(address(treasury), 100 ether);
         _lockVaults(treasury);
 
         vm.prank(user);
-        uint256 payout = vault.claimAll();
+        uint256 payout = vault.claim();
         assertEq(payout, 0);
 
         vm.warp(endTime);
@@ -275,7 +240,7 @@ contract PlayerVaultTest is VaultsTestBase {
         _settle(treasury, vaults, points);
 
         vm.prank(user);
-        payout = vault.claimAll();
+        payout = vault.claim();
         assertEq(payout, 80 ether);
     }
 
@@ -288,7 +253,7 @@ contract PlayerVaultTest is VaultsTestBase {
 
         vm.prank(user);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        vault.claim(TOURNAMENT, START_YEAR, 1);
+        vault.claim();
     }
 
     function test_setActive_allowsOrchestratorAndPsr() public {

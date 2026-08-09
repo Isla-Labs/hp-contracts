@@ -222,7 +222,7 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
         if (!p.allocated || p.vault == address(0)) revert Errors.NotConfigured();
 
         uint256 before_ = address(this).balance;
-        payout = PlayerVault(p.vault).claimAll();
+        payout = PlayerVault(p.vault).claim();
         uint256 received = address(this).balance - before_;
         if (received == 0) return 0;
 

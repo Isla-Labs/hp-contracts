@@ -229,13 +229,13 @@ contract PbrTreasuryTest is VaultsTestBase {
 
         uint256 before = user.balance;
         vm.prank(user);
-        uint256 payout = vault.claim(TOURNAMENT, START_YEAR, 1);
+        uint256 payout = vault.claim();
         assertEq(payout, expectedUser);
         assertEq(user.balance, before + expectedUser);
 
         before = user2.balance;
         vm.prank(user2);
-        payout = vault.claim(TOURNAMENT, START_YEAR, 1);
+        payout = vault.claim();
         assertEq(payout, expectedUser2);
         assertEq(user2.balance, before + expectedUser2);
     }
@@ -258,7 +258,7 @@ contract PbrTreasuryTest is VaultsTestBase {
         assertFalse(treasury.isVault(address(vault)));
 
         vm.prank(user);
-        uint256 payout = vault.claim(TOURNAMENT, START_YEAR, 1);
+        uint256 payout = vault.claim();
         assertEq(payout, 80 ether);
     }
 
@@ -314,7 +314,7 @@ contract PbrTreasuryTest is VaultsTestBase {
         _settle(treasury, vaults, points);
 
         vm.expectRevert(Errors.TransferFailed.selector);
-        helper.claim(vault, TOURNAMENT, START_YEAR, 1);
+        helper.claim(vault);
     }
 
     function test_settle_twoFixtures_accumulates() public {
@@ -364,7 +364,7 @@ contract ClaimRevertHelper {
         vault.stake(amount);
     }
 
-    function claim(PlayerVault vault, bytes32 tournamentId, uint16 seasonStartYear, uint32 round) external {
-        vault.claim(tournamentId, seasonStartYear, round);
+    function claim(PlayerVault vault) external {
+        vault.claim();
     }
 }

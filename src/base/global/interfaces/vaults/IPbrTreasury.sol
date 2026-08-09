@@ -13,12 +13,10 @@ interface IPbrTreasury {
 
     function syncUnregisterVault(address vault_) external;
 
-    /// @notice Vault push of live `S`. Returns target round; `joined_` if newly utilized.
-    function syncVaultStake(uint256 newTotalStaked_)
-        external
-        returns (uint16 seasonStartYear_, uint32 roundNumber_, bool joined_);
+    /// @notice Update live utilization. Call on 0↔nonzero only; `lockVaults` freezes the live set.
+    function syncUtilization(bool utilized_) external;
 
-    /// @notice Freeze `R` + `lockBlock` + utilized set for the active round (O(1)).
+    /// @notice Freeze `R`, `lockBlock`, and a snapshot of live-utilized vaults for the active round.
     function lockVaults() external;
 
     function requestSettle() external returns (bytes32[] memory requestIds_);
@@ -30,7 +28,7 @@ interface IPbrTreasury {
         uint256[] calldata mwPoints_
     ) external returns (bool done_);
 
-    /// @notice Vault-only payout; loads `s`/`S` from caller vault stToken at `lockBlock`.
+    /// @notice Vault-only payout; returns 0 if nothing owed. Loads `s`/`S` at `lockBlock`.
     function payClaim(uint16 seasonStartYear_, uint32 roundNumber_, address user_) external returns (uint256 payout_);
 
     function tournamentId() external view returns (bytes32);
@@ -54,6 +52,8 @@ interface IPbrTreasury {
     function getVaults() external view returns (address[] memory);
 
     function getUtilizedVaults(uint16 seasonStartYear_, uint32 roundNumber_) external view returns (address[] memory);
+
+    function getLiveUtilizedVaults() external view returns (address[] memory);
 
     function getCursors() external view returns (uint16 seasonStartYear_, uint32 active_, uint32 trading_);
 

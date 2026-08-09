@@ -606,7 +606,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         _isVaultRegistered[tournamentId][vault] = true;
         emit Events.VaultRegistered(tournamentId, vault);
 
-        // Vault cache first so `noteUtilizedRound` during treasury register sees membership.
+        // Vault cache first so treasury register / live utilization sync sees membership.
         IPlayerVault(vault).syncActiveTreasury(tournamentId, treasury, true);
         IPbrTreasury(treasury).syncRegisterVault(vault);
     }

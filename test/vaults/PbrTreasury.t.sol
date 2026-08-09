@@ -47,9 +47,17 @@ contract PbrTreasuryTest is VaultsTestBase {
 
     function test_syncVaultStake_onStake() public {
         _stake(user, vault, 1 ether);
-        address[] memory utilized = treasury.getUtilizedVaults(START_YEAR, 1);
-        assertEq(utilized.length, 1);
-        assertEq(utilized[0], address(vault));
+        address[] memory live = treasury.getLiveUtilizedVaults();
+        assertEq(live.length, 1);
+        assertEq(live[0], address(vault));
+        assertEq(treasury.getUtilizedVaults(START_YEAR, 1).length, 0);
+
+        _sendEth(address(treasury), 1 ether);
+        vm.warp(startTime);
+        _lockVaults(treasury);
+        address[] memory frozen = treasury.getUtilizedVaults(START_YEAR, 1);
+        assertEq(frozen.length, 1);
+        assertEq(frozen[0], address(vault));
     }
 
     function test_lockVaults_nonFinal_locks80Percent() public {
@@ -99,11 +107,36 @@ contract PbrTreasuryTest is VaultsTestBase {
         _registerVault(treasury, address(vault2));
         _stake(user, vault2, 1 ether);
 
-        // Mid-lock stake builds tradingRound utilized set, not the locked round.
+        // Mid-lock stake updates live set only; round-1 freeze is unchanged.
         assertEq(treasury.getUtilizedVaults(START_YEAR, 1).length, 1);
         assertEq(treasury.getUtilizedVaults(START_YEAR, 1)[0], address(vault));
+        assertEq(treasury.getUtilizedVaults(START_YEAR, 2).length, 0);
+        assertEq(treasury.getLiveUtilizedVaults().length, 2);
+    }
+
+    function test_lockVaults_continuousStake_includedNextRound() public {
+        _stake(user, vault, 1 ether);
+        _sendEth(address(treasury), 100 ether);
+        vm.warp(startTime);
+        _lockVaults(treasury);
+        vm.warp(endTime);
+
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(vault);
+        uint256[] memory points = new uint256[](1);
+        points[0] = 50;
+        _settle(treasury, vaults, points);
+
+        uint64 nextStart = uint64(block.timestamp + 1 days);
+        uint64 nextEnd = uint64(block.timestamp + 8 days);
+        _publishRound(TOURNAMENT, START_YEAR, 2, nextStart, nextEnd, 10);
+        _sendEth(address(treasury), 100 ether);
+        vm.warp(nextStart);
+        _lockVaults(treasury);
+
+        // No new stake after round 1 — still frozen for round 2 while live-utilized.
         assertEq(treasury.getUtilizedVaults(START_YEAR, 2).length, 1);
-        assertEq(treasury.getUtilizedVaults(START_YEAR, 2)[0], address(vault2));
+        assertEq(treasury.getUtilizedVaults(START_YEAR, 2)[0], address(vault));
     }
 
     function test_settle_fixture_byPbrSettle() public {
@@ -245,6 +278,23 @@ contract PbrTreasuryTest is VaultsTestBase {
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(Errors.UnknownVault.selector, user));
         treasury.payClaim(START_YEAR, 1, user);
+    }
+
+    function test_payClaim_returnsZero_whenNoPoints() public {
+        _stake(user, vault, 10 ether);
+        _sendEth(address(treasury), 100 ether);
+        vm.warp(startTime);
+        _lockVaults(treasury);
+        vm.warp(endTime);
+
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(vault);
+        uint256[] memory points = new uint256[](1);
+        points[0] = 0;
+        _settle(treasury, vaults, points);
+
+        vm.prank(address(vault));
+        assertEq(treasury.payClaim(START_YEAR, 1, user), 0);
     }
 
     function test_payClaim_transferFailed() public {

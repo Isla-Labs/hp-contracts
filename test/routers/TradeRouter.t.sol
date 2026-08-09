@@ -22,10 +22,12 @@ import { MockZRouter } from "./mocks/MockZRouter.sol";
 
 contract TradeRouterTest is Test {
     bytes32 internal constant PLAYER = keccak256("player-1");
+    bytes32 internal constant PLAYER_B = keccak256("player-2");
 
     AddressProvider internal ap;
     MockPlayerSetRegistry internal playerSetRegistry;
     MockPlayerToken internal playerToken;
+    MockPlayerToken internal playerTokenB;
     MockPlayerToken internal usdc;
     MockZRouter internal zRouter;
     MockPoolManager internal manager;
@@ -39,6 +41,7 @@ contract TradeRouterTest is Test {
         ap = new AddressProvider(address(this));
         playerSetRegistry = new MockPlayerSetRegistry();
         playerToken = new MockPlayerToken();
+        playerTokenB = new MockPlayerToken();
         usdc = new MockPlayerToken();
         zRouter = new MockZRouter();
         manager = new MockPoolManager();
@@ -48,6 +51,7 @@ contract TradeRouterTest is Test {
         vm.deal(address(manager), 1000 ether);
         vm.deal(address(zRouter), 1000 ether);
         playerToken.mint(address(manager), 1000 ether);
+        playerTokenB.mint(address(manager), 1000 ether);
 
         ap.setName(Addresses.PLAYER_SET_REGISTRY, address(playerSetRegistry));
         ap.setName(Addresses.Z_ROUTER, address(zRouter));
@@ -68,6 +72,21 @@ contract TradeRouterTest is Test {
             PLAYER,
             DopplerData({
                 activePool: poolKey, hookDoppler: address(hooks), hookMigrator: address(0), feeRouter: address(0)
+            })
+        );
+
+        PoolKey memory poolKeyB = PoolKey({
+            currency0: CurrencyLibrary.ADDRESS_ZERO,
+            currency1: Currency.wrap(address(playerTokenB)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(hooks))
+        });
+        playerSetRegistry.setPlayerToken(PLAYER_B, address(playerTokenB));
+        playerSetRegistry.setDopplerData(
+            PLAYER_B,
+            DopplerData({
+                activePool: poolKeyB, hookDoppler: address(hooks), hookMigrator: address(0), feeRouter: address(0)
             })
         );
 
@@ -273,6 +292,11 @@ contract TradeRouterTest is Test {
         router.buyWithToken(address(playerToken), address(playerToken), 1 ether, 0, block.timestamp + 1, hex"00");
     }
 
+    function test_buyWithToken_revertsOtherPlayerAsInput() public {
+        vm.expectRevert(Errors.InvalidPath.selector);
+        router.buyWithToken(address(playerToken), address(playerTokenB), 1 ether, 0, block.timestamp + 1, hex"00");
+    }
+
     function test_buyWithToken_revertsEthAsInput() public {
         vm.expectRevert(Errors.InvalidPath.selector);
         router.buyWithToken(address(playerToken), address(0), 1 ether, 0, block.timestamp + 1, hex"00");
@@ -334,6 +358,84 @@ contract TradeRouterTest is Test {
     function test_sellToToken_revertsPlayerAsOutput() public {
         vm.expectRevert(Errors.InvalidPath.selector);
         router.sellToToken(address(playerToken), address(playerToken), 1 ether, 0, block.timestamp + 1, hex"00");
+    }
+
+    function test_sellToToken_revertsOtherPlayerAsOutput() public {
+        vm.expectRevert(Errors.InvalidPath.selector);
+        router.sellToToken(address(playerToken), address(playerTokenB), 1 ether, 0, block.timestamp + 1, hex"00");
+    }
+
+    // --------------------------------------------
+    //  swapPlayers (two Doppler legs)
+    // --------------------------------------------
+
+    function test_swapPlayers_exactIn_oneToOne() public {
+        vm.prank(user);
+        router.buy{ value: 2 ether }(address(playerToken), 0, block.timestamp + 1);
+
+        vm.startPrank(user);
+        playerToken.approve(address(router), 2 ether);
+        uint256 amountOut = router.swapPlayers(address(playerToken), address(playerTokenB), 2 ether, 0, block.timestamp + 1);
+        vm.stopPrank();
+
+        assertEq(amountOut, 2 ether);
+        assertEq(playerToken.balanceOf(user), 0);
+        assertEq(playerTokenB.balanceOf(user), 2 ether);
+        assertEq(address(router).balance, 0);
+        // sell leg + buy leg
+        assertEq(hooks.beforeSwapCount(), 3);
+        assertEq(hooks.afterSwapCount(), 3);
+    }
+
+    function test_swapPlayers_emitsPlayersSwapped() public {
+        vm.prank(user);
+        router.buy{ value: 1 ether }(address(playerToken), 0, block.timestamp + 1);
+
+        vm.prank(user);
+        playerToken.approve(address(router), 1 ether);
+
+        vm.expectEmit(true, true, true, true, address(router));
+        emit Events.PlayersSwapped(user, address(playerToken), address(playerTokenB), 1 ether, 1 ether);
+
+        vm.prank(user);
+        router.swapPlayers(address(playerToken), address(playerTokenB), 1 ether, 0, block.timestamp + 1);
+    }
+
+    function test_swapPlayers_revertsSameToken() public {
+        vm.expectRevert(Errors.InvalidPath.selector);
+        router.swapPlayers(address(playerToken), address(playerToken), 1 ether, 0, block.timestamp + 1);
+    }
+
+    function test_swapPlayers_revertsUnknownToken() public {
+        vm.prank(user);
+        router.buy{ value: 1 ether }(address(playerToken), 0, block.timestamp + 1);
+
+        vm.startPrank(user);
+        playerToken.approve(address(router), 1 ether);
+        vm.expectRevert(abi.encodeWithSelector(Errors.UnknownToken.selector, address(usdc)));
+        router.swapPlayers(address(playerToken), address(usdc), 1 ether, 0, block.timestamp + 1);
+        vm.stopPrank();
+    }
+
+    function test_swapPlayers_revertsSlippage() public {
+        vm.prank(user);
+        router.buy{ value: 1 ether }(address(playerToken), 0, block.timestamp + 1);
+
+        vm.startPrank(user);
+        playerToken.approve(address(router), 1 ether);
+        vm.expectRevert(Errors.Slippage.selector);
+        router.swapPlayers(address(playerToken), address(playerTokenB), 1 ether, 1 ether + 1, block.timestamp + 1);
+        vm.stopPrank();
+    }
+
+    function test_swapPlayers_revertsExpired() public {
+        vm.expectRevert(Errors.Expired.selector);
+        router.swapPlayers(address(playerToken), address(playerTokenB), 1 ether, 0, block.timestamp - 1);
+    }
+
+    function test_swapPlayers_revertsZeroAmount() public {
+        vm.expectRevert(Errors.ZeroAmount.selector);
+        router.swapPlayers(address(playerToken), address(playerTokenB), 0, 0, block.timestamp + 1);
     }
 
     function test_sellToToken_revertsEthAsOutput() public {

@@ -8,4 +8,7 @@ library RoutersEvents {
 
     event Bought(address indexed user, address indexed playerToken, uint256 ethIn, uint256 amountOut);
     event Sold(address indexed user, address indexed playerToken, uint256 amountIn, uint256 ethOut);
+    event PlayersSwapped(
+        address indexed user, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut
+    );
 }

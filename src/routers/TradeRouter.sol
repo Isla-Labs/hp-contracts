@@ -22,10 +22,9 @@ import { TickMath } from "@v4-core/libraries/TickMath.sol";
 /**
  * @title TradeRouter
  * @notice PSR lookup + ETH↔playerToken V4 swaps; optional zRouter calldata for ERC20↔ETH wings.
- * @dev Player-token leg always uses `DopplerData.activePool` (never zRouter discovery).
- *      For `buyWithToken` / `sellToToken`, encode zRouter calls with:
- *      - `to = address(this)` on the buy wing (ETH out to this router), then player buy
- *      - `to = msg.sender` on the sell wing (ERC20 out to user), with ETH in from this router
+ * @dev Player-token legs always use `DopplerData.activePool` (never zRouter discovery).
+ *      - `buyWithToken` / `sellToToken`: zRouter wing must not be a PSR player token; use `swapPlayers`.
+ *      - zRouter calldata: `to = address(this)` on buy wing; `to = msg.sender` on sell wing.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -89,13 +88,45 @@ contract TradeRouter is AddressBook, ReentrancyGuard, IUnlockCallback {
     }
 
     // --------------------------------------------
-    //  ERC20 ↔ ETH (zRouter) + player leg
+    //  playerToken ↔ playerToken
+    // --------------------------------------------
+
+    /**
+     * @notice Exact-in playerToken → ETH → playerToken via each token's PSR `activePool`.
+     * @dev No zRouter. Refunds any leftover ETH dust to `msg.sender`.
+     */
+    function swapPlayers(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) external nonReentrant returns (uint256 amountOut) {
+        if (block.timestamp > deadline) revert Errors.Expired();
+        if (amountIn == 0) revert Errors.ZeroAmount();
+        if (tokenIn == tokenOut) revert Errors.InvalidPath();
+
+        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
+        uint256 ethOut = _swapExactInPlayerForEth(tokenIn, amountIn, address(this));
+        if (ethOut == 0) revert Errors.ZeroAmount();
+
+        amountOut = _swapExactInEthForPlayer(tokenOut, ethOut, msg.sender);
+        if (amountOut < minAmountOut) revert Errors.Slippage();
+
+        uint256 dust = address(this).balance;
+        if (dust != 0) _transferEth(msg.sender, dust);
+
+        emit Events.PlayersSwapped(msg.sender, tokenIn, tokenOut, amountIn, amountOut);
+    }
+
+    // --------------------------------------------
+    //  ERC20 ↔ playerToken
     // --------------------------------------------
 
     /**
      * @notice Pull `inputToken`, run opaque zRouter calldata to ETH on this router, then buy playerToken.
      * @dev `zRouterCall` must send ETH to `address(this)`. `msg.value` must be 0.
-     *      If `inputToken == address(0)`, use `buy` instead.
+     *      `inputToken` must not be a PSR player token (use `swapPlayers` / `buy`).
      */
     function buyWithToken(
         address playerToken,
@@ -108,8 +139,8 @@ contract TradeRouter is AddressBook, ReentrancyGuard, IUnlockCallback {
         if (block.timestamp > deadline) revert Errors.Expired();
         if (amountIn == 0) revert Errors.ZeroAmount();
         if (msg.value != 0) revert Errors.InvalidMsgValue();
-        if (inputToken == address(0) || inputToken == playerToken) revert Errors.InvalidPath();
         if (zRouterCall.length == 0) revert Errors.InvalidPath();
+        _requireNotPlayerToken(inputToken);
 
         IERC20(inputToken).safeTransferFrom(msg.sender, address(this), amountIn);
 
@@ -132,6 +163,7 @@ contract TradeRouter is AddressBook, ReentrancyGuard, IUnlockCallback {
     /**
      * @notice Sell playerToken to ETH on this router, then run opaque zRouter calldata to `outputToken`.
      * @dev `zRouterCall` should spend the ETH held here and send `outputToken` to `msg.sender`.
+     *      `outputToken` must not be a PSR player token (use `swapPlayers` / `sell`).
      */
     function sellToToken(
         address playerToken,
@@ -143,8 +175,8 @@ contract TradeRouter is AddressBook, ReentrancyGuard, IUnlockCallback {
     ) external nonReentrant returns (uint256 amountOut) {
         if (block.timestamp > deadline) revert Errors.Expired();
         if (amountIn == 0) revert Errors.ZeroAmount();
-        if (outputToken == address(0) || outputToken == playerToken) revert Errors.InvalidPath();
         if (zRouterCall.length == 0) revert Errors.InvalidPath();
+        _requireNotPlayerToken(outputToken);
 
         IERC20(playerToken).safeTransferFrom(msg.sender, address(this), amountIn);
         uint256 ethOut = _swapExactInPlayerForEth(playerToken, amountIn, address(this));
@@ -237,10 +269,19 @@ contract TradeRouter is AddressBook, ReentrancyGuard, IUnlockCallback {
         );
     }
 
+    function _psr() internal view returns (IPlayerSetRegistry) {
+        return IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+    }
+
+    /// @dev Revert if `token` is ETH or a registered player token (zRouter wing must be external ERC20 only).
+    function _requireNotPlayerToken(address token) internal view {
+        if (token == address(0) || _psr().playerIdOfToken(token) != bytes32(0)) revert Errors.InvalidPath();
+    }
+
     function _poolOf(address playerToken) internal view returns (PoolKey memory key, bool assetIsCurrency1) {
         if (playerToken == address(0)) revert Errors.ZeroAddress();
 
-        IPlayerSetRegistry psr = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+        IPlayerSetRegistry psr = _psr();
         bytes32 playerId = psr.playerIdOfToken(playerToken);
         if (playerId == bytes32(0)) revert Errors.UnknownToken(playerToken);
 

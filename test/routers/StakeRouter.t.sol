@@ -98,7 +98,7 @@ contract StakeRouterTest is VaultsTestBase {
         vault.claimFor(user);
     }
 
-    function test_vaultOf_resolves() public {
+    function test_vaultOf_resolves() public view {
         assertEq(router.vaultOf(address(playerToken)), address(vault));
     }
 

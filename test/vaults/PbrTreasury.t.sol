@@ -225,17 +225,33 @@ contract PbrTreasuryTest is VaultsTestBase {
         uint256 expectedUser = Math.mulDiv(Math.mulDiv(R, 200, 200), 25 ether, 100 ether);
         uint256 expectedUser2 = Math.mulDiv(Math.mulDiv(R, 200, 200), 75 ether, 100 ether);
 
+        assertEq(treasury.previewClaim(START_YEAR, 1, address(vault), user), expectedUser);
+        assertEq(treasury.previewClaim(START_YEAR, 1, address(vault), user2), expectedUser2);
+
         uint256 before = user.balance;
         vm.prank(user);
         uint256 payout = vault.claim();
         assertEq(payout, expectedUser);
         assertEq(user.balance, before + expectedUser);
 
+        // Treasury preview is formula-only (ignores vault claimed bits); still capped by remaining.
+        assertEq(treasury.previewClaim(START_YEAR, 1, address(vault), user2), expectedUser2);
+
         before = user2.balance;
         vm.prank(user2);
         payout = vault.claim();
         assertEq(payout, expectedUser2);
         assertEq(user2.balance, before + expectedUser2);
+        assertEq(treasury.previewClaim(START_YEAR, 1, address(vault), user2), 0);
+    }
+
+    function test_previewClaim_returnsZero_whenNotClaimable() public {
+        _stake(user, vault, 10 ether);
+        _sendEth(address(treasury), 100 ether);
+        vm.warp(startTime);
+        _lockVaults(treasury);
+
+        assertEq(treasury.previewClaim(START_YEAR, 1, address(vault), user), 0);
     }
 
     function test_payClaim_afterUnregister_stillWorks() public {

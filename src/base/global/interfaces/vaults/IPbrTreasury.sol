@@ -31,6 +31,14 @@ interface IPbrTreasury {
     /// @notice Vault-only payout; returns 0 if nothing owed. Loads `s`/`S` at `lockBlock`.
     function payClaim(uint16 seasonStartYear_, uint32 roundNumber_, address user_) external returns (uint256 payout_);
 
+    /// @notice Read-only PBR for `(vault_, user_)` at a Claimable round; `0` if nothing owed / not claimable.
+    function previewClaim(
+        uint16 seasonStartYear_,
+        uint32 roundNumber_,
+        address vault_,
+        address user_
+    ) external view returns (uint256 payout_);
+
     function tournamentId() external view returns (bytes32);
 
     function isVault(address vault_) external view returns (bool);

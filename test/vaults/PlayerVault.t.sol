@@ -160,6 +160,27 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(vault.claim(), 0);
     }
 
+    function test_pendingRewards_matchesClaim_whenCacheWarm() public {
+        _stake(user, vault, 10 ether);
+        _runRoundToClaimable(100);
+
+        assertEq(vault.pendingRewards(user), 0);
+        vault.syncClaimableCache();
+        assertEq(vault.pendingRewards(user), 80 ether);
+
+        vm.prank(user);
+        assertEq(vault.claim(), 80 ether);
+        assertEq(vault.pendingRewards(user), 0);
+    }
+
+    function test_pendingRewards_zeroWithoutCutoffStake() public {
+        _stake(user, vault, 10 ether);
+        _runRoundToClaimable(100);
+        vault.syncClaimableCache();
+
+        assertEq(vault.pendingRewards(user2), 0);
+    }
+
     function test_claim_idempotentWhenNothingLeft() public {
         _stake(user, vault, 10 ether);
         _runRoundToClaimable(100);

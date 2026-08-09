@@ -238,8 +238,37 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     }
 
     // --------------------------------------------
+    //  Read
+    // --------------------------------------------
+
+    /// @notice ETH owed across cached claimable rounds for `user` (assumes a warm claimable cache).
+    /// @dev Walks `_cachedRounds` from `claimCursor`; does not advance tips. Call `syncClaimableCache`
+    ///      (or `claim`) first if keepers have not warmed the cache.
+    function pendingRewards(address user) external view returns (uint256 total) {
+        uint256 length = _cachedRounds.length;
+        uint256 i = claimCursor[user];
+        for (; i < length;) {
+            CachedRound memory row = _cachedRounds[i];
+            bytes32 tid = _tournamentIdOf[row.treasury];
+            uint256 claimKey = _claimKey(tid, row.seasonStartYear, row.roundNumber);
+            if (!_isClaimed(user, claimKey) && IStakedToken(stToken).balanceOfAt(user, row.lockBlock) > 0) {
+                total += IPbrTreasury(row.treasury).previewClaim(
+                    row.seasonStartYear, row.roundNumber, address(this), user
+                );
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    // --------------------------------------------
     //  External views
     // --------------------------------------------
+
+    function stakedBalance(address user) external view returns (uint256) {
+        return IStakedToken(stToken).balanceOf(user);
+    }
 
     function lockedBalance(address user) external view returns (uint256) {
         return _lockedBalance(user);

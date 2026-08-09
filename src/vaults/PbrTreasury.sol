@@ -524,6 +524,33 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         return _rounds[seasonStartYear_][roundNumber_];
     }
 
+    /// @inheritdoc IPbrTreasury
+    /// @dev Caps at `R - paid` so concurrent claims do not overstate remaining pot.
+    function previewClaim(
+        uint16 seasonStartYear_,
+        uint32 roundNumber_,
+        address vault_,
+        address user_
+    ) external view returns (uint256 payout_) {
+        if (user_ == address(0) || vault_ == address(0)) return 0;
+        if (!_isUtilized(seasonStartYear_, roundNumber_, vault_)) return 0;
+
+        RoundState storage round = _rounds[seasonStartYear_][roundNumber_];
+        if (round.status != RoundStatus.Claimable) return 0;
+
+        uint256 m = vaultPoints[seasonStartYear_][roundNumber_][vault_];
+        if (m == 0 || round.R == 0 || round.M_adj == 0) return 0;
+
+        address stToken_ = IPlayerVault(vault_).stToken();
+        uint256 s = IStakedToken(stToken_).balanceOfAt(user_, round.lockBlock);
+        uint256 S = IStakedToken(stToken_).totalSupplyAt(round.lockBlock);
+        if (s == 0 || S == 0) return 0;
+
+        payout_ = Math.mulDiv(Math.mulDiv(round.R, m, round.M_adj), s, S);
+        uint256 remaining = round.R - round.paid;
+        if (payout_ > remaining) payout_ = remaining;
+    }
+
     function getRoundClaimMeta(
         uint16 seasonStartYear_,
         uint32 roundNumber_

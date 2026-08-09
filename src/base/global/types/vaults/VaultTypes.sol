@@ -30,11 +30,3 @@ struct RoundState {
     /// @dev Inclusive cut-off: `balanceOfAt` / `totalSupplyAt` use this block (typically `lockTxBlock - 1`)
     uint64 lockBlock;
 }
-
-/// @notice Unclaimed claimable round for a user (args for `PlayerVault.claim`)
-struct OutstandingClaim {
-    bytes32 tournamentId;
-    uint16 seasonStartYear;
-    uint32 roundNumber;
-    uint256 previewPayout;
-}

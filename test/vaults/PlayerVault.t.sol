@@ -5,7 +5,7 @@ import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Pausable } from "@openzeppelin/utils/Pausable.sol";
 
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
-import { OutstandingClaim, RoundStatus } from "@types/vaults/VaultTypes.sol";
+import { RoundStatus } from "@types/vaults/VaultTypes.sol";
 import { PlayerVault } from "@vaults/PlayerVault.sol";
 import { PbrTreasury } from "@vaults/PbrTreasury.sol";
 import { StakedToken } from "@vaults/StakedToken.sol";
@@ -127,45 +127,14 @@ contract PlayerVaultTest is VaultsTestBase {
         vault.unstake(10 ether);
     }
 
-    function test_outstandingClaims_emptyWhileLocked() public {
+    function test_claim_whileLocked_returnsZero() public {
         _stake(user, vault, 10 ether);
         vm.warp(startTime);
         _sendEth(address(treasury), 100 ether);
         _lockVaults(treasury);
 
-        OutstandingClaim[] memory rows = vault.outstandingClaims(user);
-        assertEq(rows.length, 0);
-    }
-
-    function test_outstandingClaims_listsClaimableThenClears() public {
-        _stake(user, vault, 10 ether);
-        _runRoundToClaimable(100);
-
-        OutstandingClaim[] memory rows = vault.outstandingClaims(user);
-        assertEq(rows.length, 1);
-        assertEq(rows[0].tournamentId, TOURNAMENT);
-        assertEq(rows[0].seasonStartYear, START_YEAR);
-        assertEq(rows[0].roundNumber, 1);
-        assertEq(rows[0].previewPayout, 80 ether);
-
         vm.prank(user);
-        vault.claim();
-
-        rows = vault.outstandingClaims(user);
-        assertEq(rows.length, 0);
-    }
-
-    function test_refreshClaimable_cachesRound() public {
-        _stake(user, vault, 10 ether);
-        _runRoundToClaimable(100);
-
-        assertEq(vault.cachedRoundCount(), 0);
-        vault.refreshClaimable();
-        assertEq(vault.cachedRoundCount(), 1);
-
-        OutstandingClaim[] memory rows = vault.outstandingClaims(user);
-        assertEq(rows.length, 1);
-        assertEq(rows[0].previewPayout, 80 ether);
+        assertEq(vault.claim(), 0);
     }
 
     function test_stake_midAmount_skipsTreasurySync() public {
@@ -177,28 +146,18 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(vault.totalStaked(), 3 ether);
     }
 
-    function test_outstandingClaims_excludesZeroVaultShare() public {
-        _stake(user, vault, 10 ether);
-        _runRoundToClaimable(0);
-
-        vault.refreshClaimable();
-        assertEq(vault.cachedRoundCount(), 0);
-        assertEq(vault.outstandingClaims(user).length, 0);
-    }
-
     function test_claim_happyPath() public {
         _stake(user, vault, 10 ether);
         _runRoundToClaimable(100);
-
-        uint256 preview = treasury.previewClaim(START_YEAR, 1, address(vault), user);
-        assertEq(preview, 80 ether);
 
         uint256 beforeBal = user.balance;
         vm.prank(user);
         uint256 payout = vault.claim();
         assertEq(payout, 80 ether);
         assertEq(user.balance, beforeBal + 80 ether);
-        assertEq(vault.outstandingClaims(user).length, 0);
+
+        vm.prank(user);
+        assertEq(vault.claim(), 0);
     }
 
     function test_claim_idempotentWhenNothingLeft() public {
@@ -218,8 +177,7 @@ contract PlayerVaultTest is VaultsTestBase {
 
         vm.prank(user);
         assertEq(vault.claim(), 0);
-        assertEq(vault.cachedRoundCount(), 0);
-        assertEq(vault.outstandingClaims(user).length, 0);
+        assertFalse(treasury.hasPayableVaultShare(START_YEAR, 1, address(vault)));
     }
 
     function test_claim_skipsNonClaimableUntilSettled() public {

@@ -473,27 +473,4 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     function getCursors() external view returns (uint16, uint32, uint32) {
         return (seasonStartYear, activeRound, tradingRound);
     }
-
-    function previewClaim(
-        uint16 seasonStartYear_,
-        uint32 roundNumber_,
-        address vault_,
-        address user_
-    ) external view returns (uint256 payout_) {
-        RoundState storage round = _rounds[seasonStartYear_][roundNumber_];
-        if (round.status != RoundStatus.Claimable || round.R == 0 || round.M_adj == 0) return 0;
-
-        uint256 m = vaultPoints[seasonStartYear_][roundNumber_][vault_];
-        if (m == 0) return 0;
-
-        address stToken_ = IPlayerVault(vault_).stToken();
-        uint64 lockBlock_ = round.lockBlock;
-        uint256 s = IStakedToken(stToken_).balanceOfAt(user_, lockBlock_);
-        uint256 S = IStakedToken(stToken_).totalSupplyAt(lockBlock_);
-        if (s == 0 || S == 0) return 0;
-
-        payout_ = Math.mulDiv(Math.mulDiv(round.R, m, round.M_adj), s, S);
-        uint256 remaining = round.R - round.paid;
-        if (payout_ > remaining) payout_ = remaining;
-    }
 }

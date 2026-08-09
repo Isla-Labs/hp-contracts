@@ -225,8 +225,6 @@ contract PbrTreasuryTest is VaultsTestBase {
         uint256 expectedUser = Math.mulDiv(Math.mulDiv(R, 200, 200), 25 ether, 100 ether);
         uint256 expectedUser2 = Math.mulDiv(Math.mulDiv(R, 200, 200), 75 ether, 100 ether);
 
-        assertEq(treasury.previewClaim(START_YEAR, 1, address(vault), user), expectedUser);
-
         uint256 before = user.balance;
         vm.prank(user);
         uint256 payout = vault.claim();

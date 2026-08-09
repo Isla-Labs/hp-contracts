@@ -12,7 +12,7 @@ import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
-import { OutstandingClaim, RoundStatus } from "@types/vaults/VaultTypes.sol";
+import { RoundStatus } from "@types/vaults/VaultTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
 import { IStakedToken } from "@interfaces/vaults/IStakedToken.sol";
@@ -61,7 +61,7 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     address[] private _knownTreasuries;
     mapping(address treasury => bool) private _isKnownTreasury;
 
-    /// @dev Lazy cache of claimable rounds this vault participated in (filled on refresh / claim).
+    /// @dev Lazy cache of payable claimable rounds this vault participated in (filled on claim).
     struct CachedRound {
         address treasury;
         uint16 seasonStartYear;
@@ -210,11 +210,6 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     //  Claim
     // --------------------------------------------
 
-    /// @notice Advance per-treasury scan tips and cache rounds with a non-zero vault reward share.
-    function refreshClaimable() external nonReentrant {
-        _syncClaimableCache();
-    }
-
     /// @notice Sync cache, then pay each cached round where caller had cut-off stake.
     function claim() external nonReentrant whenNotPaused returns (uint256) {
         _syncClaimableCache();
@@ -240,35 +235,6 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
     function treasuryOf(bytes32 tournamentId_) external view returns (address) {
         return _treasuryOf[tournamentId_];
-    }
-
-    function cachedRoundCount() external view returns (uint256) {
-        return _cachedRounds.length;
-    }
-
-    /**
-     * @notice Claimable rounds with a non-zero payout preview for `user` (UI helper).
-     * @dev Uses lazy cache + ephemeral tip discovery (no writes). Call `refreshClaimable` to persist tips.
-     */
-    function outstandingClaims(address user) external view returns (OutstandingClaim[] memory out) {
-        OutstandingClaim[] memory buf = new OutstandingClaim[](_outstandingBufSize());
-        uint256 n = _collectFromCache(user, buf, 0);
-
-        uint256 tLen = _knownTreasuries.length;
-        for (uint256 t; t < tLen;) {
-            n = _collectFromTipEphemeral(user, _knownTreasuries[t], buf, n);
-            unchecked {
-                ++t;
-            }
-        }
-
-        out = new OutstandingClaim[](n);
-        for (uint256 i; i < n;) {
-            out[i] = buf[i];
-            unchecked {
-                ++i;
-            }
-        }
     }
 
     // --------------------------------------------
@@ -439,143 +405,6 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
                 ++i;
             }
         }
-    }
-
-    function _outstandingBufSize() internal view returns (uint256) {
-        uint256 n = _cachedRounds.length + 8;
-        uint256 tLen = _knownTreasuries.length;
-        for (uint256 t; t < tLen;) {
-            (, uint32 active,) = IPbrTreasury(_knownTreasuries[t]).getCursors();
-            ScanTip memory tip = _scanTip[_knownTreasuries[t]];
-            if (tip.nextRound > 0 && active >= tip.nextRound) n += (active - tip.nextRound + 1);
-            else n += 8;
-            unchecked {
-                ++t;
-            }
-        }
-        if (n == 0) n = 1;
-        return n;
-    }
-
-    function _collectFromCache(address user, OutstandingClaim[] memory buf, uint256 n) internal view returns (uint256) {
-        uint256 length = _cachedRounds.length;
-        for (uint256 i; i < length;) {
-            CachedRound memory row = _cachedRounds[i];
-            bytes32 tid = _tournamentIdOf[row.treasury];
-            uint256 preview = _userPreview(user, tid, row);
-            if (preview > 0 && n < buf.length) {
-                buf[n] = OutstandingClaim({
-                    tournamentId: tid,
-                    seasonStartYear: row.seasonStartYear,
-                    roundNumber: row.roundNumber,
-                    previewPayout: preview
-                });
-                unchecked {
-                    ++n;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        return n;
-    }
-
-    /// @dev View-only tip discovery so outstandingClaims stays correct before `refreshClaimable`.
-    function _collectFromTipEphemeral(
-        address user,
-        address treasuryAddr,
-        OutstandingClaim[] memory buf,
-        uint256 n
-    ) internal view returns (uint256) {
-        IPbrTreasury treasury = IPbrTreasury(treasuryAddr);
-        bytes32 tid = _tournamentIdOf[treasuryAddr];
-        (uint16 season, uint32 active,) = treasury.getCursors();
-        ScanTip memory tip = _scanTip[treasuryAddr];
-
-        uint16 scanSeason = tip.nextRound == 0 ? season : tip.season;
-        uint32 from = tip.nextRound == 0 ? 1 : tip.nextRound;
-
-        if (tip.nextRound == 0 && season > 0) {
-            uint32 prevFinal = tournamentRegistry.getFinalRound(tid, season - 1);
-            if (prevFinal > 0) {
-                n = _scanRangeEphemeral(user, treasury, tid, season - 1, 1, prevFinal, buf, n);
-            }
-        }
-
-        if (scanSeason < season) {
-            uint32 tipFinal = tournamentRegistry.getFinalRound(tid, scanSeason);
-            if (tipFinal >= from) {
-                n = _scanRangeEphemeral(user, treasury, tid, scanSeason, from, tipFinal, buf, n);
-            }
-            for (uint16 s = scanSeason + 1; s < season;) {
-                uint32 midFinal = tournamentRegistry.getFinalRound(tid, s);
-                if (midFinal > 0) n = _scanRangeEphemeral(user, treasury, tid, s, 1, midFinal, buf, n);
-                unchecked {
-                    ++s;
-                }
-            }
-            from = 1;
-            scanSeason = season;
-        }
-
-        if (scanSeason == season && active >= from) {
-            n = _scanRangeEphemeral(user, treasury, tid, season, from, active, buf, n);
-        }
-        return n;
-    }
-
-    function _scanRangeEphemeral(
-        address user,
-        IPbrTreasury treasury,
-        bytes32 tournamentId_,
-        uint16 seasonStartYear_,
-        uint32 fromRound,
-        uint32 toRound,
-        OutstandingClaim[] memory buf,
-        uint256 n
-    ) internal view returns (uint256) {
-        for (uint32 r = fromRound; r <= toRound;) {
-            if (_cachedRoundIndex[address(treasury)][seasonStartYear_][r] == 0) {
-                (RoundStatus status, uint64 lockBlock) = treasury.getRoundClaimMeta(seasonStartYear_, r);
-                if (status == RoundStatus.Locked || status == RoundStatus.SettlePending) break;
-                if (
-                    status == RoundStatus.Claimable && IStakedToken(stToken).totalSupplyAt(lockBlock) > 0
-                        && treasury.hasPayableVaultShare(seasonStartYear_, r, address(this))
-                ) {
-                    CachedRound memory row = CachedRound({
-                        treasury: address(treasury),
-                        seasonStartYear: seasonStartYear_,
-                        roundNumber: r,
-                        lockBlock: lockBlock
-                    });
-                    uint256 preview = _userPreview(user, tournamentId_, row);
-                    if (preview > 0 && n < buf.length) {
-                        buf[n] = OutstandingClaim({
-                            tournamentId: tournamentId_,
-                            seasonStartYear: seasonStartYear_,
-                            roundNumber: r,
-                            previewPayout: preview
-                        });
-                        unchecked {
-                            ++n;
-                        }
-                    }
-                }
-            }
-            unchecked {
-                ++r;
-            }
-        }
-        return n;
-    }
-
-    /// @dev UI helper: cached/ephemeral rows are already vault-payable; gate on user stake then preview.
-    function _userPreview(address user, bytes32 tournamentId_, CachedRound memory row) internal view returns (uint256) {
-        uint256 claimKey = _claimKey(tournamentId_, row.seasonStartYear, row.roundNumber);
-        if (_isClaimed(user, claimKey)) return 0;
-        if (IStakedToken(stToken).balanceOfAt(user, row.lockBlock) == 0) return 0;
-        return IPbrTreasury(row.treasury).previewClaim(row.seasonStartYear, row.roundNumber, address(this), user);
     }
 
     function _claimKey(

@@ -63,11 +63,4 @@ interface IPbrTreasury {
     function getLiveUtilizedVaults() external view returns (address[] memory);
 
     function getCursors() external view returns (uint16 seasonStartYear_, uint32 active_, uint32 trading_);
-
-    function previewClaim(
-        uint16 seasonStartYear_,
-        uint32 roundNumber_,
-        address vault_,
-        address user_
-    ) external view returns (uint256 payout_);
 }

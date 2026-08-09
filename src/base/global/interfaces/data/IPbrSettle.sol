@@ -13,7 +13,7 @@ interface IPbrSettle {
      * @dev Callable only by `TournamentRegistry.getPbrTreasury(tournamentId)`.
      *      Fixture ids are read from `TournamentRegistry.getRound`.
      */
-    function startRound(
+    function settleRound(
         bytes32 tournamentId,
         uint16 seasonStartYear,
         uint32 roundNumber,

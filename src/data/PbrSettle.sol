@@ -25,7 +25,7 @@ import { AddressProvider } from "@src/AddressProvider.sol";
 
 /**
  * @title PbrSettle
- * @notice Per-fixture settle: `startRound` fans out `SettleDms` → fulfill applies vault points.
+ * @notice Per-fixture settle: `settleRound` fans out `SettleDms` → fulfill applies vault points.
  * @dev Fulfill response:
  *      `abi.encode(bytes32 utilizedHash, bytes32 fixtureDigest, bytes proof, address[] vaults, uint256[] mwPoints)`.
  *      See `pbrSettleFlow.md`.
@@ -64,11 +64,11 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
     }
 
     // --------------------------------------------
-    //  Kickoff (PbrTreasury only)
+    //  Settle (PbrTreasury only)
     // --------------------------------------------
 
     /// @inheritdoc IPbrSettle
-    function startRound(
+    function settleRound(
         bytes32 tournamentId,
         uint16 seasonStartYear,
         uint32 roundNumber,

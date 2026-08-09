@@ -5,7 +5,7 @@ contract MockPbrSettle {
     bytes32 public lastUtilizedHash;
     uint256 public startCount;
 
-    function startRound(bytes32, uint16, uint32, bytes32 utilizedHash) external returns (bytes32[] memory requestIds) {
+    function settleRound(bytes32, uint16, uint32, bytes32 utilizedHash) external returns (bytes32[] memory requestIds) {
         lastUtilizedHash = utilizedHash;
         unchecked {
             ++startCount;

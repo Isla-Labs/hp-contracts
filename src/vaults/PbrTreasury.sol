@@ -281,7 +281,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
             }
         }
 
-        requestIds_ = IPbrSettle(settle_).startRound(tournamentId, seasonStartYear_, roundNumber_, utilizedHash);
+        requestIds_ = IPbrSettle(settle_).settleRound(tournamentId, seasonStartYear_, roundNumber_, utilizedHash);
         emit Events.RoundSettleRequested(seasonStartYear_, roundNumber_, settle_, utilizedHash, uint32(fixtureCount));
     }
 

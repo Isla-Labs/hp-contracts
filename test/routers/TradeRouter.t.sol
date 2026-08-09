@@ -45,9 +45,9 @@ contract TradeRouterTest is Test {
         hooks = new MockSwapHook();
 
         // Inventory for 1:1 takes from the mock manager.
-        vm.deal(address(manager), 1_000 ether);
-        vm.deal(address(zRouter), 1_000 ether);
-        playerToken.mint(address(manager), 1_000 ether);
+        vm.deal(address(manager), 1000 ether);
+        vm.deal(address(zRouter), 1000 ether);
+        playerToken.mint(address(manager), 1000 ether);
 
         ap.setName(Addresses.PLAYER_SET_REGISTRY, address(playerSetRegistry));
         ap.setName(Addresses.Z_ROUTER, address(zRouter));
@@ -67,10 +67,7 @@ contract TradeRouterTest is Test {
         playerSetRegistry.setDopplerData(
             PLAYER,
             DopplerData({
-                activePool: poolKey,
-                hookDoppler: address(hooks),
-                hookMigrator: address(0),
-                feeRouter: address(0)
+                activePool: poolKey, hookDoppler: address(hooks), hookMigrator: address(0), feeRouter: address(0)
             })
         );
 
@@ -289,9 +286,7 @@ contract TradeRouterTest is Test {
     function test_buyWithToken_revertsMsgValue() public {
         bytes memory zCall = abi.encodeCall(MockZRouter.swapToEth, (address(usdc), 1 ether, address(router)));
         vm.expectRevert(Errors.InvalidMsgValue.selector);
-        router.buyWithToken{ value: 1 wei }(
-            address(playerToken), address(usdc), 1 ether, 0, block.timestamp + 1, zCall
-        );
+        router.buyWithToken{ value: 1 wei }(address(playerToken), address(usdc), 1 ether, 0, block.timestamp + 1, zCall);
     }
 
     function test_buyWithToken_revertsWhenZRouterSendsNoEth() public {

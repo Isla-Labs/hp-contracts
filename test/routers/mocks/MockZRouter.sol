@@ -7,7 +7,7 @@ import { MockPlayerToken } from "../../vaults/mocks/MockPlayerToken.sol";
 contract MockZRouter {
     error TransferFailed();
 
-    receive() external payable {}
+    receive() external payable { }
 
     /// @dev Pulls `amountIn` of `tokenIn` from caller and sends the same wei of ETH to `to`.
     function swapToEth(address tokenIn, uint256 amountIn, address to) external {

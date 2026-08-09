@@ -50,7 +50,7 @@ contract TradeRouter is AddressBook, ReentrancyGuard, IUnlockCallback {
         poolManager = IPoolManager(poolManager_);
     }
 
-    receive() external payable {}
+    receive() external payable { }
 
     // --------------------------------------------
     //  ETH ↔ playerToken
@@ -215,9 +215,7 @@ contract TradeRouter is AddressBook, ReentrancyGuard, IUnlockCallback {
         bool zeroForOne = assetIsCurrency1;
         amountOut = abi.decode(
             poolManager.unlock(
-                abi.encode(
-                    UnlockData({ key: key, zeroForOne: zeroForOne, amountIn: ethIn, recipient: recipient })
-                )
+                abi.encode(UnlockData({ key: key, zeroForOne: zeroForOne, amountIn: ethIn, recipient: recipient }))
             ),
             (uint256)
         );
@@ -233,9 +231,7 @@ contract TradeRouter is AddressBook, ReentrancyGuard, IUnlockCallback {
         bool zeroForOne = !assetIsCurrency1;
         ethOut = abi.decode(
             poolManager.unlock(
-                abi.encode(
-                    UnlockData({ key: key, zeroForOne: zeroForOne, amountIn: amountIn, recipient: recipient })
-                )
+                abi.encode(UnlockData({ key: key, zeroForOne: zeroForOne, amountIn: amountIn, recipient: recipient }))
             ),
             (uint256)
         );

@@ -22,7 +22,7 @@ contract MockPoolManager {
     error TransferFailed();
     error InvalidHookSelector();
 
-    receive() external payable {}
+    receive() external payable { }
 
     function unlock(bytes calldata data) external returns (bytes memory) {
         return IUnlockCallback(msg.sender).unlockCallback(data);
@@ -55,7 +55,7 @@ contract MockPoolManager {
         }
     }
 
-    function sync(Currency) external pure {}
+    function sync(Currency) external pure { }
 
     function settle() external payable returns (uint256) {
         return msg.value;

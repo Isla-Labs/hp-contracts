@@ -6,16 +6,6 @@ library RoutersEvents {
     event Unstaked(address indexed user, address indexed token, address indexed vault, uint256 amount);
     event Claimed(address indexed user, address indexed token, address indexed vault, uint256 payout);
 
-    event Bought(
-        address indexed user,
-        address indexed playerToken,
-        uint256 ethIn,
-        uint256 amountOut
-    );
-    event Sold(
-        address indexed user,
-        address indexed playerToken,
-        uint256 amountIn,
-        uint256 ethOut
-    );
+    event Bought(address indexed user, address indexed playerToken, uint256 ethIn, uint256 amountOut);
+    event Sold(address indexed user, address indexed playerToken, uint256 amountIn, uint256 ethOut);
 }

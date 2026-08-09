@@ -37,11 +37,12 @@ contract MockSwapHook is IHooks {
         return IHooks.afterInitialize.selector;
     }
 
-    function beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
-        external
-        pure
-        returns (bytes4)
-    {
+    function beforeAddLiquidity(
+        address,
+        PoolKey calldata,
+        IPoolManager.ModifyLiquidityParams calldata,
+        bytes calldata
+    ) external pure returns (bytes4) {
         return IHooks.beforeAddLiquidity.selector;
     }
 

@@ -111,7 +111,7 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
         tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
         playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
-        
+
         playerId = playerId_;
         playerToken = playerToken_;
         stToken = stToken_;

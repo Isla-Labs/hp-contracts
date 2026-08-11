@@ -165,13 +165,13 @@ contract ZQuoterBase {
                 try IQuoter(V3_QUOTER)
                     .quoteExactInputSingleWithPool(
                         IQuoter.QuoteExactInputSingleWithPoolParams({
-                        tokenIn: tIn,
-                        tokenOut: tOut,
-                        amountIn: swapAmount,
-                        fee: fee,
-                        pool: pool,
-                        sqrtPriceLimitX96: sqrtPriceLimitX96
-                    })
+                            tokenIn: tIn,
+                            tokenOut: tOut,
+                            amountIn: swapAmount,
+                            fee: fee,
+                            pool: pool,
+                            sqrtPriceLimitX96: sqrtPriceLimitX96
+                        })
                     ) returns (
                     uint256 amtOut, uint160, uint32, uint256
                 ) {
@@ -183,13 +183,13 @@ contract ZQuoterBase {
                 try IQuoter(V3_QUOTER)
                     .quoteExactOutputSingleWithPool(
                         IQuoter.QuoteExactOutputSingleWithPoolParams({
-                        tokenIn: tIn,
-                        tokenOut: tOut,
-                        amount: swapAmount,
-                        fee: fee,
-                        pool: pool,
-                        sqrtPriceLimitX96: sqrtPriceLimitX96
-                    })
+                            tokenIn: tIn,
+                            tokenOut: tOut,
+                            amount: swapAmount,
+                            fee: fee,
+                            pool: pool,
+                            sqrtPriceLimitX96: sqrtPriceLimitX96
+                        })
                     ) returns (
                     uint256 amtIn, uint160, uint32, uint256
                 ) {

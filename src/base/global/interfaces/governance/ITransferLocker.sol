@@ -12,7 +12,7 @@ import { LifecycleReason, PendingLifecycle } from "@types/lockers/LifecycleTypes
 interface ITransferLocker {
     /**
      * @notice Queue players for lifecycle review (same `reason` / parallel `effectiveMins`).
-     * @dev Called by `EligibilityVerifier` or Orchestrator owner.
+     * @dev Called by Orchestrator or AddressBook `ELIGIBILITY_VERIFIER` (when set).
      *      Skips zero ids and already-queued players for that direction (deactivate vs reactivate).
      *      `effectiveMins.length` must be 0 (treated as all zeros) or equal `playerIds.length`.
      */
@@ -22,7 +22,7 @@ interface ITransferLocker {
         uint32[] calldata effectiveMins
     ) external;
 
-    /// @notice Owner manual override during the review window (`Queued` only).
+    /// @notice Orchestrator manual override during the review window (`Queued` only).
     function unqueueAsset(bytes32 playerId) external;
 
     /**

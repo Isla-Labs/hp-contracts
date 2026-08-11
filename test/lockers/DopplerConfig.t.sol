@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-
 import { DeploymentsErrors as Errors } from "@errors/lockers/DeploymentsErrors.sol";
 import { DopplerTypes } from "@types/lockers/DopplerTypes.sol";
 import { DopplerConfig } from "@src/lockers/assets/deploy/config/DopplerConfig.sol";
@@ -12,8 +10,7 @@ import { WAD } from "@doppler/src/types/Wad.sol";
 import { LockersTestBase } from "./LockersTestBase.sol";
 
 contract DopplerConfigTest is LockersTestBase {
-    function test_initialize_defaults() public view {
-        assertEq(dopplerConfig.owner(), address(orch));
+    function test_constructor_defaults() public view {
         assertEq(dopplerConfig.initialSupply(), 22_000_000 ether);
         assertEq(dopplerConfig.numTokensToSell(), 20_000_000 ether);
         assertEq(dopplerConfig.tickSpacing(), 8);
@@ -38,13 +35,13 @@ contract DopplerConfigTest is LockersTestBase {
         cfg.numTokensToSell = cfg.initialSupply + 1;
 
         vm.expectRevert(Errors.InvalidLaunchSupply.selector);
-        _ownerCall(address(dopplerConfig), abi.encodeCall(DopplerConfig.setMarketLaunchConfig, (cfg)));
+        _timelockCall(address(dopplerConfig), abi.encodeCall(DopplerConfig.setMarketLaunchConfig, (cfg)));
     }
 
     function test_setBondingCurves_revertsEmpty() public {
         DopplerTypes.Curve[] memory empty = new DopplerTypes.Curve[](0);
         vm.expectRevert(Errors.EmptyCurves.selector);
-        _ownerCall(address(dopplerConfig), abi.encodeCall(DopplerConfig.setBondingCurves, (empty)));
+        _timelockCall(address(dopplerConfig), abi.encodeCall(DopplerConfig.setBondingCurves, (empty)));
     }
 
     function test_setBondingCurves_revertsBadShares() public {
@@ -52,18 +49,7 @@ contract DopplerConfigTest is LockersTestBase {
         curves[0] = DopplerTypes.Curve({ tickLower: -100, tickUpper: -10, numPositions: 1, shares: WAD / 2 });
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidCurveShares.selector, WAD / 2));
-        _ownerCall(address(dopplerConfig), abi.encodeCall(DopplerConfig.setBondingCurves, (curves)));
-    }
-
-    function test_configureDopplerModules_revertsZero() public {
-        vm.expectRevert(Errors.ZeroAddress.selector);
-        _ownerCall(
-            address(dopplerConfig),
-            abi.encodeCall(
-                DopplerConfig.configureDopplerModules,
-                (address(0), hookDoppler, hookMigrator, makeAddr("r1"), makeAddr("r2"))
-            )
-        );
+        _timelockCall(address(dopplerConfig), abi.encodeCall(DopplerConfig.setBondingCurves, (curves)));
     }
 
     function test_buildCreateParams_happy() public {
@@ -93,9 +79,9 @@ contract DopplerConfigTest is LockersTestBase {
         );
     }
 
-    function test_admin_onlyOwner() public {
+    function test_admin_onlyTimelock() public {
         vm.prank(makeAddr("stranger"));
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, makeAddr("stranger")));
+        vm.expectRevert(Errors.Unauthorized.selector);
         dopplerConfig.setGraduationPolicy(1 ether, 1 days);
     }
 }

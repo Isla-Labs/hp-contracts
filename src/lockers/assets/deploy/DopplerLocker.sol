@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
-
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { Oracle } from "@base/abstract/Oracle.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
@@ -57,10 +54,10 @@ interface IRehypePoolInfoView {
  *
  *      Flow:
  *        DeployTournament (DOMESTIC_LEAGUE) first → `pbrFeeHubOf(leagueId)` live
- *        → owner `queueAssets(leagueId, seasonId, playerIds)` → `AwaitingMetadata` + metadata request
+ *        → Orchestrator `queueAssets(leagueId, seasonId, playerIds)` → `AwaitingMetadata` + metadata request
  *        → fulfill → `ReadyToQueue` (name/symbol; clock not started)
  *        → next `queueAssets` promotes `ReadyToQueue` → `Queued` (`queuedAt = now`)
- *        → owner may `editMetadata` / `unqueueAsset` during the 24h window
+ *        → Orchestrator may `editMetadata` / `unqueueAsset` during the 24h window
  *        → anyone calls `deployAssets` after wait; RateLimit gates frequency
  *        → FinalConfig: oracle pins DN404 + staked IPFS metadata + mines salts + returns URIs
  *        → fulfill → `_onDeployReady` (FeeRouter w/ hub → Airlock → Vault → PlayerSet + registerVaults
@@ -69,24 +66,25 @@ interface IRehypePoolInfoView {
  *        → Airlock not ours yet (create fail / salt frontrun): new FinalConfig after `retryWait`
  *        → Airlock already ours (integrator + FeeRouter buybackDst): resume vault/registry after `retryWait`
  *        → post-Airlock steps are idempotent; success removes the entry from the queue
- *        → after `maxDeployAttempts` failures: `DeployFailed` + event (owner `resetFailedDeploy`)
+ *        → after `maxDeployAttempts` failures: `DeployFailed` + event (Timelock `resetFailedDeploy`)
  *
- *      Factory / registry writes relay through `Orchestrator.execute` (this proxy must hold
- *      `AUTHORIZED_CONTRACT`). `Airlock.create` is called directly.
+ *      Immutable singleton: deps resolve via AddressBook at call time. Factory / registry writes
+ *      relay through `Orchestrator.execute` (this contract must hold `AUTHORIZED_CONTRACT`).
+ *      `Airlock.create` is called directly.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit, IDopplerLocker {
-    // -------------------------------------------------------------------------
+contract DopplerLocker is AddressBook, Oracle, RateLimit, IDopplerLocker {
+    // --------------------------------------------
     //  Types
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     enum QueueStatus {
         None,
         /// @dev Intake; waiting on PlayerMetadata.
         AwaitingMetadata,
-        /// @dev Metadata set; waiting for owner to start the 24h window via `queueAssets`.
+        /// @dev Metadata set; waiting for Orchestrator to start the 24h window via `queueAssets`.
         ReadyToQueue,
         /// @dev In the review window (`queuedAt + active wait`).
         Queued,
@@ -95,7 +93,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         /// @dev Salts/`baseURI` stored; deploy in progress or waiting to resume after a partial failure.
         DeployReady,
         Deployed,
-        /// @dev Automatic retries exhausted; owner must `resetFailedDeploy`.
+        /// @dev Automatic retries exhausted; Timelock must `resetFailedDeploy`.
         DeployFailed
     }
 
@@ -131,9 +129,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         uint8 deployAttempts;
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Constants
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     uint256 public constant DEFAULT_QUEUE_WAIT = 24 hours;
     uint256 public constant DEFAULT_RETRY_WAIT = 5 minutes;
@@ -142,9 +140,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
     /// @notice Max players per `queueAssets` call and per PlayerMetadata oracle page.
     uint256 public constant METADATA_BATCH_SIZE = 50;
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Immutables / config
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     /// @notice Seconds after `Queued` before `deployAssets` may request FinalConfig (first attempt).
     uint256 public queueWait;
@@ -152,27 +150,12 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
     /// @notice Seconds after a failed deploy fulfill before `deployAssets` may retry.
     uint256 public retryWait;
 
-    /// @notice Max automatic deploy failures before `DeployFailed` (owner reset required).
+    /// @notice Max automatic deploy failures before `DeployFailed` (Timelock reset required).
     uint256 public maxDeployAttempts;
 
-    /// @notice Shared launch recipe + Doppler module addresses (separate admin surface).
-    IDopplerConfig public dopplerConfig;
-
-    /// @notice Privileged call relay (factories / registry require `msg.sender == Orchestrator`).
-    IOrchestrator public orchestrator;
-
-    /// @notice Per-market FeeRouter factory (Orchestrator-gated).
-    FeeRouterFactory public feeRouterFactory;
-
-    /// @notice Canonical player market registry (Orchestrator-gated).
-    IPlayerSetRegistry public playerSetRegistry;
-
-    /// @notice League hubs / vault membership SoT (Orchestrator-gated).
-    ITournamentRegistry public tournamentRegistry;
-
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Queue storage
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     QueueEntry[] private _queue;
 
@@ -184,70 +167,84 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
     mapping(bytes32 requestId => bytes32) private _oracleSeasonId;
     mapping(bytes32 requestId => bytes32) private _oraclePlayerId;
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  Access Control
+    // --------------------------------------------
+
+    modifier onlyOrchestrator() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.Unauthorized();
+        _;
+    }
+
+    modifier onlyTimelock() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TIMELOCK))) revert Errors.Unauthorized();
+        _;
+    }
+
+    // --------------------------------------------
     //  Construction
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     /**
-     * @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
+     * @param addressProvider_ Canonical `AddressProvider`.
      * @dev `CVM_ROUTER` must already be registered on AddressProvider (oracle set first).
-     * @custom:oz-upgrades-unsafe-allow constructor
      */
     constructor(address addressProvider_)
         AddressBook(addressProvider_)
-        Ownable(msg.sender)
         Oracle(_cvmRouter(addressProvider_))
         RateLimit(DEFAULT_DEPLOY_COOLDOWN)
     {
         if (addressProvider_ == address(0)) revert Errors.ZeroAddress();
-        _disableInitializers();
-    }
-
-    /**
-     * @notice Proxy init: queue waits; resolve deps + `DopplerConfig`; ownership → Orchestrator.
-     * @dev AddressProvider must hold Orchestrator, factories, registries, and `DOPPLER_CONFIG`.
-     *      This proxy must also hold `AUTHORIZED_CONTRACT` on Orchestrator for deploy relays.
-     */
-    function initialize() external initializer {
         queueWait = DEFAULT_QUEUE_WAIT;
         retryWait = DEFAULT_RETRY_WAIT;
         maxDeployAttempts = DEFAULT_MAX_DEPLOY_ATTEMPTS;
-
-        address orch = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
-        orchestrator = IOrchestrator(orch);
-        feeRouterFactory = FeeRouterFactory(_getAddress(_addressKey(Addresses.FEE_ROUTER_FACTORY)));
-        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-        dopplerConfig = IDopplerConfig(_getAddress(_addressKey(Addresses.DOPPLER_CONFIG)));
-
-        _transferOwnership(orch);
     }
 
-    /// @dev Resolve immutable CVM router at impl deploy (AddressBook not yet usable in base ctor list).
+    /// @dev Resolve CVM router at construction (AddressBook not yet usable in base ctor list).
     function _cvmRouter(address addressProvider_) private view returns (address router) {
         router = AddressProvider(payable(addressProvider_)).get(keccak256(bytes(Addresses.CVM_ROUTER)));
         if (router == address(0)) revert Errors.ZeroAddress();
     }
 
-    // -------------------------------------------------------------------------
-    //  Admin (queue / deploy ops — launch recipe + modules live on `DopplerConfig`)
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  AddressBook resolvers (redeploy deps without locker upgrade)
+    // --------------------------------------------
 
-    function setQueueWait(uint256 queueWait_) external onlyOwner {
+    function _feeRouterFactory() private view returns (FeeRouterFactory) {
+        return FeeRouterFactory(_getAddress(_addressKey(Addresses.FEE_ROUTER_FACTORY)));
+    }
+
+    function _playerSetRegistry() private view returns (IPlayerSetRegistry) {
+        return IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+    }
+
+    function _tournamentRegistry() private view returns (ITournamentRegistry) {
+        return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+    }
+
+    function _dopplerConfig() private view returns (IDopplerConfig) {
+        return IDopplerConfig(_getAddress(_addressKey(Addresses.DOPPLER_CONFIG)));
+    }
+
+    // --------------------------------------------
+    //  Admin (queue / deploy ops — launch recipe + modules live on `DopplerConfig`)
+    // --------------------------------------------
+
+    function setQueueWait(uint256 queueWait_) external onlyTimelock {
         if (queueWait_ == 0) revert Errors.NotConfigured();
         uint256 previous = queueWait;
         queueWait = queueWait_;
         emit Events.QueueWaitUpdated(previous, queueWait_);
     }
 
-    function setRetryWait(uint256 retryWait_) external onlyOwner {
+    function setRetryWait(uint256 retryWait_) external onlyTimelock {
         if (retryWait_ == 0) revert Errors.NotConfigured();
         uint256 previous = retryWait;
         retryWait = retryWait_;
         emit Events.RetryWaitUpdated(previous, retryWait_);
     }
 
-    function setMaxDeployAttempts(uint256 maxDeployAttempts_) external onlyOwner {
+    function setMaxDeployAttempts(uint256 maxDeployAttempts_) external onlyTimelock {
         if (maxDeployAttempts_ == 0 || maxDeployAttempts_ > type(uint8).max) revert Errors.NotConfigured();
         uint256 previous = maxDeployAttempts;
         maxDeployAttempts = maxDeployAttempts_;
@@ -259,7 +256,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
      * @param keepSalts If true and salts/URIs remain, resume as `DeployReady` (post-Airlock path).
      *        Otherwise clear salts and return to `Queued` with a short `retryWait` gate.
      */
-    function resetFailedDeploy(bytes32 playerId, bool keepSalts) external onlyOwner {
+    function resetFailedDeploy(bytes32 playerId, bool keepSalts) external onlyTimelock {
         QueueEntry storage e = _entry(playerId);
         if (e.status != QueueStatus.DeployFailed) revert Errors.BadQueueStatus(playerId, uint8(e.status));
 
@@ -284,18 +281,19 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         }
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Intake / review
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     /// @inheritdoc IDopplerLocker
-    function queueAssets(bytes32 leagueId, bytes32 seasonId, bytes32[] calldata playerIds) external onlyOwner {
+    function queueAssets(bytes32 leagueId, bytes32 seasonId, bytes32[] calldata playerIds) external onlyOrchestrator {
         if (leagueId == bytes32(0) || seasonId == bytes32(0)) revert Errors.ZeroId();
+        ITournamentRegistry tr = _tournamentRegistry();
         // League must already be bootstrapped via DeployTournament (hub + treasury registered).
-        if (!tournamentRegistry.tournamentExists(leagueId)) revert Errors.NotConfigured();
-        if (tournamentRegistry.pbrFeeHubOf(leagueId) == address(0)) revert Errors.HubNotRegistered(leagueId);
+        if (!tr.tournamentExists(leagueId)) revert Errors.NotConfigured();
+        if (tr.pbrFeeHubOf(leagueId) == address(0)) revert Errors.HubNotRegistered(leagueId);
         // Season must be open under this domestic league (`tournamentId == leagueId`).
-        bytes32 seasonTournament = tournamentRegistry.tournamentIdOfSeason(seasonId);
+        bytes32 seasonTournament = tr.tournamentIdOfSeason(seasonId);
         if (seasonTournament == bytes32(0)) revert Errors.SeasonNotRegistered(seasonId);
         if (seasonTournament != leagueId) revert Errors.LeagueMismatch(leagueId, seasonTournament);
 
@@ -340,7 +338,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
     }
 
     /// @inheritdoc IDopplerLocker
-    function unqueueAsset(bytes32 playerId) external onlyOwner {
+    function unqueueAsset(bytes32 playerId) external onlyOrchestrator {
         QueueEntry storage e = _entry(playerId);
         if (e.status != QueueStatus.Queued && e.status != QueueStatus.DeployFailed) {
             revert Errors.BadQueueStatus(playerId, uint8(e.status));
@@ -351,7 +349,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
     }
 
     /// @inheritdoc IDopplerLocker
-    function editMetadata(bytes32 playerId, string calldata name, string calldata symbol) external onlyOwner {
+    function editMetadata(bytes32 playerId, string calldata name, string calldata symbol) external onlyOrchestrator {
         if (bytes(name).length == 0) revert Errors.EmptyName();
         if (bytes(symbol).length == 0) revert Errors.EmptySymbol();
 
@@ -370,17 +368,14 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         emit Events.PlayerMetadataUpdated(playerId, name, symbol, e.baseURI);
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Deploy kickoff (public, rate-limited)
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     /// @inheritdoc IDopplerLocker
     function deployAssets() external rateLimited returns (bytes32 requestId) {
-        if (address(dopplerConfig) == address(0)) revert Errors.NotConfigured();
-        if (
-            dopplerConfig.tokenFactory() == address(0) || dopplerConfig.vaultFactory() == address(0)
-                || dopplerConfig.airlock() == address(0)
-        ) {
+        IDopplerConfig cfg = _dopplerConfig();
+        if (cfg.tokenFactory() == address(0) || cfg.vaultFactory() == address(0) || cfg.airlock() == address(0)) {
             revert Errors.NotConfigured();
         }
 
@@ -409,7 +404,6 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
             if (block.timestamp < uint256(e.queuedAt) + _deployWait(e)) continue;
 
             // Oracle pins IPFS metadata, hashes DN404 initcode with that baseURI, mines salts.
-            IDopplerConfig cfg = dopplerConfig;
             bytes memory args = abi.encode(
                 e.playerId, // seed
                 cfg.tokenFactory(),
@@ -433,9 +427,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         revert Errors.NothingReady();
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Oracle callback
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     /// @inheritdoc Oracle
     function _fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
@@ -451,9 +445,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         }
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Views
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     function queueCount() external view returns (uint256) {
         return _queue.length;
@@ -479,9 +473,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         return uint256(e.queuedAt) + _deployWait(e);
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Internal — intake
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     function _promoteReadyToQueue() private returns (uint256 promoted) {
         uint256 length = _queue.length;
@@ -595,9 +589,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         }
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Internal — deploy fulfill (IPFS URIs + salts → market deploy)
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     function _fulfillDeploy(bytes32 requestId, bytes memory response, bytes memory err) private {
         bytes32 playerId = _oraclePlayerId[requestId];
@@ -742,15 +736,15 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
 
     /**
      * @dev True when `asset` is our Airlock market: Orchestrator integrator **and** Rehype
-     *      `buybackDst` equals the FeeRouter from `feeRouterFactory` for `playerId`.
+     *      `buybackDst` equals the FeeRouter from AddressBook `FEE_ROUTER_FACTORY` for `playerId`.
      */
     function _isOurBondingMarket(bytes32 playerId, address asset) private view returns (bool) {
-        address expectedFeeRouter = feeRouterFactory.feeRouterOf(playerId);
+        address expectedFeeRouter = _feeRouterFactory().feeRouterOf(playerId);
         if (asset == address(0) || asset.code.length == 0 || expectedFeeRouter == address(0)) return false;
 
-        IDopplerConfig cfg = dopplerConfig;
+        IDopplerConfig cfg = _dopplerConfig();
         (,,,,, address pool,,,, address integrator) = Airlock(payable(cfg.airlock())).getAssetData(asset);
-        if (pool == address(0) || integrator != address(orchestrator)) return false;
+        if (pool == address(0) || integrator != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) return false;
 
         (,,,,, PoolKey memory poolKey,) = IDopplerHookInitializerView(cfg.poolInitializer()).getState(asset);
         (,, address buybackDst) = IRehypePoolInfoView(cfg.rehypeHookInitializer()).getPoolInfo(poolKey.toId());
@@ -773,16 +767,16 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
      *      5) StakeVesting.allocate (50/50 AT reserve + full vault-half stake; unlocks are manual)
      *
      *      Prerequisites / follow-ups (do not skip when wiring production intake):
-     *        - DopplerLocker proxy MUST hold Orchestrator `AUTHORIZED_CONTRACT` so `_exec`
+     *        - DopplerLocker MUST hold Orchestrator `AUTHORIZED_CONTRACT` so `_exec`
      *          can reach FeeRouterFactory / PlayerVaultFactory / PlayerSetRegistry.
-     *        - `DopplerConfig` must be registered and initialized (modules + launch recipe).
+     *        - `DopplerConfig` must be registered (launch recipe); modules resolve via AddressBook.
      *        - Numeraire is native ETH (`address(0)`). Airlock treats `address(0)` as ETH
      *          (see `Airlock.migrate` / fee collect). Switch to WETH9 only if the recipe
      *          moves to an ERC-20 numeraire.
      *        - Callback gas: full deploy runs inside CvmRouter `maxCallbackGasLimit`.
      */
     function _onDeployReady(QueueEntry storage e) private {
-        address pbrFeeHub = tournamentRegistry.pbrFeeHubOf(e.leagueId);
+        address pbrFeeHub = _tournamentRegistry().pbrFeeHubOf(e.leagueId);
         if (pbrFeeHub == address(0)) revert Errors.HubNotRegistered(e.leagueId);
 
         // 1) FeeRouter — buyback destination for Rehype fees (idempotent via factory mapping).
@@ -809,7 +803,8 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
 
     function _deployFeeRouter(bytes32 playerId, address pbrFeeHub) private returns (address feeRouter) {
         feeRouter = abi.decode(
-            _exec(address(feeRouterFactory), abi.encodeCall(FeeRouterFactory.create, (playerId, pbrFeeHub))), (address)
+            _exec(address(_feeRouterFactory()), abi.encodeCall(FeeRouterFactory.create, (playerId, pbrFeeHub))),
+            (address)
         );
     }
 
@@ -825,9 +820,15 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
             revert Errors.SaltOccupied(asset);
         }
 
-        IDopplerConfig cfg = dopplerConfig;
+        IDopplerConfig cfg = _dopplerConfig();
         CreateParams memory params = cfg.buildCreateParams(
-            e.name, e.symbol, e.baseURI, feeRouter, e.tokenSalt, address(feeRouterFactory), address(orchestrator)
+            e.name,
+            e.symbol,
+            e.baseURI,
+            feeRouter,
+            e.tokenSalt,
+            address(_feeRouterFactory()),
+            _getAddress(_addressKey(Addresses.ORCHESTRATOR))
         );
         (asset,,,,) = Airlock(payable(cfg.airlock())).create(params);
         if (asset != e.tokenPredicted) revert Errors.DeployAddressMismatch(e.tokenPredicted, asset);
@@ -844,7 +845,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
             return (vault, stToken);
         }
 
-        address vaultFactory_ = dopplerConfig.vaultFactory();
+        address vaultFactory_ = _dopplerConfig().vaultFactory();
         // CreateX permissioned salt: `factory || 0x00 || entropy11` (deterministic; not vanity-mined).
         bytes11 stEntropy = bytes11(keccak256(abi.encodePacked(e.playerId, bytes2("st"))));
         bytes32 stTokenSalt = bytes32(uint256(uint160(vaultFactory_))) << 96 | bytes32(uint256(uint88(stEntropy)));
@@ -869,8 +870,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         address vault,
         address stToken
     ) private {
-        if (playerSetRegistry.playerExists(e.playerId)) {
-            PlayerSet memory set = playerSetRegistry.getPlayerSet(e.playerId);
+        IPlayerSetRegistry psr = _playerSetRegistry();
+        if (psr.playerExists(e.playerId)) {
+            PlayerSet memory set = psr.getPlayerSet(e.playerId);
             if (set.tokenData.token != asset) revert Errors.DeployAddressMismatch(asset, set.tokenData.token);
             if (set.dopplerData.feeRouter != feeRouter) {
                 revert Errors.DeployAddressMismatch(feeRouter, set.dopplerData.feeRouter);
@@ -884,7 +886,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
             return;
         }
 
-        IDopplerConfig cfg = dopplerConfig;
+        IDopplerConfig cfg = _dopplerConfig();
         PoolKey memory poolKey;
         (,,,,, poolKey,) = IDopplerHookInitializerView(cfg.poolInitializer()).getState(asset);
 
@@ -893,7 +895,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         activeTournaments[0] = e.leagueId;
 
         _exec(
-            address(playerSetRegistry),
+            address(psr),
             abi.encodeCall(
                 IPlayerSetRegistry.addPlayerSet,
                 (
@@ -914,27 +916,29 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
 
     /// @dev Idempotent: skip if vault already registered for the domestic league treasury.
     function _registerLeagueVault(bytes32 leagueId, address vault) private {
-        if (tournamentRegistry.isVaultRegistered(leagueId, vault)) return;
+        ITournamentRegistry tr = _tournamentRegistry();
+        if (tr.isVaultRegistered(leagueId, vault)) return;
 
         address[] memory vaults = new address[](1);
         vaults[0] = vault;
-        _exec(address(tournamentRegistry), abi.encodeCall(ITournamentRegistry.registerVaults, (leagueId, vaults)));
+        _exec(address(tr), abi.encodeCall(ITournamentRegistry.registerVaults, (leagueId, vaults)));
     }
 
     /// @dev Idempotent via `StakeVesting.allocate` (no-op once a position exists).
     function _allocateExcess(address asset) private {
-        address vesting = dopplerConfig.stakeVesting();
+        address vesting = _dopplerConfig().stakeVesting();
         if (vesting == address(0)) revert Errors.ZeroAddress();
         _exec(vesting, abi.encodeCall(IStakeVesting.allocate, (asset)));
     }
 
     function _exec(address target, bytes memory data) private returns (bytes memory) {
+        IOrchestrator orchestrator = IOrchestrator(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
         return orchestrator.execute(target, 0, data);
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Internal — helpers
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     function _entry(bytes32 playerId) private view returns (QueueEntry storage e) {
         uint256 idxPlus = _queueIndexPlusOne[playerId];

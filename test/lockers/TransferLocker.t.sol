@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { AddressKeys as Addresses } from "@addresses/AddressKeys.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
 import { LifecycleErrors as Errors } from "@errors/lockers/LifecycleErrors.sol";
 import { LifecycleQueueStatus, LifecycleReason, PendingLifecycle } from "@types/lockers/LifecycleTypes.sol";
@@ -25,34 +26,20 @@ contract TransferLockerTest is LockersTestBase {
     //  Init / admin
     // --------------------------------------------
 
-    function test_initialize_setsOwnerAndDeps() public view {
-        assertEq(transferLocker.owner(), address(orch));
-        assertEq(address(transferLocker.orchestrator()), address(orch));
-        assertEq(address(transferLocker.playerSetRegistry()), address(playerSetRegistry));
-        assertEq(address(transferLocker.tournamentRegistry()), address(tournamentRegistry));
+    function test_constructor_setsQueueWait() public view {
         assertEq(transferLocker.queueWait(), 24 hours);
-    }
-
-    function test_setEligibilityVerifier_once() public {
-        _ownerCall(
-            address(transferLocker), abi.encodeCall(TransferLocker.setEligibilityVerifier, (eligibilityVerifier))
-        );
-        assertEq(transferLocker.eligibilityVerifier(), eligibilityVerifier);
-
-        vm.expectRevert(Errors.AlreadySet.selector);
-        _ownerCall(address(transferLocker), abi.encodeCall(TransferLocker.setEligibilityVerifier, (makeAddr("other"))));
     }
 
     function test_setQueueWait_revertsZero() public {
         vm.expectRevert(Errors.NotConfigured.selector);
-        _ownerCall(address(transferLocker), abi.encodeCall(TransferLocker.setQueueWait, (0)));
+        _timelockCall(address(transferLocker), abi.encodeCall(TransferLocker.setQueueWait, (0)));
     }
 
     // --------------------------------------------
     //  Enqueue / unqueue
     // --------------------------------------------
 
-    function test_enqueue_byOwner() public {
+    function test_enqueue_byOrchestrator() public {
         bytes32[] memory ids = new bytes32[](1);
         ids[0] = PLAYER;
         uint32[] memory mins = new uint32[](1);
@@ -72,9 +59,7 @@ contract TransferLockerTest is LockersTestBase {
     }
 
     function test_enqueue_byEligibilityVerifier() public {
-        _ownerCall(
-            address(transferLocker), abi.encodeCall(TransferLocker.setEligibilityVerifier, (eligibilityVerifier))
-        );
+        ap.setName(Addresses.ELIGIBILITY_VERIFIER, eligibilityVerifier);
 
         bytes32[] memory ids = new bytes32[](1);
         ids[0] = PLAYER;

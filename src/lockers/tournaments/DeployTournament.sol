@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
-
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 
@@ -27,12 +24,14 @@ import { IPbrFeeHubFactory } from "@interfaces/markets/factories/IPbrFeeHubFacto
 
 /**
  * @title DeployTournament
- * @notice Ownable entry API for atomic tournament bootstrap (upgradeable singleton).
- * @dev Owner is the Orchestrator (same as registries / factories). Callers with
- *      `DEFAULT_ADMIN_ROLE` (EOA now, Safe later) invoke `deploy` via
+ * @notice Entry API for atomic tournament bootstrap (immutable singleton).
+ * @dev Callers with `DEFAULT_ADMIN_ROLE` (EOA now, Safe later) invoke `deploy` via
  *      `Orchestrator.execute`. Inner factory / registry writes also relay through
- *      `Orchestrator.execute` so targets see `msg.sender == Orchestrator`. This proxy must
+ *      `Orchestrator.execute` so targets see `msg.sender == Orchestrator`. This contract must
  *      hold `AUTHORIZED_CONTRACT` on the Orchestrator for those nested relays.
+ *
+ *      Deps (`TOURNAMENT_REGISTRY`, treasury/hub factories, Orchestrator) resolve via AddressBook
+ *      at call time — no local caches.
  *
  *      Unified `deploy` / `simulateDeploy` branch on `DeployParams.tournamentType`:
  *        - `DOMESTIC_LEAGUE`: deploy treasury + new fee hub, `registerHub`, create tournament
@@ -55,50 +54,40 @@ import { IPbrFeeHubFactory } from "@interfaces/markets/factories/IPbrFeeHubFacto
  *        - `getPbrTreasury(tournamentId)` is set
  *        - DopplerLocker may `queueAssets(leagueId, seasonId, playerIds)` and resolve the hub
  *
- *      Protocol deploy order:
- *        1. Deploy AddressProvider
- *        2. Deploy Oracle set
- *        3. Deploy all other contracts as upgradeable proxies
- *        4. Register all addresses on AddressProvider
- *        5. Initialize all contracts (resolve deps from AP + transfer ownership to Orchestrator)
- *        6. Deploy domestic leagues via this contract before DopplerLocker asset intake
- *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract DeployTournament is Initializable, AddressBook, Ownable {
-    IOrchestrator public orchestrator;
-    ITournamentRegistry public tournamentRegistry;
-
-    IPbrTreasuryFactory public pbrTreasuryFactory;
-    IPbrFeeHubFactory public pbrFeeHubFactory;
-
-    bool public factoriesConfigured;
-
+contract DeployTournament is AddressBook {
     // --------------------------------------------
-    //  Constructor / initialize
+    //  Access Control
     // --------------------------------------------
 
-    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
-        _disableInitializers();
+    modifier onlyOrchestrator() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.Unauthorized();
+        _;
     }
 
-    /**
-     * @notice Resolve deps from AddressProvider; transfer ownership to Orchestrator.
-     * @dev AddressProvider names for ORCHESTRATOR / TOURNAMENT_REGISTRY / factories must already
-     *      be registered. Sets `factoriesConfigured` so `deploy` may proceed.
-     */
-    function initialize() external initializer {
-        orchestrator = IOrchestrator(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-        pbrTreasuryFactory = IPbrTreasuryFactory(_getAddress(_addressKey(Addresses.PBR_TREASURY_FACTORY)));
-        pbrFeeHubFactory = IPbrFeeHubFactory(_getAddress(_addressKey(Addresses.PBR_FEE_HUB_FACTORY)));
+    // --------------------------------------------
+    //  Construction
+    // --------------------------------------------
 
-        factoriesConfigured = true;
+    /// @param addressProvider_ Canonical `AddressProvider`.
+    constructor(address addressProvider_) AddressBook(addressProvider_) { }
 
-        _transferOwnership(address(orchestrator));
+    // --------------------------------------------
+    //  AddressBook resolvers
+    // --------------------------------------------
+
+    function _tournamentRegistry() private view returns (ITournamentRegistry) {
+        return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+    }
+
+    function _pbrTreasuryFactory() private view returns (IPbrTreasuryFactory) {
+        return IPbrTreasuryFactory(_getAddress(_addressKey(Addresses.PBR_TREASURY_FACTORY)));
+    }
+
+    function _pbrFeeHubFactory() private view returns (IPbrFeeHubFactory) {
+        return IPbrFeeHubFactory(_getAddress(_addressKey(Addresses.PBR_FEE_HUB_FACTORY)));
     }
 
     // --------------------------------------------
@@ -106,7 +95,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     // --------------------------------------------
 
     /// @notice Deploy a tournament of `params.tournamentType` (treasury + hub wiring + season stubs).
-    function deploy(DeployParams calldata params) external onlyOwner returns (DeployResult memory result) {
+    function deploy(DeployParams calldata params) external onlyOrchestrator returns (DeployResult memory result) {
         result = _deploy(params);
     }
 
@@ -159,7 +148,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
             return _resolveHubs(leagueIds);
         }
         if (t == TournamentType.INTERNATIONAL) {
-            feeHubs = tournamentRegistry.getAllDomesticHubs();
+            feeHubs = _tournamentRegistry().getAllDomesticHubs();
             if (feeHubs.length == 0) revert Errors.EmptyHubs();
             return feeHubs;
         }
@@ -167,12 +156,13 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     }
 
     function _resolveHubs(bytes32[] calldata leagueIds) internal view returns (Hub[] memory feeHubs) {
+        ITournamentRegistry tr = _tournamentRegistry();
         uint256 length = leagueIds.length;
         feeHubs = new Hub[](length);
         for (uint256 i; i < length; ++i) {
             bytes32 leagueId = leagueIds[i];
             if (leagueId == bytes32(0)) revert Errors.ZeroId();
-            address hubAddr = tournamentRegistry.pbrFeeHubOf(leagueId);
+            address hubAddr = tr.pbrFeeHubOf(leagueId);
             if (hubAddr == address(0)) revert Errors.HubNotRegistered(leagueId);
             feeHubs[i] = Hub({ leagueId: leagueId, pbrFeeHub: hubAddr });
         }
@@ -190,7 +180,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     function _deployTreasury(BootstrapParams calldata b) internal returns (address pbrTreasury) {
         pbrTreasury = abi.decode(
             _exec(
-                address(pbrTreasuryFactory),
+                address(_pbrTreasuryFactory()),
                 abi.encodeCall(IPbrTreasuryFactory.create, (b.tournamentId, b.initialSeasonStartYear, b.treasurySalt))
             ),
             (address)
@@ -198,12 +188,13 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     }
 
     function _createAndRegisterHub(bytes32 leagueId, address pbrTreasury) internal returns (address hubAddr) {
+        ITournamentRegistry tr = _tournamentRegistry();
         hubAddr = abi.decode(
-            _exec(address(pbrFeeHubFactory), abi.encodeCall(IPbrFeeHubFactory.create, (leagueId, pbrTreasury))),
+            _exec(address(_pbrFeeHubFactory()), abi.encodeCall(IPbrFeeHubFactory.create, (leagueId, pbrTreasury))),
             (address)
         );
         _exec(
-            address(tournamentRegistry),
+            address(tr),
             abi.encodeCall(ITournamentRegistry.registerHub, (Hub({ leagueId: leagueId, pbrFeeHub: hubAddr })))
         );
     }
@@ -214,8 +205,9 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
         Hub[] memory feeHubs,
         address pbrTreasury
     ) internal {
+        ITournamentRegistry tr = _tournamentRegistry();
         _exec(
-            address(tournamentRegistry),
+            address(tr),
             abi.encodeCall(ITournamentRegistry.createTournament, (b.tournamentId, tournamentType, feeHubs, pbrTreasury))
         );
 
@@ -225,7 +217,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
             if (s.seasonId == bytes32(0) || s.seasonStartYear == 0) revert Errors.ZeroId();
             if (s.finalRound == 0) revert Errors.ZeroId();
             _exec(
-                address(tournamentRegistry),
+                address(tr),
                 abi.encodeCall(
                     ITournamentRegistry.openSeason, (b.tournamentId, s.seasonId, s.seasonStartYear, s.finalRound)
                 )
@@ -242,12 +234,11 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     // --------------------------------------------
 
     function _validateBootstrap(BootstrapParams calldata b) internal view {
-        if (!factoriesConfigured) revert Errors.NotConfigured();
         if (b.tournamentId == bytes32(0)) revert Errors.ZeroId();
         if (b.initialSeasonStartYear == 0) revert Errors.ZeroSeason();
         if (b.treasurySalt == bytes32(0)) revert Errors.ZeroSalt();
         // Prevent double-bootstrap of the same tournament id (and league hub for DOMESTIC_LEAGUE).
-        if (tournamentRegistry.tournamentExists(b.tournamentId)) revert Errors.AlreadySet();
+        if (_tournamentRegistry().tournamentExists(b.tournamentId)) revert Errors.AlreadySet();
     }
 
     function _simulateBootstrap(BootstrapParams calldata b) internal view {
@@ -267,6 +258,6 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     // --------------------------------------------
 
     function _exec(address target, bytes memory data) internal returns (bytes memory) {
-        return orchestrator.execute(target, 0, data);
+        return IOrchestrator(_getAddress(_addressKey(Addresses.ORCHESTRATOR))).execute(target, 0, data);
     }
 }

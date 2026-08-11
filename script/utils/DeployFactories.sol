@@ -4,36 +4,31 @@ pragma solidity ^0.8.34;
 import { console2 as console } from "forge-std/console2.sol";
 
 import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { DeployTournament } from "@deployments/tournaments/DeployTournament.sol";
 import { FeeRouterFactory } from "@markets/factories/FeeRouterFactory.sol";
 import { PbrFeeHubFactory } from "@markets/factories/PbrFeeHubFactory.sol";
 import { PbrTreasuryFactory } from "@vaults/factories/PbrTreasuryFactory.sol";
 import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 
 import { AddressProviderOps } from "./AddressProviderOps.sol";
-import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployFactories
- * @notice Market + vault factories; register on AP; initialize DeployTournament.
+ * @notice Market + vault factories; register on AP.
  * @dev All four factories are immutable (`new` after ORCHESTRATOR + TIMELOCK are on AP).
- *      Shared beacons are owned by TIMELOCK. DeployTournament initialize runs here so factory
- *      names already exist on AddressProvider.
+ *      Shared beacons are owned by TIMELOCK. DeployTournament is a separate immutable deploy.
  */
-abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
+abstract contract DeployFactories is AddressProviderOps {
     struct FactoryDeployment {
         address feeRouterFactory;
         address pbrFeeHubFactory;
         address pbrTreasuryFactory;
         address playerVaultFactory;
-        address deployTournamentImpl;
     }
 
     function _deployFactories(address deployer) internal returns (FactoryDeployment memory f) {
         if (deployer == address(0)) revert("deployer required");
 
         address addressProvider = address(_requireAddressProvider());
-        address deployTournament = _requireName(Keys.DEPLOY_TOURNAMENT);
         _requireName(Keys.ORCHESTRATOR);
         _requireName(Keys.TIMELOCK);
 
@@ -47,15 +42,10 @@ abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
         _registerName(deployer, Keys.PBR_TREASURY_FACTORY, f.pbrTreasuryFactory);
         _registerName(deployer, Keys.PBR_FEE_HUB_FACTORY, f.pbrFeeHubFactory);
 
-        // DeployTournament resolves factories from AP — initialize only after the names above exist.
-        f.deployTournamentImpl = address(new DeployTournament(addressProvider));
-        _upgradeAndCall(deployTournament, f.deployTournamentImpl, abi.encodeCall(DeployTournament.initialize, ()));
-
-        console.log("=== DeployFactories ===");
-        console.log("FeeRouterFactory (immutable)", f.feeRouterFactory);
-        console.log("PbrFeeHubFactory (immutable)", f.pbrFeeHubFactory);
-        console.log("PlayerVaultFactory (immutable)", f.playerVaultFactory);
-        console.log("PbrTreasuryFactory (immutable)", f.pbrTreasuryFactory);
-        console.log("DeployTournament (impl)", f.deployTournamentImpl);
+        console.log("=== DeployFactories (immutable) ===");
+        console.log("FeeRouterFactory", f.feeRouterFactory);
+        console.log("PbrFeeHubFactory", f.pbrFeeHubFactory);
+        console.log("PlayerVaultFactory", f.playerVaultFactory);
+        console.log("PbrTreasuryFactory", f.pbrTreasuryFactory);
     }
 }

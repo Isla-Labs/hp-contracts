@@ -28,12 +28,12 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         address orchestrator = _requireName(Keys.ORCHESTRATOR);
         address tournamentRegistry = _requireName(Keys.TOURNAMENT_REGISTRY);
         address playerSetRegistry = _requireName(Keys.PLAYER_SET_REGISTRY);
-        address deployTournament = _requireName(Keys.DEPLOY_TOURNAMENT);
 
         // Soft-require lockers / factories so handoff can proceed if partial — but warn.
         // TEMP: ROUND_MANAGER parked with data plane — restore when DeployData returns.
         // _warnIfMissing(Keys.ROUND_MANAGER);
         _warnIfMissing(Keys.STAKE_VESTING);
+        _warnIfMissing(Keys.DEPLOY_TOURNAMENT);
         _warnIfMissing(Keys.DOPPLER_CONFIG);
         _warnIfMissing(Keys.DOPPLER_LOCKER);
         _warnIfMissing(Keys.TRANSFER_LOCKER);
@@ -44,22 +44,16 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
 
         _transferProxyAdmin(tournamentRegistry, orchestrator);
         _transferProxyAdmin(playerSetRegistry, orchestrator);
-        _transferProxyAdmin(deployTournament, orchestrator);
         // _transferProxyAdminIfSet(Keys.ROUND_MANAGER, orchestrator);
 
         _transferProxyAdminIfSet(Keys.STAKE_VESTING, orchestrator);
-        _transferProxyAdminIfSet(Keys.DOPPLER_CONFIG, orchestrator);
-        _transferProxyAdminIfSet(Keys.DOPPLER_LOCKER, orchestrator);
-        _transferProxyAdminIfSet(Keys.TRANSFER_LOCKER, orchestrator);
-        _transferProxyAdminIfSet(Keys.FEE_ROUTER_FACTORY, orchestrator);
-        // PLAYER_VAULT_FACTORY / PBR_TREASURY_FACTORY are immutable — no ProxyAdmin.
-        _transferProxyAdminIfSet(Keys.PBR_FEE_HUB_FACTORY, orchestrator);
+        // Immutable — no ProxyAdmin: DEPLOY_TOURNAMENT, DOPPLER_CONFIG, DOPPLER_LOCKER,
+        // TRANSFER_LOCKER, FEE_ROUTER_FACTORY, PLAYER_VAULT_FACTORY, PBR_TREASURY_FACTORY,
+        // PBR_FEE_HUB_FACTORY.
 
         console.log("=== DeployHandoff ===");
         console.log("AddressProvider DEFAULT_ADMIN remains deployer (transfer to ConstitutionalTimelock later)");
-        console.log(
-            "ProxyAdmins transferred for registries / DT / StakeVesting / lockers / market factories ->", orchestrator
-        );
+        console.log("ProxyAdmins transferred for registries / StakeVesting ->", orchestrator);
     }
 
     function _transferProxyAdminIfSet(string memory name, address newOwner) internal {

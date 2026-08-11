@@ -89,7 +89,7 @@ make deploy-base-sepolia-factories
 make deploy-base-sepolia-handoff             # AP + ProxyAdmins → Orchestrator
 ```
 
-Upgradeable protocol singletons use `InitGuard` → TUP; ProxyAdmins move to Orchestrator at handoff. Oracle ProxyAdmins stay with OWNER. Per-market FeeRouter / PlayerVault and per-tournament hub / treasury deploys happen later via DopplerLocker / DeployTournament flows.
+Upgradeable protocol singletons use `InitGuard` → TUP; ProxyAdmins move to Orchestrator at handoff. Oracle ProxyAdmins stay with OWNER. Immutable singletons include `DeployTournament`, `DopplerConfig`, `DopplerLocker`, `TransferLocker`, and the market/vault factories. Per-market FeeRouter / PlayerVault and per-tournament hub / treasury deploys happen later via DopplerLocker / DeployTournament flows.
 
 ## Blueprint
 

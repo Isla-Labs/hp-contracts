@@ -26,7 +26,8 @@ Order inside DeployAll:
 2. Seed Preconfig (incl. existing oracle) onto AP  
 3. Deploy InitGuard shells + Orchestrator (+ StakeVesting)  
 4. Register all protocol names  
-5. Initialize: registries → factories → StakeVesting → DopplerConfig → lockers → DeployTournament  
+5. Initialize: registries → StakeVesting  
+   (`DeployTournament` / `DopplerConfig` / `DopplerLocker` / `TransferLocker` + factories are immutable — constructed at register, no `initialize`)
 6. Authorize DeployTournament + DopplerLocker  
 7. **Routers** (pre-handoff, direct `setName`): zAMM stack + StakeRouter + TradeRouter  
 8. Handoff AP + ProxyAdmins → Orchestrator  
@@ -84,8 +85,7 @@ Deploy upgradeable shells (InitGuard → Transparent proxy) and implementations.
 | Contract | Name key | Notes |
 |---|---|---|
 | `Orchestrator` | `ORCHESTRATOR` | Not upgradeable; `constructor(admin)` grants `DEFAULT_ADMIN_ROLE` |
-| `DeployTournament` | `DEPLOY_TOURNAMENT` | Proxy only here; **init deferred** until factories are registered |
-| | | Grant `AUTHORIZED_CONTRACT` on Orchestrator to the DeployTournament proxy |
+| `DeployTournament` | `DEPLOY_TOURNAMENT` | Immutable; deps via AddressBook; grant `AUTHORIZED_CONTRACT` on Orchestrator |
 
 ### Registries
 
@@ -98,8 +98,9 @@ Deploy upgradeable shells (InitGuard → Transparent proxy) and implementations.
 
 | Contract | Name key | Notes |
 |---|---|---|
-| `DopplerLocker` | `DOPPLER_LOCKER` | Impl ctor reads `CVM_ROUTER` from AP (immutable) |
-| `TransferLocker` | `TRANSFER_LOCKER` | |
+| `DopplerConfig` | `DOPPLER_CONFIG` | Immutable; launch recipe in ctor; modules via AddressBook |
+| `DopplerLocker` | `DOPPLER_LOCKER` | Immutable; ctor binds `CVM_ROUTER`; no `initialize` |
+| `TransferLocker` | `TRANSFER_LOCKER` | Immutable; ctor binds `CVM_ROUTER`; registries via AddressBook |
 
 ### Factories
 
@@ -176,9 +177,9 @@ function initialize() external initializer {
 |---|---|---|
 | Registries | After both registry names + `ORCHESTRATOR` on AP | Cross-registry + Orchestrator |
 | RoundManager | After `ORCHESTRATOR` + `TOURNAMENT_REGISTRY` | Orchestrator |
-| Lockers | After `ORCHESTRATOR` (+ registries for TransferLocker; `CVM_ROUTER` already in DopplerLocker ctor) | Orchestrator / registries |
+| DopplerConfig / DopplerLocker / TransferLocker | Construct after `CVM_ROUTER` on AP (no `initialize`) | AddressBook at call time |
 | Factories | After `ORCHESTRATOR` on AP | Orchestrator (+ deploy beacon impls) |
-| **DeployTournament** | **After** treasury + fee-hub factory names on AP | Orchestrator, TournamentRegistry, factories; sets `factoriesConfigured` |
+| DeployTournament | Construct anytime after AP; `deploy` needs factories + registry on AP | AddressBook at call time |
 
 Beacon / CREATE3 **instances** (`PbrTreasury`, `PbrFeeHub`, `FeeRouter`, `PlayerVault`) are initialized by factories at market/tournament create time — not in this protocol bootstrap.
 
@@ -239,4 +240,4 @@ Contract.owner         →  Orchestrator (set in initialize)
 
 Mainnet mirrors use `deploy-base-*` without `-sepolia`.
 
-> Staged scripts today may register and initialize in the same broadcast for a given stack. That is fine as long as **all AddressBook dependencies for that contract are already on AP before its `initialize` runs**. DeployTournament is the explicit deferred-init example (proxy in one step, `initialize` in the factories step).
+> Staged scripts today may register and initialize in the same broadcast for a given stack. That is fine as long as **all AddressBook dependencies for that contract are already on AP before its `initialize` runs** (where `initialize` still exists). Immutable modules (`DeployTournament`, lockers, factories) only need deps on AP before first operational call.

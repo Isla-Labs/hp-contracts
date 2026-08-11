@@ -15,13 +15,6 @@ import { MockPbrFeeHub } from "./mocks/MockPbrFactories.sol";
 import { LockersTestBase } from "./LockersTestBase.sol";
 
 contract DeployTournamentTest is LockersTestBase {
-    function test_initialize_setsFactories() public view {
-        assertEq(deployTournament.owner(), address(orch));
-        assertTrue(deployTournament.factoriesConfigured());
-        assertEq(address(deployTournament.pbrTreasuryFactory()), address(treasuryFactory));
-        assertEq(address(deployTournament.pbrFeeHubFactory()), address(hubFactory));
-    }
-
     function test_deploy_domesticLeague() public {
         DeployParams memory params = _leagueParams(LEAGUE, SEASON);
 

@@ -35,7 +35,7 @@ import { ProxyUtils } from "../utils/ProxyUtils.sol";
  *      5) Initialize in dependency order
  *      6) Authorize DeployTournament + DopplerLocker + TransferLocker
  *      7) Deploy + register zAMM stack, StakeRouter, TradeRouter
- *      8) Handoff ProxyAdmins → Orchestrator (vault factories are immutable — no ProxyAdmin)
+ *      8) Handoff ProxyAdmins → Orchestrator (DeployTournament / Doppler* / TransferLocker + vault/market factories are immutable — no ProxyAdmin)
  *      9) Transfer Orchestrator DEFAULT_ADMIN → owner (multisig)
  *
  *      Env: PRIVATE_KEY; optional OWNER_ADDRESS / DAO_ADDRESS (default Preconfig.hpMultisig).
@@ -59,11 +59,7 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         address initGuard;
         address tournamentRegistryImpl;
         address playerSetRegistryImpl;
-        address deployTournamentImpl;
         address stakeVestingImpl;
-        address dopplerConfigImpl;
-        address dopplerLockerImpl;
-        address transferLockerImpl;
         address zRouter;
         address zQuoterBase;
         address zQuoter;
@@ -189,21 +185,14 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
 
         d.tournamentRegistry = _deployInitGuardProxy(guard, deployer);
         d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
-        d.deployTournament = _deployInitGuardProxy(guard, deployer);
         d.stakeVesting = _deployInitGuardProxy(guard, deployer);
-        d.dopplerConfig = _deployInitGuardProxy(guard, deployer);
-        d.dopplerLocker = _deployInitGuardProxy(guard, deployer);
-        d.transferLocker = _deployInitGuardProxy(guard, deployer);
 
-        // Impls after CVM_ROUTER is on AP (locker ctors bind it immutably).
-        // Market/vault factories are immutable and constructed after ORCHESTRATOR + TIMELOCK.
+        // Impls after CVM_ROUTER is on AP (Oracle consumers bind it in their ctor).
+        // DeployTournament / Doppler* / TransferLocker + market/vault factories are immutable
+        // (constructed in _registerProtocol).
         d.tournamentRegistryImpl = address(new TournamentRegistry(apAddr));
         d.playerSetRegistryImpl = address(new PlayerSetRegistry(apAddr));
-        d.deployTournamentImpl = address(new DeployTournament(apAddr));
         d.stakeVestingImpl = address(new StakeVesting(apAddr));
-        d.dopplerConfigImpl = address(new DopplerConfig(apAddr));
-        d.dopplerLockerImpl = address(new DopplerLocker(apAddr));
-        d.transferLockerImpl = address(new TransferLocker(apAddr));
 
         return d;
     }
@@ -216,15 +205,24 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         console.log("--- register protocol ---");
         _set(ap, Keys.ORCHESTRATOR, d.orchestrator);
 
-        // Immutable factories require TIMELOCK on AP at construction (beacon owner).
+        // Immutable contracts: factories need TIMELOCK on AP (beacon owner); DopplerLocker binds CVM_ROUTER.
+        // DopplerConfig seeds launch recipe only; modules resolve via AddressBook at call time.
         d.feeRouterFactory = address(new FeeRouterFactory(address(ap)));
         d.pbrFeeHubFactory = address(new PbrFeeHubFactory(address(ap)));
         d.playerVaultFactory = address(new PlayerVaultFactory(address(ap)));
         d.pbrTreasuryFactory = address(new PbrTreasuryFactory(address(ap)));
+        d.dopplerConfig = address(new DopplerConfig(address(ap)));
+        d.dopplerLocker = address(new DopplerLocker(address(ap)));
+        d.transferLocker = address(new TransferLocker(address(ap)));
+        d.deployTournament = address(new DeployTournament(address(ap)));
         console.log("FEE_ROUTER_FACTORY", d.feeRouterFactory);
         console.log("PBR_FEE_HUB_FACTORY", d.pbrFeeHubFactory);
         console.log("PLAYER_VAULT_FACTORY", d.playerVaultFactory);
         console.log("PBR_TREASURY_FACTORY", d.pbrTreasuryFactory);
+        console.log("DOPPLER_CONFIG", d.dopplerConfig);
+        console.log("DOPPLER_LOCKER", d.dopplerLocker);
+        console.log("TRANSFER_LOCKER", d.transferLocker);
+        console.log("DEPLOY_TOURNAMENT", d.deployTournament);
 
         _set(ap, Keys.TOURNAMENT_REGISTRY, d.tournamentRegistry);
         _set(ap, Keys.PLAYER_SET_REGISTRY, d.playerSetRegistry);
@@ -251,20 +249,10 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         _upgradeAndCall(d.tournamentRegistry, d.tournamentRegistryImpl, "");
         _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, "");
 
-        // 2) Market/vault factories are immutable — already constructed in _registerProtocol
+        // 2) DeployTournament / Doppler* / TransferLocker + factories are immutable — constructed in _registerProtocol
 
         // 3) StakeVesting (needs registry + HP_TREASURY)
         _upgradeAndCall(d.stakeVesting, d.stakeVestingImpl, abi.encodeCall(StakeVesting.initialize, ()));
-
-        // 4) DopplerConfig (needs factories + StakeVesting + Doppler modules)
-        _upgradeAndCall(d.dopplerConfig, d.dopplerConfigImpl, abi.encodeCall(DopplerConfig.initialize, ()));
-
-        // 5) Lockers
-        _upgradeAndCall(d.dopplerLocker, d.dopplerLockerImpl, abi.encodeCall(DopplerLocker.initialize, ()));
-        _upgradeAndCall(d.transferLocker, d.transferLockerImpl, abi.encodeCall(TransferLocker.initialize, ()));
-
-        // 6) DeployTournament (needs treasury + fee-hub factories)
-        _upgradeAndCall(d.deployTournament, d.deployTournamentImpl, abi.encodeCall(DeployTournament.initialize, ()));
     }
 
     // -------------------------------------------------------------------------

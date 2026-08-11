@@ -2,7 +2,6 @@
 pragma solidity ^0.8.34;
 
 import { Ownable } from "@openzeppelin/access/Ownable.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
@@ -17,16 +16,17 @@ import { WAD } from "@doppler/src/types/Wad.sol";
 
 /**
  * @title DopplerConfig
- * @notice Standalone launch recipe + Doppler module wiring + `CreateParams` encoding for `DopplerLocker`.
- * @dev Ownable → Orchestrator. Locker reads config / buildCreateParams via external calls (keeps deploy path lean).
+ * @notice Standalone launch recipe + `CreateParams` encoding for `DopplerLocker`.
+ * @dev Immutable singleton. Launch recipe is Timelock-governed storage; Doppler module addresses
+ *      resolve via AddressBook at call time (no local caches / configure setters).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
-    // -------------------------------------------------------------------------
+contract DopplerConfig is AddressBook, IDopplerConfig {
+    // --------------------------------------------
     //  Launch recipe
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     uint256 public initialSupply;
     uint256 public numTokensToSell;
@@ -65,50 +65,82 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
 
     DopplerTypes.Curve[] internal _bondingCurves;
 
-    // -------------------------------------------------------------------------
-    //  Module addresses
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  Access Control
+    // --------------------------------------------
 
-    address public tokenFactory;
-    address public vaultFactory;
-    address public airlock;
-    address public governanceFactory;
-    address public poolInitializer;
-    address public liquidityMigrator;
-    address public rehypeHookInitializer;
-    address public rehypeHookMigrator;
-    address public stakeVesting;
-    address public hpTreasury;
-
-    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
-        _disableInitializers();
+    modifier onlyTimelock() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TIMELOCK))) revert Errors.Unauthorized();
+        _;
     }
 
-    /**
-     * @notice Seed default launch recipe + resolve modules from AddressProvider; ownership → Orchestrator.
-     */
-    function initialize() external initializer {
+    // --------------------------------------------
+    //  Construction
+    // --------------------------------------------
+
+    /// @param addressProvider_ Canonical `AddressProvider`.
+    /// @dev Seeds default launch recipe only. Module addresses resolve via AddressBook at call time.
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
         _applyLaunchConfig(DopplerTypes.defaultMarketLaunchConfig());
-
-        tokenFactory = _getAddress(_addressKey(Addresses.DN404_FACTORY));
-        vaultFactory = _getAddress(_addressKey(Addresses.PLAYER_VAULT_FACTORY));
-        airlock = _getAddress(_addressKey(Addresses.DOPPLER_AIRLOCK));
-        governanceFactory = _getAddress(_addressKey(Addresses.LAUNCHPAD_GOVERNANCE_FACTORY));
-        poolInitializer = _getAddress(_addressKey(Addresses.DOPPLER_HOOK_INITIALIZER));
-        liquidityMigrator = _getAddress(_addressKey(Addresses.DOPPLER_HOOK_MIGRATOR));
-        rehypeHookInitializer = _getAddress(_addressKey(Addresses.REHYPE_DOPPLER_HOOK_INITIALIZER));
-        rehypeHookMigrator = _getAddress(_addressKey(Addresses.REHYPE_DOPPLER_HOOK_MIGRATOR));
-        stakeVesting = _getAddress(_addressKey(Addresses.STAKE_VESTING));
-        hpTreasury = _getAddress(_addressKey(Addresses.HP_TREASURY));
-
-        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  AddressBook module views
+    // --------------------------------------------
+
+    /// @inheritdoc IDopplerConfig
+    function tokenFactory() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.DN404_FACTORY));
+    }
+
+    /// @inheritdoc IDopplerConfig
+    function vaultFactory() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.PLAYER_VAULT_FACTORY));
+    }
+
+    /// @inheritdoc IDopplerConfig
+    function airlock() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.DOPPLER_AIRLOCK));
+    }
+
+    /// @inheritdoc IDopplerConfig
+    function governanceFactory() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.LAUNCHPAD_GOVERNANCE_FACTORY));
+    }
+
+    /// @inheritdoc IDopplerConfig
+    function poolInitializer() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.DOPPLER_HOOK_INITIALIZER));
+    }
+
+    /// @inheritdoc IDopplerConfig
+    function liquidityMigrator() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.DOPPLER_HOOK_MIGRATOR));
+    }
+
+    /// @inheritdoc IDopplerConfig
+    function rehypeHookInitializer() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.REHYPE_DOPPLER_HOOK_INITIALIZER));
+    }
+
+    /// @inheritdoc IDopplerConfig
+    function rehypeHookMigrator() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.REHYPE_DOPPLER_HOOK_MIGRATOR));
+    }
+
+    /// @inheritdoc IDopplerConfig
+    function stakeVesting() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.STAKE_VESTING));
+    }
+
+    /// @inheritdoc IDopplerConfig
+    function hpTreasury() external view returns (address) {
+        return _getAddress(_addressKey(Addresses.HP_TREASURY));
+    }
+
+    // --------------------------------------------
     //  Views
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     /// @inheritdoc IDopplerConfig
     function bondingCurves() external view returns (DopplerTypes.Curve[] memory) {
@@ -171,12 +203,12 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
         );
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Admin — launch recipe
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     /// @inheritdoc IDopplerConfig
-    function setMarketLaunchConfig(DopplerTypes.MarketLaunchConfig memory config_) external onlyOwner {
+    function setMarketLaunchConfig(DopplerTypes.MarketLaunchConfig memory config_) external onlyTimelock {
         _applyLaunchConfig(config_);
         emit Events.MarketLaunchConfigUpdated(
             config_.initialSupply, config_.numTokensToSell, config_.farTick, config_.curves.length
@@ -184,99 +216,72 @@ contract DopplerConfig is Initializable, AddressBook, Ownable, IDopplerConfig {
     }
 
     /// @inheritdoc IDopplerConfig
-    function setBondingCurves(DopplerTypes.Curve[] memory curves_) external onlyOwner {
+    function setBondingCurves(DopplerTypes.Curve[] memory curves_) external onlyTimelock {
         _setBondingCurves(curves_);
         emit Events.BondingCurvesUpdated(curves_.length);
     }
 
     /// @inheritdoc IDopplerConfig
-    function setGraduationPolicy(uint256 minGraduateProceeds_, uint32 minBondingDuration_) external onlyOwner {
+    function setGraduationPolicy(uint256 minGraduateProceeds_, uint32 minBondingDuration_) external onlyTimelock {
         minGraduateProceeds = minGraduateProceeds_;
         minBondingDuration = minBondingDuration_;
         emit Events.GraduationPolicyUpdated(minGraduateProceeds_, minBondingDuration_);
     }
 
     /// @inheritdoc IDopplerConfig
-    function setFeeDistribution(FeeDistributionInfo calldata feeDistribution_) external onlyOwner {
+    function setFeeDistribution(FeeDistributionInfo calldata feeDistribution_) external onlyTimelock {
         _validateFeeDistribution(feeDistribution_);
         feeDistribution = feeDistribution_;
         emit Events.FeeDistributionUpdated();
     }
 
-    // -------------------------------------------------------------------------
-    //  Admin — modules
-    // -------------------------------------------------------------------------
-
-    /// @inheritdoc IDopplerConfig
-    function configureDeployModules(address tokenFactory_, address vaultFactory_, address airlock_) external onlyOwner {
-        if (tokenFactory_ == address(0) || vaultFactory_ == address(0) || airlock_ == address(0)) {
-            revert Errors.ZeroAddress();
-        }
-        tokenFactory = tokenFactory_;
-        vaultFactory = vaultFactory_;
-        airlock = airlock_;
-        emit Events.DeployModulesConfigured(tokenFactory_, vaultFactory_, airlock_);
-    }
-
-    /// @inheritdoc IDopplerConfig
-    function configureDopplerModules(
-        address governanceFactory_,
-        address poolInitializer_,
-        address liquidityMigrator_,
-        address rehypeHookInitializer_,
-        address rehypeHookMigrator_
-    ) external onlyOwner {
-        if (
-            governanceFactory_ == address(0) || poolInitializer_ == address(0) || liquidityMigrator_ == address(0)
-                || rehypeHookInitializer_ == address(0) || rehypeHookMigrator_ == address(0)
-        ) {
-            revert Errors.ZeroAddress();
-        }
-        governanceFactory = governanceFactory_;
-        poolInitializer = poolInitializer_;
-        liquidityMigrator = liquidityMigrator_;
-        rehypeHookInitializer = rehypeHookInitializer_;
-        rehypeHookMigrator = rehypeHookMigrator_;
-    }
-
-    /// @inheritdoc IDopplerConfig
-    function configureLaunchpadRecipients(address stakeVesting_, address hpTreasury_) external onlyOwner {
-        if (stakeVesting_ == address(0) || hpTreasury_ == address(0)) revert Errors.ZeroAddress();
-        stakeVesting = stakeVesting_;
-        hpTreasury = hpTreasury_;
-    }
-
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Internal
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+
+    /// @dev Batch-resolve Doppler module addresses from AddressProvider.
+    ///      Index: 0 tokenFactory, 1 vaultFactory, 2 airlock, 3 governanceFactory,
+    ///      4 poolInitializer, 5 liquidityMigrator, 6 rehypeHookInitializer, 7 rehypeHookMigrator,
+    ///      8 stakeVesting, 9 hpTreasury.
+    function _moduleAddresses() private view returns (address[] memory) {
+        string[] memory names = new string[](10);
+        names[0] = Addresses.DN404_FACTORY;
+        names[1] = Addresses.PLAYER_VAULT_FACTORY;
+        names[2] = Addresses.DOPPLER_AIRLOCK;
+        names[3] = Addresses.LAUNCHPAD_GOVERNANCE_FACTORY;
+        names[4] = Addresses.DOPPLER_HOOK_INITIALIZER;
+        names[5] = Addresses.DOPPLER_HOOK_MIGRATOR;
+        names[6] = Addresses.REHYPE_DOPPLER_HOOK_INITIALIZER;
+        names[7] = Addresses.REHYPE_DOPPLER_HOOK_MIGRATOR;
+        names[8] = Addresses.STAKE_VESTING;
+        names[9] = Addresses.HP_TREASURY;
+        return _getAddresses(_addressKeys(names));
+    }
 
     function _dopplerModules(
         address feeRouterFactory_,
         address integrator_
     ) private view returns (DopplerTypes.DopplerModules memory m) {
-        if (
-            tokenFactory == address(0) || vaultFactory == address(0) || airlock == address(0)
-                || governanceFactory == address(0) || poolInitializer == address(0) || liquidityMigrator == address(0)
-                || rehypeHookInitializer == address(0) || rehypeHookMigrator == address(0) || stakeVesting == address(0)
-                || hpTreasury == address(0)
-        ) {
-            revert Errors.NotConfigured();
+        if (feeRouterFactory_ == address(0) || integrator_ == address(0)) {
+            revert Errors.ZeroAddress();
         }
-        if (feeRouterFactory_ == address(0) || integrator_ == address(0)) revert Errors.ZeroAddress();
 
-        m.airlock = airlock;
-        m.tokenFactory = tokenFactory;
-        m.governanceFactory = governanceFactory;
-        m.poolInitializer = poolInitializer;
-        m.liquidityMigrator = liquidityMigrator;
-        m.rehypeHookInitializer = rehypeHookInitializer;
-        m.rehypeHookMigrator = rehypeHookMigrator;
+        address[] memory mods = _moduleAddresses();
+        address airlock_ = mods[2];
+
+        m.airlock = airlock_;
+        m.tokenFactory = mods[0];
+        m.governanceFactory = mods[3];
+        m.poolInitializer = mods[4];
+        m.liquidityMigrator = mods[5];
+        m.rehypeHookInitializer = mods[6];
+        m.rehypeHookMigrator = mods[7];
         m.feeRouterFactory = feeRouterFactory_;
         m.numeraire = address(0); // native ETH — Airlock convention
         m.integrator = integrator_;
-        m.airlockOwner = Ownable(airlock).owner();
-        m.stakeVesting = stakeVesting;
-        m.hpTreasury = hpTreasury;
+        m.airlockOwner = Ownable(airlock_).owner();
+        m.stakeVesting = mods[8];
+        m.hpTreasury = mods[9];
     }
 
     function _applyLaunchConfig(DopplerTypes.MarketLaunchConfig memory config_) private {

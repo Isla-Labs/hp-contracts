@@ -2,7 +2,6 @@
 pragma solidity ^0.8.34;
 
 import { Test } from "forge-std/Test.sol";
-import { TransparentUpgradeableProxy } from "@openzeppelin/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 import { AddressProvider } from "@src/AddressProvider.sol";
 import { AddressKeys as Addresses } from "@addresses/AddressKeys.sol";
@@ -31,6 +30,7 @@ abstract contract LockersTestBase is Test {
     bytes32 internal constant PLAYER_B = keccak256("player-2");
 
     address internal dao = makeAddr("dao");
+    address internal timelock = makeAddr("timelock");
     address internal eligibilityVerifier = makeAddr("eligibilityVerifier");
     address internal hookDoppler = makeAddr("hookDoppler");
     address internal hookMigrator = makeAddr("hookMigrator");
@@ -67,6 +67,7 @@ abstract contract LockersTestBase is Test {
         stakeVesting = new MockStakeVesting();
 
         ap.setName(Addresses.ORCHESTRATOR, address(orch));
+        ap.setName(Addresses.TIMELOCK, timelock);
         ap.setName(Addresses.PLAYER_SET_REGISTRY, address(playerSetRegistry));
         ap.setName(Addresses.TOURNAMENT_REGISTRY, address(tournamentRegistry));
         ap.setName(Addresses.FEE_ROUTER_FACTORY, address(feeRouterFactory));
@@ -98,33 +99,19 @@ abstract contract LockersTestBase is Test {
     }
 
     function _deployTransferLocker() internal returns (TransferLocker) {
-        TransferLocker impl = new TransferLocker(address(ap));
-        return TransferLocker(
-            address(new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(TransferLocker.initialize, ())))
-        );
+        return new TransferLocker(address(ap));
     }
 
     function _deployDopplerLocker() internal returns (DopplerLocker) {
-        DopplerLocker impl = new DopplerLocker(address(ap));
-        return DopplerLocker(
-            address(new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(DopplerLocker.initialize, ())))
-        );
+        return new DopplerLocker(address(ap));
     }
 
     function _deployDopplerConfig() internal returns (DopplerConfig) {
-        DopplerConfig impl = new DopplerConfig(address(ap));
-        return DopplerConfig(
-            address(new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(DopplerConfig.initialize, ())))
-        );
+        return new DopplerConfig(address(ap));
     }
 
     function _deployDeployTournament() internal returns (DeployTournament) {
-        DeployTournament impl = new DeployTournament(address(ap));
-        return DeployTournament(
-            address(
-                new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(DeployTournament.initialize, ()))
-            )
-        );
+        return new DeployTournament(address(ap));
     }
 
     /// @dev Admin path through Orchestrator.execute (wraps target reverts as ExecutionFailed).
@@ -133,9 +120,21 @@ abstract contract LockersTestBase is Test {
         return orch.execute(target, 0, data);
     }
 
-    /// @dev Call as Orchestrator owner directly so target custom errors surface unwrapped.
+    /// @dev Call as Orchestrator directly so target custom errors surface unwrapped.
     function _ownerCall(address target, bytes memory data) internal returns (bytes memory ret) {
         vm.prank(address(orch));
+        (bool ok, bytes memory raw) = target.call(data);
+        if (!ok) {
+            assembly ("memory-safe") {
+                revert(add(raw, 0x20), mload(raw))
+            }
+        }
+        return raw;
+    }
+
+    /// @dev Call as Timelock so target custom errors surface unwrapped.
+    function _timelockCall(address target, bytes memory data) internal returns (bytes memory ret) {
+        vm.prank(timelock);
         (bool ok, bytes memory raw) = target.call(data);
         if (!ok) {
             assembly ("memory-safe") {

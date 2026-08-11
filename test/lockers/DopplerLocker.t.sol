@@ -17,10 +17,10 @@ contract DopplerLockerTest is LockersTestBase {
         tournamentRegistry.setSeasonTournament(SEASON, LEAGUE);
     }
 
-    function test_initialize_setsOwnerAndConfig() public view {
-        assertEq(dopplerLocker.owner(), address(orch));
-        assertEq(address(dopplerLocker.dopplerConfig()), address(dopplerConfig));
+    function test_constructor_setsQueuePolicy() public view {
         assertEq(dopplerLocker.queueWait(), 24 hours);
+        assertEq(dopplerLocker.retryWait(), 5 minutes);
+        assertEq(dopplerLocker.maxDeployAttempts(), 5);
     }
 
     function test_queueAssets_revertsZeroId() public {
@@ -170,7 +170,7 @@ contract DopplerLockerTest is LockersTestBase {
     }
 
     function test_resetFailedDeploy_afterExhaustion() public {
-        _ownerCall(address(dopplerLocker), abi.encodeCall(DopplerLocker.setMaxDeployAttempts, (1)));
+        _timelockCall(address(dopplerLocker), abi.encodeCall(DopplerLocker.setMaxDeployAttempts, (1)));
 
         _queueThroughQueued(PLAYER);
         vm.warp(block.timestamp + dopplerLocker.queueWait() + 1);
@@ -180,7 +180,7 @@ contract DopplerLockerTest is LockersTestBase {
         DopplerLocker.QueueEntry memory e = dopplerLocker.queueEntry(PLAYER);
         assertEq(uint8(e.status), uint8(DopplerLocker.QueueStatus.DeployFailed));
 
-        _ownerCall(address(dopplerLocker), abi.encodeCall(DopplerLocker.resetFailedDeploy, (PLAYER, false)));
+        _timelockCall(address(dopplerLocker), abi.encodeCall(DopplerLocker.resetFailedDeploy, (PLAYER, false)));
         e = dopplerLocker.queueEntry(PLAYER);
         assertEq(uint8(e.status), uint8(DopplerLocker.QueueStatus.Queued));
     }

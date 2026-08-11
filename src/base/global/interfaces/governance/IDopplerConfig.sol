@@ -7,7 +7,7 @@ import { DopplerTypes } from "@types/lockers/DopplerTypes.sol";
 
 /**
  * @title IDopplerConfig
- * @notice Shared launch recipe + Doppler module addresses for `DopplerLocker`.
+ * @notice Shared launch recipe + AddressBook-resolved Doppler modules for `DopplerLocker`.
  */
 interface IDopplerConfig {
     function initialSupply() external view returns (uint256);
@@ -70,16 +70,4 @@ interface IDopplerConfig {
     function setGraduationPolicy(uint256 minGraduateProceeds_, uint32 minBondingDuration_) external;
 
     function setFeeDistribution(FeeDistributionInfo calldata feeDistribution_) external;
-
-    function configureDeployModules(address tokenFactory_, address vaultFactory_, address airlock_) external;
-
-    function configureDopplerModules(
-        address governanceFactory_,
-        address poolInitializer_,
-        address liquidityMigrator_,
-        address rehypeHookInitializer_,
-        address rehypeHookMigrator_
-    ) external;
-
-    function configureLaunchpadRecipients(address stakeVesting_, address hpTreasury_) external;
 }

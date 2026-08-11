@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
-
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { Oracle } from "@base/abstract/Oracle.sol";
 import { RateLimit } from "@base/abstract/RateLimit.sol";
@@ -28,20 +25,21 @@ interface IFeeRouterHub {
  * @title TransferLocker
  * @notice Waiting room for soft-inactivity / reactivation / cross-league transfer (mirrors DopplerLocker).
  * @dev Flow:
- *      0) EligibilityVerifier (or Orchestrator) enqueues via `enqueueLifecycle`.
- *      1) 24h review window (`queueWait`); owner may `unqueueAsset`.
+ *      0) Orchestrator or AddressBook `ELIGIBILITY_VERIFIER` enqueues via `enqueueLifecycle`.
+ *      1) 24h review window (`queueWait`); Orchestrator may `unqueueAsset`.
  *      2) Anyone calls `processLifecycle` after wait (rate-limited):
  *           - ContinuityUnderThreshold / LeftLeague → `deactivate()`
  *           - ChangedLeague / Reactivate → `CvmJob.LeagueTransfer` → fulfill →
  *             `setLeagueId` (+ Reactivate: `reactivate()` — status from `activePool` hooks)
  *
- *      Registry writes relay through `Orchestrator.execute` (this proxy must hold
+ *      Immutable singleton: registries / Orchestrator resolve via AddressBook at call time.
+ *      Registry writes relay through `Orchestrator.execute` (this contract must hold
  *      `AUTHORIZED_CONTRACT`).
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit, ITransferLocker {
+contract TransferLocker is AddressBook, Oracle, RateLimit, ITransferLocker {
     // --------------------------------------------
     //  Constants
     // --------------------------------------------
@@ -52,13 +50,6 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
     // --------------------------------------------
     //  Config
     // --------------------------------------------
-
-    IPlayerSetRegistry public playerSetRegistry;
-    ITournamentRegistry public tournamentRegistry;
-    IOrchestrator public orchestrator;
-
-    /// @notice Enqueue writer (set once); owner may also enqueue.
-    address public eligibilityVerifier;
 
     /// @notice Seconds after `Queued` before `processLifecycle` may finalize.
     uint256 public queueWait;
@@ -75,34 +66,38 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
     mapping(bytes32 requestId => bytes32 playerId) private _oraclePlayerId;
 
     // --------------------------------------------
-    //  Initialization
+    //  Access Control
     // --------------------------------------------
 
-    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
-    /// @custom:oz-upgrades-unsafe-allow constructor
+    modifier onlyTimelock() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TIMELOCK))) revert Errors.Unauthorized();
+        _;
+    }
+
+    modifier onlyOrchestrator() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.Unauthorized();
+        _;
+    }
+
+    /// @dev Orchestrator always; `ELIGIBILITY_VERIFIER` when registered on AddressProvider.
+    modifier onlyEnqueueWriter() {
+        if (!_isEnqueueWriter(msg.sender)) revert Errors.Unauthorized();
+        _;
+    }
+
+    // --------------------------------------------
+    //  Construction
+    // --------------------------------------------
+
+    /// @param addressProvider_ Canonical `AddressProvider`.
+    /// @dev `CVM_ROUTER` must already be registered on AddressProvider (oracle set first).
     constructor(address addressProvider_)
         AddressBook(addressProvider_)
-        Ownable(msg.sender)
         Oracle(_cvmRouter(addressProvider_))
         RateLimit(DEFAULT_PROCESS_COOLDOWN)
     {
         if (addressProvider_ == address(0)) revert Errors.ZeroAddress();
-        _disableInitializers();
-    }
-
-    /**
-     * @notice Resolve registries + Orchestrator; ownership → Orchestrator.
-     * @dev This proxy must hold `AUTHORIZED_CONTRACT` on Orchestrator for registry relays.
-     */
-    function initialize() external initializer {
         queueWait = DEFAULT_QUEUE_WAIT;
-
-        address orch = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
-        orchestrator = IOrchestrator(orch);
-        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-
-        _transferOwnership(orch);
     }
 
     function _cvmRouter(address addressProvider_) private view returns (address router) {
@@ -111,19 +106,30 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
     }
 
     // --------------------------------------------
+    //  AddressBook resolvers
+    // --------------------------------------------
+
+    function _playerSetRegistry() private view returns (IPlayerSetRegistry) {
+        return IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+    }
+
+    function _tournamentRegistry() private view returns (ITournamentRegistry) {
+        return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+    }
+
+    function _isEnqueueWriter(address sender) private view returns (bool) {
+        if (sender == _getAddress(_addressKey(Addresses.ORCHESTRATOR))) return true;
+        // Soft: verifier may be unset until the data plane is wired.
+        address verifier = addressProvider.get(_addressKey(Addresses.ELIGIBILITY_VERIFIER));
+        return verifier != address(0) && sender == verifier;
+    }
+
+    // --------------------------------------------
     //  Admin
     // --------------------------------------------
 
-    /// @notice One-time wire: EligibilityVerifier may call `enqueueLifecycle`.
-    function setEligibilityVerifier(address eligibilityVerifier_) external onlyOwner {
-        if (eligibilityVerifier != address(0)) revert Errors.AlreadySet();
-        if (eligibilityVerifier_ == address(0)) revert Errors.ZeroAddress();
-        eligibilityVerifier = eligibilityVerifier_;
-        emit Events.EligibilityVerifierSet(eligibilityVerifier_);
-    }
-
     /// @inheritdoc ITransferLocker
-    function setQueueWait(uint256 queueWait_) external onlyOwner {
+    function setQueueWait(uint256 queueWait_) external onlyTimelock {
         if (queueWait_ == 0) revert Errors.NotConfigured();
         uint256 previous = queueWait;
         queueWait = queueWait_;
@@ -181,11 +187,7 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
         bytes32[] calldata playerIds,
         LifecycleReason reason,
         uint32[] calldata effectiveMins
-    ) external {
-        if (msg.sender != owner() && msg.sender != eligibilityVerifier) {
-            revert Errors.Unauthorized();
-        }
-
+    ) external onlyEnqueueWriter {
         uint256 length = playerIds.length;
         if (effectiveMins.length != 0 && effectiveMins.length != length) {
             revert Errors.LengthMismatch(length, effectiveMins.length);
@@ -229,7 +231,7 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
     // --------------------------------------------
 
     /// @inheritdoc ITransferLocker
-    function unqueueAsset(bytes32 playerId) external onlyOwner {
+    function unqueueAsset(bytes32 playerId) external onlyOrchestrator {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
         uint256 index = _findQueuedIndex(playerId);
         if (index == type(uint256).max) revert Errors.NotQueued(playerId);
@@ -247,6 +249,7 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
     function processLifecycle() external rateLimited returns (bytes32 requestId) {
         uint256 length = _pending.length;
         uint256 wait_ = queueWait;
+        IPlayerSetRegistry psr = _playerSetRegistry();
         for (uint256 i; i < length; ++i) {
             PendingLifecycle storage e = _pending[i];
             if (e.status != LifecycleQueueStatus.Queued) continue;
@@ -265,7 +268,7 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
             }
 
             // ContinuityUnderThreshold / LeftLeague → soft-inactive
-            _exec(address(playerSetRegistry), abi.encodeCall(IPlayerSetRegistry.deactivate, (playerId)));
+            _exec(address(psr), abi.encodeCall(IPlayerSetRegistry.deactivate, (playerId)));
             emit Events.LifecycleApplied(playerId, reason, PlayerStatus.INACTIVE);
             _removeAt(i);
             return bytes32(0);
@@ -303,17 +306,17 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
         }
 
         LifecycleReason reason = _pending[index].reason;
+        IPlayerSetRegistry psr = _playerSetRegistry();
 
         _exec(
-            address(playerSetRegistry),
-            abi.encodeCall(IPlayerSetRegistry.setLeagueId, (playerId, newLeagueId, activeTournamentIds))
+            address(psr), abi.encodeCall(IPlayerSetRegistry.setLeagueId, (playerId, newLeagueId, activeTournamentIds))
         );
 
         if (reason == LifecycleReason.Reactivate) {
-            _exec(address(playerSetRegistry), abi.encodeCall(IPlayerSetRegistry.reactivate, (playerId)));
+            _exec(address(psr), abi.encodeCall(IPlayerSetRegistry.reactivate, (playerId)));
         }
 
-        PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
+        PlayerStatus status = psr.getPlayerSet(playerId).status;
         emit Events.LifecycleApplied(playerId, reason, status);
         _removeAt(index);
     }
@@ -332,10 +335,12 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
         bytes32[] memory activeTournamentIds
     ) private view returns (bool) {
         if (newLeagueId == bytes32(0)) return false;
-        if (tournamentRegistry.pbrFeeHubOf(newLeagueId) == address(0)) return false;
-        if (!tournamentRegistry.tournamentExists(newLeagueId)) return false;
 
-        PlayerSet memory set = playerSetRegistry.getPlayerSet(playerId);
+        ITournamentRegistry tr = _tournamentRegistry();
+        if (tr.pbrFeeHubOf(newLeagueId) == address(0)) return false;
+        if (!tr.tournamentExists(newLeagueId)) return false;
+
+        PlayerSet memory set = _playerSetRegistry().getPlayerSet(playerId);
         if (set.dopplerData.feeRouter == address(0)) return false;
 
         uint256 n = activeTournamentIds.length;
@@ -345,10 +350,10 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
         for (uint256 i; i < n; ++i) {
             bytes32 tournamentId = activeTournamentIds[i];
             if (tournamentId == bytes32(0)) return false;
-            if (!tournamentRegistry.tournamentExists(tournamentId)) return false;
-            if (tournamentRegistry.getPbrTreasury(tournamentId) == address(0)) return false;
+            if (!tr.tournamentExists(tournamentId)) return false;
+            if (tr.getPbrTreasury(tournamentId) == address(0)) return false;
             // Domestic league itself, or a cup/continental that lists this league's hub.
-            if (!tournamentRegistry.isLeagueLinkedToTournament(tournamentId, newLeagueId)) return false;
+            if (!tr.isLeagueLinkedToTournament(tournamentId, newLeagueId)) return false;
             for (uint256 j; j < i; ++j) {
                 if (activeTournamentIds[j] == tournamentId) return false;
             }
@@ -365,12 +370,12 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
 
     /// @dev Hub alignment only — live vault registration is not required for claims.
     function _requireFeeTopologyConsistent(bytes32 playerId) internal view {
-        PlayerSet memory set = playerSetRegistry.getPlayerSet(playerId);
+        PlayerSet memory set = _playerSetRegistry().getPlayerSet(playerId);
 
         bytes32 leagueId = set.tournamentData.leagueId;
         if (leagueId == bytes32(0)) revert Errors.MissingLeagueId(playerId);
 
-        address expectedHub = tournamentRegistry.pbrFeeHubOf(leagueId);
+        address expectedHub = _tournamentRegistry().pbrFeeHubOf(leagueId);
         if (expectedHub == address(0)) revert Errors.HubNotRegistered(leagueId);
 
         address feeRouter = set.dopplerData.feeRouter;
@@ -418,6 +423,6 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
     }
 
     function _exec(address target, bytes memory data) private returns (bytes memory) {
-        return orchestrator.execute(target, 0, data);
+        return IOrchestrator(_getAddress(_addressKey(Addresses.ORCHESTRATOR))).execute(target, 0, data);
     }
 }

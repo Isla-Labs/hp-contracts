@@ -16,13 +16,8 @@ library MarketsErrors {
 
     error InvalidDestination();
     error DestinationNotContract();
-    error LengthMismatch();
-    error EmptyRedistribution();
-    error PbrFeeHubRequired();
-    error PbrFeeHubMissing(address pbrFeeHub);
-    error DuplicateRedistributionHub(address hub);
-    error InvalidFeeSplit();
-    error InvalidFeeSplitTotal(uint256 total);
+    /// @dev Non-zero hub must appear in `TournamentRegistry.getAllDomesticPbrFeeHubs()`.
+    error PbrFeeHubNotRegistered(address hub);
 
     // --------------------------------------------
     //  PbrFeeHub Errors
@@ -32,4 +27,6 @@ library MarketsErrors {
     error InvalidBpsTotal(uint256 total);
     error DuplicateTreasury(address treasury);
     error InternationalNotConfigured();
+    /// @dev `setInternationalActive(true, treasury)` requires `treasury` in `_international`.
+    error TreasuryNotInternational(address treasury);
 }

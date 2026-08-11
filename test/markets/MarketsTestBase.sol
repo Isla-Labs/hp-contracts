@@ -20,6 +20,7 @@ abstract contract MarketsTestBase is Test {
 
     address internal dao = makeAddr("dao");
     address internal orchestrator = makeAddr("orchestrator");
+    address internal timelock = makeAddr("timelock");
     address internal playerSetRegistry = makeAddr("playerSetRegistry");
 
     AddressProvider internal ap;
@@ -35,6 +36,7 @@ abstract contract MarketsTestBase is Test {
         hpTreasury = new AcceptingReceiver();
 
         ap.setName(Addresses.ORCHESTRATOR, orchestrator);
+        ap.setName(Addresses.TIMELOCK, timelock);
         ap.setName(Addresses.HP_TREASURY, address(hpTreasury));
         ap.setName(Addresses.TOURNAMENT_REGISTRY, address(tournamentRegistry));
         ap.setName(Addresses.PLAYER_SET_REGISTRY, playerSetRegistry);
@@ -62,6 +64,9 @@ abstract contract MarketsTestBase is Test {
     }
 
     function _createFeeRouter(bytes32 playerId, address pbrFeeHub) internal returns (FeeRouter) {
+        if (pbrFeeHub != address(0)) {
+            tournamentRegistry.registerDomesticHub(pbrFeeHub);
+        }
         vm.prank(orchestrator);
         return FeeRouter(payable(feeRouterFactory.create(playerId, pbrFeeHub)));
     }

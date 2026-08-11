@@ -24,22 +24,24 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 
 import { IPbrTreasuryFactory } from "@interfaces/vaults/factories/IPbrTreasuryFactory.sol";
 import { IPbrFeeHubFactory } from "@interfaces/markets/factories/IPbrFeeHubFactory.sol";
-import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
 
 /**
  * @title DeployTournament
  * @notice Ownable entry API for atomic tournament bootstrap (upgradeable singleton).
  * @dev Owner is the Orchestrator (same as registries / factories). Callers with
  *      `DEFAULT_ADMIN_ROLE` (EOA now, Safe later) invoke `deploy` via
- *      `Orchestrator.execute`. Inner factory / registry / hub writes also relay through
+ *      `Orchestrator.execute`. Inner factory / registry writes also relay through
  *      `Orchestrator.execute` so targets see `msg.sender == Orchestrator`. This proxy must
  *      hold `AUTHORIZED_CONTRACT` on the Orchestrator for those nested relays.
  *
  *      Unified `deploy` / `simulateDeploy` branch on `DeployParams.tournamentType`:
  *        - `DOMESTIC_LEAGUE`: deploy treasury + new fee hub, `registerHub`, create tournament
- *        - `DOMESTIC_CUP`: deploy treasury, attach under one existing league hub (`leagueIds[0]`)
- *        - `CONTINENTAL`: deploy treasury, attach under selected league hubs (`leagueIds`)
- *        - `INTERNATIONAL`: deploy treasury, attach under all existing league hubs
+ *        - `DOMESTIC_CUP`: deploy treasury, register under one existing league hub (`leagueIds[0]`)
+ *        - `CONTINENTAL`: deploy treasury, register under selected league hubs (`leagueIds`)
+ *        - `INTERNATIONAL`: deploy treasury, register under all existing league hubs
+ *
+ *      Hub destination lists for non-league types are dual-written by
+ *      `TournamentRegistry.createTournament` / `linkHub` (not this contract).
  *
  *      Seasons (`BootstrapSeason`) open via `TournamentRegistry.openSeason` (includes `finalRound`),
  *      which also writes the global reverse index `tournamentIdOfSeason[seasonId] = tournamentId`
@@ -117,7 +119,7 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     //  Internals
     // --------------------------------------------
 
-    /// @dev Shared pipeline: validate → treasury → fee hubs → create + seasons → (optional) hub attach.
+    /// @dev Shared pipeline: validate → treasury → fee hubs → create (+ hub destination dual-write) + seasons.
     function _deploy(DeployParams calldata params) internal returns (DeployResult memory result) {
         BootstrapParams calldata b = params.bootstrap;
         _validateBootstrap(b);
@@ -134,11 +136,6 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
         }
 
         _finalize(t, b, feeHubs, result.pbrTreasury);
-
-        // Existing hubs receive the new treasury as a fee destination (league owns its hub already).
-        if (t != TournamentType.DOMESTIC_LEAGUE) {
-            _appendTreasuryToHubs(feeHubs, t, result.pbrTreasury);
-        }
     }
 
     function _simulate(DeployParams calldata params) internal view {
@@ -240,30 +237,6 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
         );
     }
 
-    function _appendTreasuryToHubs(Hub[] memory feeHubs, TournamentType tournamentType, address treasury) internal {
-        uint256 length = feeHubs.length;
-        for (uint256 i; i < length; ++i) {
-            _appendTreasuryToHub(feeHubs[i].pbrFeeHub, tournamentType, treasury);
-        }
-    }
-
-    function _appendTreasuryToHub(address hubAddr, TournamentType tournamentType, address treasury) internal {
-        IPbrFeeHub hub = IPbrFeeHub(hubAddr);
-        if (tournamentType == TournamentType.DOMESTIC_CUP) {
-            _exec(
-                hubAddr, abi.encodeCall(IPbrFeeHub.setDomesticCups, (_appendAddress(hub.getDomesticCups(), treasury)))
-            );
-        } else if (tournamentType == TournamentType.CONTINENTAL) {
-            _exec(hubAddr, abi.encodeCall(IPbrFeeHub.setContinental, (_appendAddress(hub.getContinental(), treasury))));
-        } else if (tournamentType == TournamentType.INTERNATIONAL) {
-            _exec(
-                hubAddr, abi.encodeCall(IPbrFeeHub.setInternational, (_appendAddress(hub.getInternational(), treasury)))
-            );
-        } else {
-            revert Errors.UnsupportedTournamentType(tournamentType);
-        }
-    }
-
     // --------------------------------------------
     //  Validation helpers
     // --------------------------------------------
@@ -292,15 +265,6 @@ contract DeployTournament is Initializable, AddressBook, Ownable {
     // --------------------------------------------
     //  Low-level
     // --------------------------------------------
-
-    function _appendAddress(address[] memory existing, address added) internal pure returns (address[] memory next) {
-        uint256 length = existing.length;
-        next = new address[](length + 1);
-        for (uint256 i; i < length; ++i) {
-            next[i] = existing[i];
-        }
-        next[length] = added;
-    }
 
     function _exec(address target, bytes memory data) internal returns (bytes memory) {
         return orchestrator.execute(target, 0, data);

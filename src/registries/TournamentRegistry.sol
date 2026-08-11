@@ -12,6 +12,7 @@ import { Hub, Season, Tournament, TournamentType, RoundSchedule } from "@types/r
 import { RoundStatus } from "@types/vaults/VaultTypes.sol";
 import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
 
@@ -28,6 +29,10 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  *        and season calendar (`openSeason` / `upsertRound(s)`).
  *      - `PlayerSetRegistry`: vault register/unregister fan-out.
  *      - Tournament `PbrTreasury`: `flushPendingUnregisters` after settle.
+ *
+ *      Non-`DOMESTIC_LEAGUE` create / `linkHub` dual-writes the tournament treasury onto each
+ *      linked `PbrFeeHub` destination list (`setDomesticCups` / `setContinental` /
+ *      `setInternational`). League hubs own their `leagueTreasury` at hub init.
  *
  *      Vault membership is the SoT here; each write syncs local caches on the tournament's
  *      `PbrTreasury` and the vault's active-treasury list. Unregister while the treasury active
@@ -111,6 +116,8 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
      * @param tournamentType Domestic league / domestic cup / continental / international.
      * @param feeHubs Domestic hubs that should route fees to `pbrTreasury` (must be registered).
      * @param pbrTreasury Tournament-specific `PbrTreasury` (required; deploy alongside the tournament).
+     * @dev For non-league types, each linked hub also receives `pbrTreasury` on its typed
+     *      destination list (cup / continental / international).
      */
     function createTournament(
         bytes32 tournamentId,
@@ -145,7 +152,9 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     /**
      * @notice Links an additional registered domestic hub to a CONTINENTAL / INTERNATIONAL tournament.
      * @dev Used when a new domestic league comes online and existing multi-hub tournaments must
-     *      include its hub. Domestic leagues/cups get their hub only at `createTournament`.
+     *      include its hub. Also appends this tournament's treasury onto the hub's continental /
+     *      international destination list. Domestic leagues/cups get their hub only at
+     *      `createTournament`.
      */
     function linkHub(bytes32 tournamentId, Hub calldata hub) external onlyOwner {
         Tournament storage t = _requireTournament(tournamentId);
@@ -558,6 +567,34 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
 
         t.feeHubs.push(hub);
         emit Events.HubAddedToTournament(tournamentId, hub.leagueId, hub.pbrFeeHub);
+
+        // League hubs already hold `leagueTreasury` from init; non-league destinations dual-write here.
+        if (t.tournamentType != TournamentType.DOMESTIC_LEAGUE) {
+            _appendTreasuryToHub(hub.pbrFeeHub, t.tournamentType, t.pbrTreasury);
+        }
+    }
+
+    /// @dev Append `treasury` to the hub list matching `tournamentType` (full replace via hub setters).
+    function _appendTreasuryToHub(address hubAddr, TournamentType tournamentType, address treasury) internal {
+        IPbrFeeHub hub = IPbrFeeHub(hubAddr);
+        if (tournamentType == TournamentType.DOMESTIC_CUP) {
+            hub.setDomesticCups(_appendAddress(hub.getDomesticCups(), treasury));
+        } else if (tournamentType == TournamentType.CONTINENTAL) {
+            hub.setContinental(_appendAddress(hub.getContinental(), treasury));
+        } else if (tournamentType == TournamentType.INTERNATIONAL) {
+            hub.setInternational(_appendAddress(hub.getInternational(), treasury));
+        } else {
+            revert Errors.InvalidLinkTarget(tournamentType);
+        }
+    }
+
+    function _appendAddress(address[] memory existing, address added) internal pure returns (address[] memory next) {
+        uint256 length = existing.length;
+        next = new address[](length + 1);
+        for (uint256 i; i < length; ++i) {
+            next[i] = existing[i];
+        }
+        next[length] = added;
     }
 
     function _isTreasuryActiveRoundLocked(address treasury) private view returns (bool) {

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 
@@ -17,7 +16,9 @@ import { TournamentType } from "@types/registries/TournamentTypes.sol";
  * @dev Destinations are stored locally and dual-written when tournaments are created / wired
  *      (registry remains the topology source of truth for calendars).
  *
- *      Access: `Orchestrator` (owner) for split parameters and treasury / destination wiring.
+ *      No owner — privileged writes resolve callers from `AddressProvider`:
+ *      `Timelock` for split / international-override parameters;
+ *      `TournamentRegistry` for destination list wiring (cups / continental / international).
  *
  *      Top-level default weights (BPS): domestic 90% / continental 9% / international 1%.
  *      Cascade split: live continental / international buckets take their fixed BPS of gross;
@@ -25,19 +26,19 @@ import { TournamentType } from "@types/registries/TournamentTypes.sol";
  *
  *      Domestic sub-split: `leagueShareBps` → league treasury; remainder even across cups
  *      (if no cups, 100% → league). Continental / international: even split.
- *      `internationalActive`: `internationalActiveShareBps` of gross → `internationalActiveTreasury`;
- *      remainder continues through the normal cascade.
+ *      `internationalActive`: `internationalActiveShareBps` of gross → `internationalActiveTreasury`
+ *      (must already be in `_international`); remainder continues through the normal cascade.
  *
  *      Failed legs are tracked in `pending` and retried via `forward` / `forwardPending`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrFeeHub is Initializable, AddressBook, Ownable, ReentrancyGuard {
+contract PbrFeeHub is Initializable, AddressBook, ReentrancyGuard {
     uint16 public constant BPS_DENOMINATOR = 10_000;
 
     // --------------------------------------------
-    //  Storage
+    //  Config
     // --------------------------------------------
 
     bytes32 public leagueId;
@@ -58,6 +59,10 @@ contract PbrFeeHub is Initializable, AddressBook, Ownable, ReentrancyGuard {
     address[] private _continental;
     address[] private _international;
 
+    // --------------------------------------------
+    //  Storage
+    // --------------------------------------------
+
     /// @notice When true, `internationalActiveShareBps` of gross → `internationalActiveTreasury`
     bool public internationalActive;
 
@@ -70,12 +75,26 @@ contract PbrFeeHub is Initializable, AddressBook, Ownable, ReentrancyGuard {
     mapping(address treasury => uint256) public pending;
 
     // --------------------------------------------
+    //  Access control
+    // --------------------------------------------
+
+    modifier onlyTournamentRegistry() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY))) revert Errors.Unauthorized();
+        _;
+    }
+
+    modifier onlyTimelock() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TIMELOCK))) revert Errors.Unauthorized();
+        _;
+    }
+
+    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
         _disableInitializers();
     }
 
@@ -87,8 +106,6 @@ contract PbrFeeHub is Initializable, AddressBook, Ownable, ReentrancyGuard {
     function initialize(bytes32 leagueId_, address leagueTreasury_) external initializer {
         if (leagueTreasury_ == address(0)) revert Errors.ZeroAddress();
         if (leagueId_ == bytes32(0)) revert Errors.ZeroId();
-
-        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
 
         leagueId = leagueId_;
         leagueTreasury = leagueTreasury_;
@@ -143,60 +160,32 @@ contract PbrFeeHub is Initializable, AddressBook, Ownable, ReentrancyGuard {
     }
 
     // --------------------------------------------
-    //  Admin (owner)
+    //  Registry
     // --------------------------------------------
 
-    function setTopLevelSplit(
-        uint16 domesticBps_,
-        uint16 continentalBps_,
-        uint16 internationalBps_
-    ) external onlyOwner {
-        uint256 total = uint256(domesticBps_) + continentalBps_ + internationalBps_;
-        if (total != BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(total);
-
-        domesticBps = domesticBps_;
-        continentalBps = continentalBps_;
-        internationalBps = internationalBps_;
-        emit Events.TopLevelSplitUpdated(domesticBps_, continentalBps_, internationalBps_);
+    function setDomesticCups(address[] calldata treasuries_) external onlyTournamentRegistry {
+        _setAddressList(_domesticCups, treasuries_);
+        emit Events.DomesticCupsUpdated(treasuries_);
     }
 
-    function setLeagueShareBps(uint16 leagueShareBps_) external onlyOwner {
-        if (leagueShareBps_ > BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(leagueShareBps_);
-        leagueShareBps = leagueShareBps_;
-        emit Events.LeagueShareUpdated(leagueShareBps_);
-    }
-
-    function setLeagueTreasury(address treasury_) external onlyOwner {
-        if (treasury_ == address(0)) revert Errors.ZeroAddress();
-        address previous = leagueTreasury;
-        leagueTreasury = treasury_;
-        emit Events.LeagueTreasuryUpdated(previous, treasury_);
-    }
-
-    function setDomesticCups(address[] calldata cups_) external onlyOwner {
-        _setAddressList(_domesticCups, cups_);
-        emit Events.DomesticCupsUpdated(cups_);
-    }
-
-    function setContinental(address[] calldata treasuries_) external onlyOwner {
+    function setContinental(address[] calldata treasuries_) external onlyTournamentRegistry {
         _setAddressList(_continental, treasuries_);
         emit Events.ContinentalUpdated(treasuries_);
     }
 
-    function setInternational(address[] calldata treasuries_) external onlyOwner {
+    function setInternational(address[] calldata treasuries_) external onlyTournamentRegistry {
         _setAddressList(_international, treasuries_);
         emit Events.InternationalUpdated(treasuries_);
     }
 
-    /**
-     * @notice Toggle temporary international override window.
-     * @dev When `active` is true, `treasury` receives `internationalActiveShareBps` of gross and
-     *      the remainder uses the normal cascade. When false, `treasury` is ignored and
-     *      `internationalActiveTreasury` is cleared to `address(0)`.
-     */
-    function setInternationalActive(bool active, address treasury) external onlyOwner {
+    // --------------------------------------------
+    //  Admin
+    // --------------------------------------------
+
+    function setInternationalActive(bool active, address treasury) external onlyTimelock {
         if (active) {
             if (treasury == address(0)) revert Errors.ZeroAddress();
+            if (!_isInternationalTreasury(treasury)) revert Errors.TreasuryNotInternational(treasury);
             internationalActiveTreasury = treasury;
             internationalActive = true;
             emit Events.InternationalActiveUpdated(true, treasury);
@@ -208,8 +197,27 @@ contract PbrFeeHub is Initializable, AddressBook, Ownable, ReentrancyGuard {
         emit Events.InternationalActiveUpdated(false, address(0));
     }
 
-    /// @notice Share of gross routed to `internationalActiveTreasury` while the override is active
-    function setInternationalActiveShareBps(uint16 shareBps_) external onlyOwner {
+    function setTopLevelSplit(
+        uint16 domesticBps_,
+        uint16 continentalBps_,
+        uint16 internationalBps_
+    ) external onlyTimelock {
+        uint256 total = uint256(domesticBps_) + continentalBps_ + internationalBps_;
+        if (total != BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(total);
+
+        domesticBps = domesticBps_;
+        continentalBps = continentalBps_;
+        internationalBps = internationalBps_;
+        emit Events.TopLevelSplitUpdated(domesticBps_, continentalBps_, internationalBps_);
+    }
+
+    function setLeagueShareBps(uint16 leagueShareBps_) external onlyTimelock {
+        if (leagueShareBps_ > BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(leagueShareBps_);
+        leagueShareBps = leagueShareBps_;
+        emit Events.LeagueShareUpdated(leagueShareBps_);
+    }
+
+    function setInternationalActiveShareBps(uint16 shareBps_) external onlyTimelock {
         if (shareBps_ > BPS_DENOMINATOR) revert Errors.InvalidBpsTotal(shareBps_);
         internationalActiveShareBps = shareBps_;
         emit Events.InternationalActiveShareUpdated(shareBps_);
@@ -363,5 +371,13 @@ contract PbrFeeHub is Initializable, AddressBook, Ownable, ReentrancyGuard {
         for (uint256 i; i < length; ++i) {
             list.push(next[i]);
         }
+    }
+
+    function _isInternationalTreasury(address treasury) internal view returns (bool) {
+        uint256 length = _international.length;
+        for (uint256 i; i < length; ++i) {
+            if (_international[i] == treasury) return true;
+        }
+        return false;
     }
 }

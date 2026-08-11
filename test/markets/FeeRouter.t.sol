@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
 import { FeeRouter } from "@markets/FeeRouter.sol";
 import { PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
 
 import { MarketsTestBase } from "./MarketsTestBase.sol";
-import { AcceptingReceiver, MockERC20, RevertingReceiver, ToggleReceiver } from "./mocks/ETHReceivers.sol";
+import { AcceptingReceiver, RevertingReceiver, ToggleReceiver } from "./mocks/ETHReceivers.sol";
 
 contract FeeRouterTest is MarketsTestBase {
     bytes32 internal constant PLAYER = keccak256("player-1");
@@ -24,7 +22,7 @@ contract FeeRouterTest is MarketsTestBase {
     }
 
     // --------------------------------------------
-    //  Integrator / redistribution splits
+    //  Integrator / league hub
     // --------------------------------------------
 
     function test_receive_bonding_splitsIntegratorAndHub() public {
@@ -38,7 +36,7 @@ contract FeeRouterTest is MarketsTestBase {
     }
 
     function test_receive_graduated_usesSpotIntegratorShare() public {
-        vm.prank(orchestrator);
+        vm.prank(playerSetRegistry);
         router.setStatus(PlayerStatus.GRADUATED);
 
         _sendEth(address(router), 95 ether);
@@ -48,39 +46,11 @@ contract FeeRouterTest is MarketsTestBase {
         assertEq(router.integratorShareNum(), 5);
     }
 
-    function test_setRedistribution_multiHub_lastLegDust() public {
-        AcceptingReceiver hub2 = new AcceptingReceiver();
-
-        address[] memory hubs = new address[](2);
-        hubs[0] = address(hub);
-        hubs[1] = address(hub2);
-        uint256[] memory splits = new uint256[](2);
-        splits[0] = 6e17;
-        splits[1] = 4e17;
-
-        vm.prank(orchestrator);
-        router.setRedistribution(hubs, splits);
-
-        // Use amount that leaves dust on integer division of first leg.
-        uint256 amount = 95 ether + 1; // integrator = floor((95e18+1)*10/95)
-        _sendEth(address(router), amount);
-
-        uint256 integratorAmt = (amount * 10) / 95;
-        uint256 remainder = amount - integratorAmt;
-        uint256 leg0 = (remainder * 6e17) / WAD;
-        uint256 leg1 = remainder - leg0;
-
-        assertEq(address(hpTreasury).balance, integratorAmt);
-        assertEq(address(hub).balance, leg0);
-        assertEq(address(hub2).balance, leg1);
-        assertEq(address(router).balance, 0);
-    }
-
     // --------------------------------------------
     //  OOF / INACTIVE
     // --------------------------------------------
 
-    function test_inactive_ignoresStoredHubs_evenSplitsDomestics() public {
+    function test_inactive_evenSplitsDomestics_keepsStoredHub() public {
         AcceptingReceiver domesticA = new AcceptingReceiver();
         AcceptingReceiver domesticB = new AcceptingReceiver();
         address[] memory domestics = new address[](2);
@@ -88,25 +58,22 @@ contract FeeRouterTest is MarketsTestBase {
         domestics[1] = address(domesticB);
         tournamentRegistry.setDomesticPbrFeeHubs(domestics);
 
-        // Hub storage must persist across deactivate.
-        address[] memory beforeHubs = router.redistributionHubs();
-        assertEq(beforeHubs.length, 1);
         assertEq(router.pbrFeeHub(), address(hub));
 
-        vm.prank(orchestrator);
+        vm.prank(playerSetRegistry);
         router.setStatus(PlayerStatus.INACTIVE);
 
+        // Stored league hub persists for reactivate / transfer restore.
         assertEq(router.pbrFeeHub(), address(hub));
-        assertEq(router.redistributionHubs().length, 1);
-        assertEq(router.redistributionHubs()[0], address(hub));
 
         _sendEth(address(router), 95 ether);
 
-        // Spot integrator 5/95; remainder even across domestics (not stored hub).
-        assertEq(address(hpTreasury).balance, 5 ether);
+        // Inactive: no integrator cut; full balance even across domestics (not stored hub).
+        assertEq(address(hpTreasury).balance, 0);
         assertEq(address(hub).balance, 0);
-        assertEq(address(domesticA).balance, 45 ether);
-        assertEq(address(domesticB).balance, 45 ether);
+        assertEq(address(domesticA).balance, 47.5 ether);
+        assertEq(address(domesticB).balance, 47.5 ether);
+        assertEq(router.integratorShareNum(), 0);
     }
 
     function test_zeroHub_usesOofPath() public {
@@ -123,6 +90,9 @@ contract FeeRouterTest is MarketsTestBase {
     }
 
     function test_oof_emptyDomestics_queuesRemainder() public {
+        // Clear hubs registered in setUp so OOF has nowhere to send.
+        tournamentRegistry.setDomesticPbrFeeHubs(new address[](0));
+
         FeeRouter unsupported = _createFeeRouter(keccak256("oof-empty"), address(0));
 
         vm.expectEmit(true, true, false, true, address(unsupported));
@@ -140,11 +110,10 @@ contract FeeRouterTest is MarketsTestBase {
         domestics[0] = address(domestic);
         tournamentRegistry.setDomesticPbrFeeHubs(domestics);
 
-        vm.prank(orchestrator);
+        vm.prank(playerSetRegistry);
         router.setPbrFeeHub(address(0));
 
         assertEq(router.pbrFeeHub(), address(0));
-        assertEq(router.redistributionHubs().length, 0);
 
         _sendEth(address(router), 95 ether);
         assertEq(address(domestic).balance, 85 ether);
@@ -157,7 +126,8 @@ contract FeeRouterTest is MarketsTestBase {
 
     function test_revertingHub_queuesAndForwardRetries() public {
         RevertingReceiver badHub = new RevertingReceiver();
-        vm.prank(orchestrator);
+        tournamentRegistry.registerDomesticHub(address(badHub));
+        vm.prank(playerSetRegistry);
         router.setPbrFeeHub(address(badHub));
 
         _sendEth(address(router), 95 ether);
@@ -168,12 +138,13 @@ contract FeeRouterTest is MarketsTestBase {
         // Swap to accepting hub. setPbrFeeHub sweeps via _relay, which re-applies the
         // bonding integrator cut on the residual balance.
         AcceptingReceiver goodHub = new AcceptingReceiver();
+        tournamentRegistry.registerDomesticHub(address(goodHub));
         uint256 residual = address(router).balance;
         uint256 integratorCut = (residual * 10) / 95;
         uint256 hubCut = residual - integratorCut;
 
         uint256 integratorBefore = address(hpTreasury).balance;
-        vm.prank(orchestrator);
+        vm.prank(playerSetRegistry);
         router.setPbrFeeHub(address(goodHub));
 
         assertEq(address(hpTreasury).balance, integratorBefore + integratorCut);
@@ -183,7 +154,7 @@ contract FeeRouterTest is MarketsTestBase {
 
     function test_revertingIntegrator_queuesThenForward() public {
         RevertingReceiver badIntegrator = new RevertingReceiver();
-        vm.prank(orchestrator);
+        vm.prank(timelock);
         router.setIntegrator(address(badIntegrator));
 
         _sendEth(address(router), 95 ether);
@@ -197,7 +168,7 @@ contract FeeRouterTest is MarketsTestBase {
         uint256 hubCut = residual - integratorCut;
         uint256 hubBefore = address(hub).balance;
 
-        vm.prank(orchestrator);
+        vm.prank(timelock);
         router.setIntegrator(address(goodIntegrator));
 
         assertEq(address(goodIntegrator).balance, integratorCut);
@@ -218,7 +189,7 @@ contract FeeRouterTest is MarketsTestBase {
     }
 
     // --------------------------------------------
-    //  minRelay
+    //  minRelay hold
     // --------------------------------------------
 
     function test_receive_belowMinRelay_holds() public {
@@ -226,18 +197,6 @@ contract FeeRouterTest is MarketsTestBase {
         assertEq(address(router).balance, 0.000_05 ether);
         assertEq(address(hpTreasury).balance, 0);
         assertEq(address(hub).balance, 0);
-    }
-
-    function test_setMinRelay_triggersRelay() public {
-        _sendEth(address(router), 0.000_05 ether);
-        assertEq(address(router).balance, 0.000_05 ether);
-
-        vm.prank(orchestrator);
-        router.setMinRelay(0.000_05 ether);
-
-        assertEq(address(router).balance, 0);
-        assertTrue(address(hpTreasury).balance > 0);
-        assertTrue(address(hub).balance > 0);
     }
 
     // --------------------------------------------
@@ -252,9 +211,17 @@ contract FeeRouterTest is MarketsTestBase {
 
     function test_setPbrFeeHub_allowsPlayerSetRegistry() public {
         AcceptingReceiver next = new AcceptingReceiver();
+        tournamentRegistry.registerDomesticHub(address(next));
         vm.prank(playerSetRegistry);
         router.setPbrFeeHub(address(next));
         assertEq(router.pbrFeeHub(), address(next));
+    }
+
+    function test_setPbrFeeHub_revertsUnregisteredHub() public {
+        AcceptingReceiver unknown = new AcceptingReceiver();
+        vm.prank(playerSetRegistry);
+        vm.expectRevert(abi.encodeWithSelector(Errors.PbrFeeHubNotRegistered.selector, address(unknown)));
+        router.setPbrFeeHub(address(unknown));
     }
 
     function test_setStatus_revertsUnauthorized() public {
@@ -263,102 +230,37 @@ contract FeeRouterTest is MarketsTestBase {
         router.setStatus(PlayerStatus.GRADUATED);
     }
 
-    function test_setMinRelay_revertsNonOwner() public {
-        vm.prank(playerSetRegistry);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, playerSetRegistry));
-        router.setMinRelay(1);
+    function test_setPbrFeeHub_revertsUnauthorized() public {
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert(Errors.Unauthorized.selector);
+        router.setPbrFeeHub(address(hub));
     }
 
-    function test_setRedistribution_revertsNonOwner() public {
-        address[] memory hubs = new address[](1);
-        hubs[0] = address(hub);
-        uint256[] memory splits = new uint256[](1);
-        splits[0] = WAD;
-
-        vm.prank(playerSetRegistry);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, playerSetRegistry));
-        router.setRedistribution(hubs, splits);
+    function test_setIntegrator_revertsUnauthorized() public {
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert(Errors.Unauthorized.selector);
+        router.setIntegrator(address(hub));
     }
 
     // --------------------------------------------
     //  Config edges
     // --------------------------------------------
 
-    function test_setRedistribution_revertsWhenHubCleared() public {
-        vm.prank(orchestrator);
-        router.setPbrFeeHub(address(0));
-
-        address[] memory hubs = new address[](1);
-        hubs[0] = address(hub);
-        uint256[] memory splits = new uint256[](1);
-        splits[0] = WAD;
-
-        vm.prank(orchestrator);
-        vm.expectRevert(Errors.PbrFeeHubRequired.selector);
-        router.setRedistribution(hubs, splits);
-    }
-
-    function test_setRedistribution_revertsMissingPbrHub() public {
-        AcceptingReceiver other = new AcceptingReceiver();
-        address[] memory hubs = new address[](1);
-        hubs[0] = address(other);
-        uint256[] memory splits = new uint256[](1);
-        splits[0] = WAD;
-
-        vm.prank(orchestrator);
-        vm.expectRevert(abi.encodeWithSelector(Errors.PbrFeeHubMissing.selector, address(hub)));
-        router.setRedistribution(hubs, splits);
-    }
-
-    function test_setRedistribution_revertsDuplicate() public {
-        address[] memory hubs = new address[](2);
-        hubs[0] = address(hub);
-        hubs[1] = address(hub);
-        uint256[] memory splits = new uint256[](2);
-        splits[0] = 5e17;
-        splits[1] = 5e17;
-
-        vm.prank(orchestrator);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DuplicateRedistributionHub.selector, address(hub)));
-        router.setRedistribution(hubs, splits);
-    }
-
-    function test_setRedistribution_revertsBadTotal() public {
-        address[] memory hubs = new address[](1);
-        hubs[0] = address(hub);
-        uint256[] memory splits = new uint256[](1);
-        splits[0] = WAD - 1;
-
-        vm.prank(orchestrator);
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidFeeSplitTotal.selector, WAD - 1));
-        router.setRedistribution(hubs, splits);
-    }
-
     function test_setPbrFeeHub_revertsEoa() public {
-        vm.prank(orchestrator);
+        vm.prank(playerSetRegistry);
         vm.expectRevert(Errors.DestinationNotContract.selector);
         router.setPbrFeeHub(makeAddr("eoa-hub"));
     }
 
     function test_setIntegrator_revertsZero() public {
-        vm.prank(orchestrator);
+        vm.prank(timelock);
         vm.expectRevert(Errors.ZeroAddress.selector);
         router.setIntegrator(address(0));
     }
 
-    function test_rescueToken() public {
-        MockERC20 token = new MockERC20();
-        token.mint(address(router), 100);
-        address to = makeAddr("rescue-to");
-
-        vm.prank(orchestrator);
-        router.rescueToken(address(token), to, 100);
-        assertEq(token.balanceOf(to), 100);
-    }
-
     function test_setStatus_sameStatus_noop() public {
         uint256 balBefore = address(hub).balance;
-        vm.prank(orchestrator);
+        vm.prank(playerSetRegistry);
         router.setStatus(PlayerStatus.BONDING);
         assertEq(address(hub).balance, balBefore);
     }
@@ -366,8 +268,9 @@ contract FeeRouterTest is MarketsTestBase {
     function test_toggleReceiver_softQueueThenForward() public {
         ToggleReceiver toggleHub = new ToggleReceiver();
         toggleHub.setAccept(false);
+        tournamentRegistry.registerDomesticHub(address(toggleHub));
 
-        vm.prank(orchestrator);
+        vm.prank(playerSetRegistry);
         router.setPbrFeeHub(address(toggleHub));
 
         _sendEth(address(router), 95 ether);

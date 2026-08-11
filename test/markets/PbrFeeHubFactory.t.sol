@@ -43,7 +43,6 @@ contract PbrFeeHubFactoryTest is MarketsTestBase {
 
         assertEq(hub.leagueId(), LEAGUE_A);
         assertEq(hub.leagueTreasury(), address(treasury));
-        assertEq(hub.owner(), orchestrator);
         assertEq(hub.domesticBps(), 9000);
         assertEq(hub.continentalBps(), 900);
         assertEq(hub.internationalBps(), 100);

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
 import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
@@ -43,7 +41,7 @@ contract PbrFeeHubTest is MarketsTestBase {
         address[] memory international = new address[](1);
         international[0] = address(intl);
 
-        vm.startPrank(orchestrator);
+        vm.startPrank(address(tournamentRegistry));
         hub.setContinental(cont);
         hub.setInternational(international);
         vm.stopPrank();
@@ -61,7 +59,7 @@ contract PbrFeeHubTest is MarketsTestBase {
         address[] memory international = new address[](1);
         international[0] = address(intl);
 
-        vm.prank(orchestrator);
+        vm.prank(address(tournamentRegistry));
         hub.setInternational(international);
 
         _sendEth(address(hub), 100 ether);
@@ -82,7 +80,7 @@ contract PbrFeeHubTest is MarketsTestBase {
         cups[0] = address(cupA);
         cups[1] = address(cupB);
 
-        vm.prank(orchestrator);
+        vm.prank(address(tournamentRegistry));
         hub.setDomesticCups(cups);
 
         _sendEth(address(hub), 100 ether);
@@ -100,10 +98,10 @@ contract PbrFeeHubTest is MarketsTestBase {
         cups[0] = address(cupA);
         cups[1] = address(cupB);
 
-        vm.startPrank(orchestrator);
+        vm.prank(address(tournamentRegistry));
         hub.setDomesticCups(cups);
+        vm.prank(timelock);
         hub.setLeagueShareBps(8900);
-        vm.stopPrank();
 
         uint256 amount = 101; // tiny amount to force dust on cup remainder
         _sendEth(address(hub), amount);
@@ -124,21 +122,23 @@ contract PbrFeeHubTest is MarketsTestBase {
 
     function test_internationalActive_takesGrossShareThenCascade() public {
         AcceptingReceiver intlActive = new AcceptingReceiver();
+        _wireInternational(address(intlActive));
 
-        vm.prank(orchestrator);
+        vm.prank(timelock);
         hub.setInternationalActive(true, address(intlActive));
 
         _sendEth(address(hub), 100 ether);
 
-        // default internationalActiveShareBps = 9000 → 90 ether override; 10 ether cascade → league
-        assertEq(address(intlActive).balance, 90 ether);
-        assertEq(address(leagueTreasury).balance, 10 ether);
+        // 90% override → intl; of remaining 10%, cascade intl bps (1%) → 0.1; domestic engulfs 9.9
+        assertEq(address(intlActive).balance, 90.1 ether);
+        assertEq(address(leagueTreasury).balance, 9.9 ether);
     }
 
     function test_internationalActive_deactivateClearsTreasury() public {
         AcceptingReceiver intlActive = new AcceptingReceiver();
+        _wireInternational(address(intlActive));
 
-        vm.startPrank(orchestrator);
+        vm.startPrank(timelock);
         hub.setInternationalActive(true, address(intlActive));
         hub.setInternationalActive(false, address(0));
         vm.stopPrank();
@@ -147,17 +147,22 @@ contract PbrFeeHubTest is MarketsTestBase {
         assertEq(hub.internationalActiveTreasury(), address(0));
 
         _sendEth(address(hub), 100 ether);
-        assertEq(address(intlActive).balance, 0);
-        assertEq(address(leagueTreasury).balance, 100 ether);
+        // override off; live intl still takes 1%
+        assertEq(address(intlActive).balance, 1 ether);
+        assertEq(address(leagueTreasury).balance, 99 ether);
     }
 
     function test_internationalActive_misconfiguredReverts() public {
-        // Force inconsistent state: active flag true but treasury zero via storage poke is hard;
-        // activate with treasury then clear treasury through setInternationalActive(false) and
-        // manually... only owner path clears both. Directly test ZeroAddress on activate.
-        vm.prank(orchestrator);
+        vm.prank(timelock);
         vm.expectRevert(Errors.ZeroAddress.selector);
         hub.setInternationalActive(true, address(0));
+    }
+
+    function test_internationalActive_revertsUnknownTreasury() public {
+        AcceptingReceiver unknown = new AcceptingReceiver();
+        vm.prank(timelock);
+        vm.expectRevert(abi.encodeWithSelector(Errors.TreasuryNotInternational.selector, address(unknown)));
+        hub.setInternationalActive(true, address(unknown));
     }
 
     function test_internationalActive_zeroTreasuryWhileActive_revertsOnReceive() public {
@@ -175,60 +180,65 @@ contract PbrFeeHubTest is MarketsTestBase {
     function test_revertingTreasury_accruesPending_forwardDrains() public {
         ToggleReceiver toggling = new ToggleReceiver();
         toggling.setAccept(false);
+        PbrFeeHub togglingHub = _createPbrFeeHub(keccak256("league-toggle"), address(toggling));
 
-        vm.prank(orchestrator);
-        hub.setLeagueTreasury(address(toggling));
-
-        vm.expectEmit(true, true, false, true, address(hub));
+        vm.expectEmit(true, true, false, true, address(togglingHub));
         emit Events.FeesQueued(TournamentType.DOMESTIC_LEAGUE, address(toggling), 100 ether);
 
-        _sendEth(address(hub), 100 ether);
+        _sendEth(address(togglingHub), 100 ether);
 
-        assertEq(hub.pending(address(toggling)), 100 ether);
-        assertEq(address(hub).balance, 100 ether);
+        assertEq(togglingHub.pending(address(toggling)), 100 ether);
+        assertEq(address(togglingHub).balance, 100 ether);
 
         toggling.setAccept(true);
-        hub.forward();
+        togglingHub.forward();
 
-        assertEq(hub.pending(address(toggling)), 0);
+        assertEq(togglingHub.pending(address(toggling)), 0);
         assertEq(address(toggling).balance, 100 ether);
-        assertEq(address(hub).balance, 0);
+        assertEq(address(togglingHub).balance, 0);
     }
 
     function test_forwardPending_orphanPath() public {
         ToggleReceiver orphan = new ToggleReceiver();
         orphan.setAccept(false);
 
-        vm.prank(orchestrator);
-        hub.setLeagueTreasury(address(orphan));
-        _sendEth(address(hub), 10 ether);
-        assertEq(hub.pending(address(orphan)), 10 ether);
+        address[] memory cups = new address[](1);
+        cups[0] = address(orphan);
+        vm.prank(address(tournamentRegistry));
+        hub.setDomesticCups(cups);
 
-        // Replace league treasury so configured forward won't target the orphan,
-        // then drain via forwardPending.
-        AcceptingReceiver next = new AcceptingReceiver();
-        vm.prank(orchestrator);
-        hub.setLeagueTreasury(address(next));
+        _sendEth(address(hub), 100 ether);
+        // 11% cups bucket → orphan queues; league takes 89%
+        assertEq(hub.pending(address(orphan)), 11 ether);
+
+        // Drop orphan from configured destinations so `forward` won't target it.
+        vm.prank(address(tournamentRegistry));
+        hub.setDomesticCups(new address[](0));
 
         orphan.setAccept(true);
         vm.expectEmit(true, false, false, true, address(hub));
-        emit Events.OrphanFeesRelayed(address(orphan), 10 ether);
+        emit Events.OrphanFeesRelayed(address(orphan), 11 ether);
         hub.forwardPending(address(orphan));
 
         assertEq(hub.pending(address(orphan)), 0);
-        assertEq(address(orphan).balance, 10 ether);
+        assertEq(address(orphan).balance, 11 ether);
     }
 
     function test_forwardPending_stillReverting_requeues() public {
         RevertingReceiver bad = new RevertingReceiver();
-        vm.prank(orchestrator);
-        hub.setLeagueTreasury(address(bad));
-        _sendEth(address(hub), 5 ether);
+        address[] memory cups = new address[](1);
+        cups[0] = address(bad);
+        vm.prank(address(tournamentRegistry));
+        hub.setDomesticCups(cups);
+
+        _sendEth(address(hub), 100 ether);
+        uint256 queued = hub.pending(address(bad));
+        assertTrue(queued > 0);
 
         vm.expectEmit(true, false, false, true, address(hub));
-        emit Events.OrphanFeesQueued(address(bad), 5 ether);
+        emit Events.OrphanFeesQueued(address(bad), queued);
         hub.forwardPending(address(bad));
-        assertEq(hub.pending(address(bad)), 5 ether);
+        assertEq(hub.pending(address(bad)), queued);
     }
 
     // --------------------------------------------
@@ -236,7 +246,7 @@ contract PbrFeeHubTest is MarketsTestBase {
     // --------------------------------------------
 
     function test_setTopLevelSplit_revertsBadTotal() public {
-        vm.prank(orchestrator);
+        vm.prank(timelock);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidBpsTotal.selector, 9999));
         hub.setTopLevelSplit(9000, 900, 99);
     }
@@ -247,7 +257,7 @@ contract PbrFeeHubTest is MarketsTestBase {
         cups[0] = address(cup);
         cups[1] = address(cup);
 
-        vm.prank(orchestrator);
+        vm.prank(address(tournamentRegistry));
         vm.expectRevert(abi.encodeWithSelector(Errors.DuplicateTreasury.selector, address(cup)));
         hub.setDomesticCups(cups);
     }
@@ -255,28 +265,27 @@ contract PbrFeeHubTest is MarketsTestBase {
     function test_setDomesticCups_revertsZero() public {
         address[] memory cups = new address[](1);
         cups[0] = address(0);
-        vm.prank(orchestrator);
+        vm.prank(address(tournamentRegistry));
         vm.expectRevert(Errors.ZeroAddress.selector);
         hub.setDomesticCups(cups);
     }
 
-    function test_setLeagueTreasury_revertsZero() public {
-        vm.prank(orchestrator);
-        vm.expectRevert(Errors.ZeroAddress.selector);
-        hub.setLeagueTreasury(address(0));
-    }
-
     function test_setLeagueShareBps_revertsAboveDenom() public {
-        vm.prank(orchestrator);
+        vm.prank(timelock);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidBpsTotal.selector, 10_001));
         hub.setLeagueShareBps(10_001);
     }
 
-    function test_admin_revertsNonOwner() public {
+    function test_admin_revertsUnauthorized() public {
         address stranger = makeAddr("stranger");
         vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        vm.expectRevert(Errors.Unauthorized.selector);
         hub.setTopLevelSplit(9000, 900, 100);
+
+        address[] memory cups = new address[](0);
+        vm.prank(stranger);
+        vm.expectRevert(Errors.Unauthorized.selector);
+        hub.setDomesticCups(cups);
     }
 
     function test_forwardPending_revertsZero() public {
@@ -285,17 +294,26 @@ contract PbrFeeHubTest is MarketsTestBase {
     }
 
     function test_setInternationalActiveShareBps() public {
-        vm.prank(orchestrator);
+        vm.prank(timelock);
         hub.setInternationalActiveShareBps(5000);
         assertEq(hub.internationalActiveShareBps(), 5000);
 
         AcceptingReceiver intlActive = new AcceptingReceiver();
-        vm.prank(orchestrator);
+        _wireInternational(address(intlActive));
+        vm.prank(timelock);
         hub.setInternationalActive(true, address(intlActive));
 
         _sendEth(address(hub), 100 ether);
-        assertEq(address(intlActive).balance, 50 ether);
-        assertEq(address(leagueTreasury).balance, 50 ether);
+        // 50% override; of remaining 50%, intl cascade 1% → 0.5; domestic 49.5
+        assertEq(address(intlActive).balance, 50.5 ether);
+        assertEq(address(leagueTreasury).balance, 49.5 ether);
+    }
+
+    function _wireInternational(address treasury) internal {
+        address[] memory intl = new address[](1);
+        intl[0] = treasury;
+        vm.prank(address(tournamentRegistry));
+        hub.setInternational(intl);
     }
 
     function test_continentalEvenSplit() public {
@@ -305,7 +323,7 @@ contract PbrFeeHubTest is MarketsTestBase {
         cont[0] = address(c1);
         cont[1] = address(c2);
 
-        vm.prank(orchestrator);
+        vm.prank(address(tournamentRegistry));
         hub.setContinental(cont);
 
         _sendEth(address(hub), 100 ether);

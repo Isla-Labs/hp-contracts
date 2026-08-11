@@ -38,26 +38,22 @@ contract FeeRouterFactoryTest is MarketsTestBase {
         assertEq(router.pbrFeeHub(), address(0));
         assertEq(uint8(router.status()), uint8(PlayerStatus.BONDING));
         assertEq(router.integrator(), address(hpTreasury));
-        assertEq(router.owner(), orchestrator);
-        assertEq(router.redistributionHubs().length, 0);
+        assertEq(router.minRelay(), 0.0001 ether);
     }
 
-    function test_create_withHub_setsDefaultRedistribution() public {
+    function test_create_withHub_setsPbrFeeHub() public {
         AcceptingReceiver hub = new AcceptingReceiver();
         FeeRouter router = _createFeeRouter(PLAYER_A, address(hub));
 
         assertEq(router.pbrFeeHub(), address(hub));
-        address[] memory hubs = router.redistributionHubs();
-        uint256[] memory splits = router.feeSplit();
-        assertEq(hubs.length, 1);
-        assertEq(hubs[0], address(hub));
-        assertEq(splits[0], WAD);
         assertEq(router.playerId(), PLAYER_A);
         assertEq(router.minRelay(), 0.0001 ether);
+        assertEq(router.integratorShareNum(), 10);
     }
 
     function test_create_emitsFeeRouterCreated() public {
         AcceptingReceiver hub = new AcceptingReceiver();
+        tournamentRegistry.registerDomesticHub(address(hub));
 
         vm.prank(orchestrator);
         vm.recordLogs();

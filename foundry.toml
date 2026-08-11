@@ -20,7 +20,6 @@ fs_permissions = [
 [fuzz]
 max_test_rejects = 10000000
 runs = 32
-depth = 512
 
 [fmt]
 bracket_spacing = true
@@ -33,6 +32,7 @@ tab_width = 4
 wrap_comments = false
 
 [invariant]
+depth = 512
 show_metrics = true
 fail_on_revert = true
 

@@ -30,17 +30,17 @@ contract ZQuoterBase {
         ZROUTER = zRouter_;
     }
 
-    function getQuotes(bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount)
-        public
-        view
-        returns (Quote memory best, Quote[] memory quotes)
-    {
+    function getQuotes(
+        bool exactOut,
+        address tokenIn,
+        address tokenOut,
+        uint256 swapAmount
+    ) public view returns (Quote memory best, Quote[] memory quotes) {
         unchecked {
             quotes = new Quote[](14); // V2 + SUSHI + ZAMM(4 FEE TIERS) + V3(4 FEE TIERS) + V4(4 FEE TIERS)
 
             // --- V2 / SUSHI / ZAMM ---
-            (uint256 amountIn, uint256 amountOut) =
-                quoteV2(exactOut, tokenIn, tokenOut, swapAmount, false);
+            (uint256 amountIn, uint256 amountOut) = quoteV2(exactOut, tokenIn, tokenOut, swapAmount, false);
             quotes[0] = Quote(AMM.UNI_V2, 30, amountIn, amountOut);
 
             (amountIn, amountOut) = quoteV2(exactOut, tokenIn, tokenOut, swapAmount, true);
@@ -56,23 +56,21 @@ contract ZQuoterBase {
             quotes[5] = Quote(AMM.ZAMM, 100, amountIn, amountOut);
 
             // --- Uniswap v3 (fees in v3 units; store bps in Quote) ---
-            uint24[4] memory fees = [uint24(100), uint24(500), uint24(3000), uint24(10000)];
+            uint24[4] memory fees = [uint24(100), uint24(500), uint24(3000), uint24(10_000)];
             uint256 j = 6;
             for (uint256 i; i != fees.length; ++i) {
-                (uint256 aIn, uint256 aOut) =
-                    quoteV3(exactOut, tokenIn, tokenOut, fees[i], swapAmount);
+                (uint256 aIn, uint256 aOut) = quoteV3(exactOut, tokenIn, tokenOut, fees[i], swapAmount);
                 quotes[j++] = Quote(AMM.UNI_V3, fees[i] / 100, aIn, aOut);
             }
 
             // --- Uni v4 (no-hook) ---
             // Keep fee<->spacing paired so the builder can reconstruct spacing from feeBps:
             {
-                uint24[4] memory v4Fees = [uint24(100), uint24(500), uint24(3000), uint24(10000)];
+                uint24[4] memory v4Fees = [uint24(100), uint24(500), uint24(3000), uint24(10_000)];
                 int24[4] memory v4Spaces = [int24(1), int24(10), int24(60), int24(200)];
                 for (uint256 i; i != v4Fees.length; ++i) {
-                    (amountIn, amountOut) = quoteV4(
-                        exactOut, tokenIn, tokenOut, v4Fees[i], v4Spaces[i], address(0), swapAmount
-                    );
+                    (amountIn, amountOut) =
+                        quoteV4(exactOut, tokenIn, tokenOut, v4Fees[i], v4Spaces[i], address(0), swapAmount);
                     quotes[j++] = Quote(AMM.UNI_V4, uint16(v4Fees[i] / 100), amountIn, amountOut); // 1/5/30/100 bps
                 }
             }
@@ -134,8 +132,7 @@ contract ZQuoterBase {
             (address pool, bool zeroForOne) = _v2PoolFor(tokenIn, tokenOut, sushi);
             if (!_isContract(pool)) return (0, 0);
             (uint112 reserve0, uint112 reserve1,) = IV2Pool(pool).getReserves();
-            (uint256 reserveIn, uint256 reserveOut) =
-                zeroForOne ? (reserve0, reserve1) : (reserve1, reserve0);
+            (uint256 reserveIn, uint256 reserveOut) = zeroForOne ? (reserve0, reserve1) : (reserve1, reserve0);
             if (reserveIn == 0 || reserveOut == 0) return (0, 0);
             if (exactOut) {
                 if (swapAmount >= reserveOut) return (0, 0);
@@ -162,8 +159,7 @@ contract ZQuoterBase {
             address pool = IUniswapV3Factory(V3_FACTORY).getPool(tIn, tOut, fee);
             if (pool == address(0)) return (0, 0);
 
-            uint160 sqrtPriceLimitX96 =
-                tIn < tOut ? MIN_SQRT_RATIO_PLUS_ONE : MAX_SQRT_RATIO_MINUS_ONE;
+            uint160 sqrtPriceLimitX96 = tIn < tOut ? MIN_SQRT_RATIO_PLUS_ONE : MAX_SQRT_RATIO_MINUS_ONE;
 
             if (!exactOut) {
                 try IQuoter(V3_QUOTER)
@@ -219,8 +215,7 @@ contract ZQuoterBase {
             if (swapAmount > uint256(type(int256).max)) return (0, 0);
 
             // Build v4 pool id (native ETH supported)
-            (bytes32 poolId, bool zeroForOne) =
-                _v4PoolId(tokenIn, tokenOut, fee, tickSpacing, hooks);
+            (bytes32 poolId, bool zeroForOne) = _v4PoolId(tokenIn, tokenOut, fee, tickSpacing, hooks);
 
             // Read core state
             (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee) =
@@ -231,8 +226,7 @@ contract ZQuoterBase {
             if (sqrtPriceX96 == 0 || liquidity == 0) return (0, 0);
 
             // Use open price limits (same “±1” convention as v3 constants)
-            uint160 sqrtPriceLimitX96 =
-                zeroForOne ? MIN_SQRT_RATIO_PLUS_ONE : MAX_SQRT_RATIO_MINUS_ONE;
+            uint160 sqrtPriceLimitX96 = zeroForOne ? MIN_SQRT_RATIO_PLUS_ONE : MAX_SQRT_RATIO_MINUS_ONE;
 
             // **** v4 SIGN CONVENTION ****
             // exact-in  => amountRemaining < 0
@@ -254,9 +248,7 @@ contract ZQuoterBase {
                 // step within current tick (or to the limit)
                 (uint160 sqrtPriceNext, uint256 stepIn, uint256 stepOut, uint256 feeAmt) = SwapMath.computeSwapStep(
                     sqrtPriceX96,
-                    (zeroForOne
-                            ? (sqrtPriceNextX96 < sqrtPriceLimitX96)
-                            : (sqrtPriceNextX96 > sqrtPriceLimitX96))
+                    (zeroForOne ? (sqrtPriceNextX96 < sqrtPriceLimitX96) : (sqrtPriceNextX96 > sqrtPriceLimitX96))
                         ? sqrtPriceLimitX96
                         : sqrtPriceNextX96,
                     liquidity,
@@ -279,8 +271,7 @@ contract ZQuoterBase {
                 if (sqrtPriceNext == sqrtPriceNextX96) {
                     // crossed a tick
                     if (initialized) {
-                        (, int128 liqNet) =
-                            IStateViewV4(V4_STATE_VIEW).getTickLiquidity(poolId, tickNext);
+                        (, int128 liqNet) = IStateViewV4(V4_STATE_VIEW).getTickLiquidity(poolId, tickNext);
                         if (zeroForOne) liqNet = -liqNet; // mirror v3 sign flip when moving left
                         liquidity = LiquidityMath.addDelta(liquidity, liqNet);
                     }
@@ -321,8 +312,7 @@ contract ZQuoterBase {
             PoolKey memory key = PoolKey(id0, id1, token0, token1, feeOrHook);
             uint256 poolId = uint256(keccak256(abi.encode(key)));
             (uint112 reserve0, uint112 reserve1,,,,,) = IZAMM(ZAMM).pools(poolId);
-            (uint256 reserveIn, uint256 reserveOut) =
-                zeroForOne ? (reserve0, reserve1) : (reserve1, reserve0);
+            (uint256 reserveIn, uint256 reserveOut) = zeroForOne ? (reserve0, reserve1) : (reserve1, reserve0);
             if (reserveIn == 0 || reserveOut == 0) return (0, 0);
             if (exactOut) {
                 if (swapAmount >= reserveOut) return (0, 0);
@@ -341,11 +331,11 @@ contract ZQuoterBase {
     error InsufficientInputAmount();
 
     // given an input amount of an asset and pair reserves, returns the maximum output amount of the other asset
-    function _getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut)
-        internal
-        pure
-        returns (uint256 amountOut)
-    {
+    function _getAmountOut(
+        uint256 amountIn,
+        uint256 reserveIn,
+        uint256 reserveOut
+    ) internal pure returns (uint256 amountOut) {
         unchecked {
             require(amountIn > 0, InsufficientInputAmount());
             require(reserveIn > 0 && reserveOut > 0, InsufficientLiquidity());
@@ -359,11 +349,11 @@ contract ZQuoterBase {
     error InsufficientOutputAmount();
 
     // given an output amount of an asset and pair reserves, returns a required input amount of the other asset
-    function _getAmountIn(uint256 amountOut, uint256 reserveIn, uint256 reserveOut)
-        internal
-        pure
-        returns (uint256 amountIn)
-    {
+    function _getAmountIn(
+        uint256 amountOut,
+        uint256 reserveIn,
+        uint256 reserveOut
+    ) internal pure returns (uint256 amountIn) {
         unchecked {
             require(amountOut > 0, InsufficientOutputAmount());
             require(reserveIn > 0 && reserveOut > 0, InsufficientLiquidity());
@@ -374,11 +364,11 @@ contract ZQuoterBase {
         }
     }
 
-    function _v2PoolFor(address tokenA, address tokenB, bool sushi)
-        internal
-        pure
-        returns (address v2pool, bool zeroForOne)
-    {
+    function _v2PoolFor(
+        address tokenA,
+        address tokenB,
+        bool sushi
+    ) internal pure returns (address v2pool, bool zeroForOne) {
         unchecked {
             (address token0, address token1, bool zF1) = _sortTokens(tokenA, tokenB);
             zeroForOne = zF1;
@@ -405,27 +395,29 @@ contract ZQuoterBase {
 
     // ** ZAMM variants:
 
-    function _getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut, uint256 swapFee)
-        internal
-        pure
-        returns (uint256 amountOut)
-    {
+    function _getAmountOut(
+        uint256 amountIn,
+        uint256 reserveIn,
+        uint256 reserveOut,
+        uint256 swapFee
+    ) internal pure returns (uint256 amountOut) {
         unchecked {
-            uint256 amountInWithFee = amountIn * (10000 - swapFee);
+            uint256 amountInWithFee = amountIn * (10_000 - swapFee);
             uint256 numerator = amountInWithFee * reserveOut;
-            uint256 denominator = (reserveIn * 10000) + amountInWithFee;
+            uint256 denominator = (reserveIn * 10_000) + amountInWithFee;
             return numerator / denominator;
         }
     }
 
-    function _getAmountIn(uint256 amountOut, uint256 reserveIn, uint256 reserveOut, uint256 swapFee)
-        internal
-        pure
-        returns (uint256 amountIn)
-    {
+    function _getAmountIn(
+        uint256 amountOut,
+        uint256 reserveIn,
+        uint256 reserveOut,
+        uint256 swapFee
+    ) internal pure returns (uint256 amountIn) {
         unchecked {
-            uint256 numerator = reserveIn * amountOut * 10000;
-            uint256 denominator = (reserveOut - amountOut) * (10000 - swapFee);
+            uint256 numerator = reserveIn * amountOut * 10_000;
+            uint256 denominator = (reserveOut - amountOut) * (10_000 - swapFee);
             return (numerator / denominator) + 1;
         }
     }
@@ -445,14 +437,7 @@ contract ZQuoterBase {
         uint256 deadline
     ) internal pure returns (bytes memory callData) {
         callData = abi.encodeWithSelector(
-            IZRouter.swapV2.selector,
-            to,
-            exactOut,
-            tokenIn,
-            tokenOut,
-            swapAmount,
-            amountLimit,
-            deadline
+            IZRouter.swapV2.selector, to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, deadline
         );
     }
 
@@ -494,15 +479,7 @@ contract ZQuoterBase {
         uint256 deadline
     ) internal pure returns (bytes memory callData) {
         callData = abi.encodeWithSelector(
-            IZRouter.swapV3.selector,
-            to,
-            exactOut,
-            swapFee,
-            tokenIn,
-            tokenOut,
-            swapAmount,
-            amountLimit,
-            deadline
+            IZRouter.swapV3.selector, to, exactOut, swapFee, tokenIn, tokenOut, swapAmount, amountLimit, deadline
         );
     }
 
@@ -541,11 +518,7 @@ contract ZQuoterBase {
         uint256 swapAmount,
         uint256 slippageBps,
         uint256 deadline // normal for V2; Sushi uses max sentinel; zAMM can use sentinel if retro
-    )
-        public
-        view
-        returns (Quote memory best, bytes memory callData, uint256 amountLimit, uint256 msgValue)
-    {
+    ) public view returns (Quote memory best, bytes memory callData, uint256 amountLimit, uint256 msgValue) {
         unchecked {
             (best,) = getQuotes(exactOut, tokenIn, tokenOut, swapAmount);
             if (best.amountIn == 0 && best.amountOut == 0) revert NoRoute();
@@ -554,26 +527,13 @@ contract ZQuoterBase {
             amountLimit = SlippageLib.limit(exactOut, quoted, slippageBps);
 
             if (best.source == AMM.UNI_V2) {
-                callData = _buildV2Swap(
-                    to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, deadline
-                );
+                callData = _buildV2Swap(to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, deadline);
             } else if (best.source == AMM.SUSHI) {
-                callData = _buildV2Swap(
-                    to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, type(uint256).max
-                );
+                callData = _buildV2Swap(to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, type(uint256).max);
             } else if (best.source == AMM.ZAMM) {
                 // ERC20/ETH case: default ids to 0:
                 callData = _buildZAMMSwap(
-                    to,
-                    exactOut,
-                    best.feeBps,
-                    tokenIn,
-                    tokenOut,
-                    0,
-                    0,
-                    swapAmount,
-                    amountLimit,
-                    deadline
+                    to, exactOut, best.feeBps, tokenIn, tokenOut, 0, 0, swapAmount, amountLimit, deadline
                 );
             } else if (best.source == AMM.UNI_V3) {
                 callData = _buildV3Swap(
@@ -650,29 +610,21 @@ contract ZQuoterBase {
             uint256 k;
 
             // --- single hop if either side is native ETH (router abstracts WETH) ---
-            if (
-                tokenIn == address(0) || tokenOut == address(0) || tokenIn == WETH
-                    || tokenOut == WETH
-            ) {
-                (Quote memory best, bytes memory callData,, uint256 val) = buildBestSwap(
-                    to, exactOut, tokenIn, tokenOut, swapAmount, slippageBps, deadline
-                );
+            if (tokenIn == address(0) || tokenOut == address(0) || tokenIn == WETH || tokenOut == WETH) {
+                (Quote memory best, bytes memory callData,, uint256 val) =
+                    buildBestSwap(to, exactOut, tokenIn, tokenOut, swapAmount, slippageBps, deadline);
 
                 // assemble: swap + safety sweeps
                 n = 1 /*swap*/ + 2 /*sweep WETH+ETH*/
                     + ((tokenIn != address(0) && tokenIn != WETH) ? 1 : 0);
                 calls = new bytes[](n);
                 calls[k++] = callData;
-                calls[k++] = abi.encodeWithSelector(
-                    IRouterExt.sweep.selector, WETH, uint256(0), uint256(0), refundTo
-                );
-                calls[k++] = abi.encodeWithSelector(
-                    IRouterExt.sweep.selector, address(0), uint256(0), uint256(0), refundTo
-                );
+                calls[k++] = abi.encodeWithSelector(IRouterExt.sweep.selector, WETH, uint256(0), uint256(0), refundTo);
+                calls[k++] =
+                    abi.encodeWithSelector(IRouterExt.sweep.selector, address(0), uint256(0), uint256(0), refundTo);
                 if (tokenIn != address(0) && tokenIn != WETH) {
-                    calls[k++] = abi.encodeWithSelector(
-                        IRouterExt.sweep.selector, tokenIn, uint256(0), uint256(0), refundTo
-                    );
+                    calls[k++] =
+                        abi.encodeWithSelector(IRouterExt.sweep.selector, tokenIn, uint256(0), uint256(0), refundTo);
                 }
 
                 // return (a=best, b=empty)
@@ -761,9 +713,8 @@ contract ZQuoterBase {
             // safety sweeps (return router-held dust to refundTo)
             bool zamm2ExactOut = exactOut && (b.source == AMM.ZAMM);
 
-            bytes memory sweepWETHBack = zamm2ExactOut
-                ? bytes("")
-                : abi.encodeWithSelector(IRouterExt.sweep.selector, WETH, 0, 0, refundTo);
+            bytes memory sweepWETHBack =
+                zamm2ExactOut ? bytes("") : abi.encodeWithSelector(IRouterExt.sweep.selector, WETH, 0, 0, refundTo);
             bytes memory sweepETHBack = zamm2ExactOut
                 ? bytes("")
                 : abi.encodeWithSelector(IRouterExt.sweep.selector, address(0), 0, 0, refundTo);
@@ -809,49 +760,21 @@ contract ZQuoterBase {
     ) internal pure returns (bytes memory callData) {
         unchecked {
             if (q.source == AMM.UNI_V2) {
-                callData = _buildV2Swap(
-                    to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, deadline
-                );
+                callData = _buildV2Swap(to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, deadline);
             } else if (q.source == AMM.SUSHI) {
-                callData = _buildV2Swap(
-                    to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, type(uint256).max
-                );
+                callData = _buildV2Swap(to, exactOut, tokenIn, tokenOut, swapAmount, amountLimit, type(uint256).max);
             } else if (q.source == AMM.ZAMM) {
                 callData = _buildZAMMSwap(
-                    to,
-                    exactOut,
-                    q.feeBps,
-                    tokenIn,
-                    tokenOut,
-                    0,
-                    0,
-                    swapAmount,
-                    amountLimit,
-                    deadline
+                    to, exactOut, q.feeBps, tokenIn, tokenOut, 0, 0, swapAmount, amountLimit, deadline
                 );
             } else if (q.source == AMM.UNI_V3) {
                 callData = _buildV3Swap(
-                    to,
-                    exactOut,
-                    uint24(q.feeBps * 100),
-                    tokenIn,
-                    tokenOut,
-                    swapAmount,
-                    amountLimit,
-                    deadline
+                    to, exactOut, uint24(q.feeBps * 100), tokenIn, tokenOut, swapAmount, amountLimit, deadline
                 );
             } else if (q.source == AMM.UNI_V4) {
                 int24 spacing = _spacingFromBps(uint16(q.feeBps));
                 callData = _buildV4Swap(
-                    to,
-                    exactOut,
-                    uint24(q.feeBps * 100),
-                    spacing,
-                    tokenIn,
-                    tokenOut,
-                    swapAmount,
-                    amountLimit,
-                    deadline
+                    to, exactOut, uint24(q.feeBps * 100), spacing, tokenIn, tokenOut, swapAmount, amountLimit, deadline
                 );
             } else {
                 revert UnsupportedAMM();
@@ -874,18 +797,16 @@ interface IRouterExt {
 address constant WETH = 0x4200000000000000000000000000000000000006;
 
 address constant V2_FACTORY = 0x7Ae58f10f7849cA6F5fB71b7f45CB416c9204b1e;
-bytes32 constant V2_POOL_INIT_CODE_HASH =
-    0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f;
+bytes32 constant V2_POOL_INIT_CODE_HASH = 0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f;
 
 address constant V3_FACTORY = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24;
-uint160 constant MIN_SQRT_RATIO_PLUS_ONE = 4295128740;
-uint160 constant MAX_SQRT_RATIO_MINUS_ONE = 1461446703485210103287273052203988822378723970341;
+uint160 constant MIN_SQRT_RATIO_PLUS_ONE = 4_295_128_740;
+uint160 constant MAX_SQRT_RATIO_MINUS_ONE = 1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_341;
 
 // ** SushiSwap:
 
 address constant SUSHI_FACTORY = 0xC0AEe478e3658e2610c5F7A4A2E1777cE9e4f2Ac;
-bytes32 constant SUSHI_POOL_INIT_CODE_HASH =
-    0xe18a34eb0e04b04f7a0ac29a6e80748dca96319b42c54d679cb821dca90c6303;
+bytes32 constant SUSHI_POOL_INIT_CODE_HASH = 0xe18a34eb0e04b04f7a0ac29a6e80748dca96319b42c54d679cb821dca90c6303;
 
 interface IV2Pool {
     function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32);
@@ -904,10 +825,7 @@ struct PoolKey {
 address constant ZAMM = 0x000000000000040470635EB91b7CE4D132D616eD;
 
 interface IZAMM {
-    function pools(uint256 poolId)
-        external
-        view
-        returns (uint112, uint112, uint32, uint256, uint256, uint256, uint256);
+    function pools(uint256 poolId) external view returns (uint112, uint112, uint32, uint256, uint256, uint256, uint256);
 }
 
 library SlippageLib {
@@ -993,7 +911,10 @@ interface IQuoter {
     /// @return amountOut The amount of the last token that would be received
     /// @return sqrtPriceX96AfterList List of the sqrt price after the swap for each pool in the path
     /// @return initializedTicksCrossedList List of number of initialized ticks loaded
-    function quoteExactInput(bytes memory path, uint256 amountIn)
+    function quoteExactInput(
+        bytes memory path,
+        uint256 amountIn
+    )
         external
         view
         returns (
@@ -1026,12 +947,7 @@ interface IQuoter {
     function quoteExactInputSingleWithPool(QuoteExactInputSingleWithPoolParams memory params)
         external
         view
-        returns (
-            uint256 amountOut,
-            uint160 sqrtPriceX96After,
-            uint32 initializedTicksCrossed,
-            uint256 gasEstimate
-        );
+        returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate);
 
     struct QuoteExactInputSingleParams {
         address tokenIn;
@@ -1054,12 +970,7 @@ interface IQuoter {
     function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
         external
         view
-        returns (
-            uint256 amountOut,
-            uint160 sqrtPriceX96After,
-            uint32 initializedTicksCrossed,
-            uint256 gasEstimate
-        );
+        returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate);
 
     struct QuoteExactOutputSingleWithPoolParams {
         address tokenIn;
@@ -1084,12 +995,7 @@ interface IQuoter {
     function quoteExactOutputSingleWithPool(QuoteExactOutputSingleWithPoolParams memory params)
         external
         view
-        returns (
-            uint256 amountIn,
-            uint160 sqrtPriceX96After,
-            uint32 initializedTicksCrossed,
-            uint256 gasEstimate
-        );
+        returns (uint256 amountIn, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate);
 
     struct QuoteExactOutputSingleParams {
         address tokenIn;
@@ -1112,12 +1018,7 @@ interface IQuoter {
     function quoteExactOutputSingle(QuoteExactOutputSingleParams memory params)
         external
         view
-        returns (
-            uint256 amountIn,
-            uint160 sqrtPriceX96After,
-            uint32 initializedTicksCrossed,
-            uint256 gasEstimate
-        );
+        returns (uint256 amountIn, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate);
 
     /// @notice Returns the amount in required for a given exact output swap without executing the swap
     /// @param path The path of the swap, i.e. each token pair and the pool fee. Path must be provided in reverse order
@@ -1125,7 +1026,10 @@ interface IQuoter {
     /// @return amountIn The amount of first token required to be paid
     /// @return sqrtPriceX96AfterList List of the sqrt price after the swap for each pool in the path
     /// @return initializedTicksCrossedList List of the initialized ticks that the swap crossed for each pool in the path
-    function quoteExactOutput(bytes memory path, uint256 amountOut)
+    function quoteExactOutput(
+        bytes memory path,
+        uint256 amountOut
+    )
         external
         view
         returns (
@@ -1148,10 +1052,10 @@ interface IStateViewV4 {
 
     function getLiquidity(bytes32 poolId) external view returns (uint128 liquidity);
     function getTickBitmap(bytes32 poolId, int16 wordPos) external view returns (uint256);
-    function getTickLiquidity(bytes32 poolId, int24 tick)
-        external
-        view
-        returns (uint128 liquidityGross, int128 liquidityNet);
+    function getTickLiquidity(
+        bytes32 poolId,
+        int24 tick
+    ) external view returns (uint128 liquidityGross, int128 liquidityNet);
 }
 
 struct V4PoolKey {
@@ -1162,10 +1066,13 @@ struct V4PoolKey {
     address hooks;
 }
 
-function _v4PoolId(address tokenA, address tokenB, uint24 fee, int24 spacing, address hooks)
-    pure
-    returns (bytes32 poolId, bool zeroForOne)
-{
+function _v4PoolId(
+    address tokenA,
+    address tokenB,
+    uint24 fee,
+    int24 spacing,
+    address hooks
+) pure returns (bytes32 poolId, bool zeroForOne) {
     (address token0, address token1, bool zf1) = _sortTokens(tokenA, tokenB);
     zeroForOne = zf1;
     V4PoolKey memory key = V4PoolKey(token0, token1, fee, spacing, hooks);
@@ -1174,10 +1081,7 @@ function _v4PoolId(address tokenA, address tokenB, uint24 fee, int24 spacing, ad
 
 // General helpers:
 
-function _sortTokens(address tokenA, address tokenB)
-    pure
-    returns (address token0, address token1, bool zeroForOne)
-{
+function _sortTokens(address tokenA, address tokenB) pure returns (address token0, address token1, bool zeroForOne) {
     (token0, token1) = (zeroForOne = tokenA < tokenB) ? (tokenA, tokenB) : (tokenB, tokenA);
 }
 
@@ -1298,10 +1202,10 @@ library TickMath {
 
     /// @dev The minimum tick that may be passed to #getSqrtPriceAtTick computed from log base 1.0001 of 2**-128
     /// @dev If ever MIN_TICK and MAX_TICK are not centered around 0, the absTick logic in getSqrtPriceAtTick cannot be used
-    int24 internal constant MIN_TICK = -887272;
+    int24 internal constant MIN_TICK = -887_272;
     /// @dev The maximum tick that may be passed to #getSqrtPriceAtTick computed from log base 1.0001 of 2**128
     /// @dev If ever MIN_TICK and MAX_TICK are not centered around 0, the absTick logic in getSqrtPriceAtTick cannot be used
-    int24 internal constant MAX_TICK = 887272;
+    int24 internal constant MAX_TICK = 887_272;
 
     /// @dev The minimum tick spacing value drawn from the range of type int16 that is greater than 0, i.e. min from the range [1, 32767]
     int24 internal constant MIN_TICK_SPACING = 1;
@@ -1309,12 +1213,12 @@ library TickMath {
     int24 internal constant MAX_TICK_SPACING = type(int16).max;
 
     /// @dev The minimum value that can be returned from #getSqrtPriceAtTick. Equivalent to getSqrtPriceAtTick(MIN_TICK)
-    uint160 internal constant MIN_SQRT_PRICE = 4295128739;
+    uint160 internal constant MIN_SQRT_PRICE = 4_295_128_739;
     /// @dev The maximum value that can be returned from #getSqrtPriceAtTick. Equivalent to getSqrtPriceAtTick(MAX_TICK)
-    uint160 internal constant MAX_SQRT_PRICE = 1461446703485210103287273052203988822378723970342;
+    uint160 internal constant MAX_SQRT_PRICE = 1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_342;
     /// @dev A threshold used for optimized bounds check, equals `MAX_SQRT_PRICE - MIN_SQRT_PRICE - 1`
     uint160 internal constant MAX_SQRT_PRICE_MINUS_MIN_SQRT_PRICE_MINUS_ONE =
-        1461446703485210103287273052203988822378723970342 - 4295128739 - 1;
+        1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_342 - 4_295_128_739 - 1;
 
     /// @notice Given a tickSpacing, compute the maximum usable tick
     function maxUsableTick(int24 tickSpacing) internal pure returns (int24) {
@@ -1358,10 +1262,7 @@ library TickMath {
             //     or price = int(2**128 / sqrt(1.0001)) if (absTick & 0x1) else 1 << 128
             uint256 price;
             assembly ("memory-safe") {
-                price := xor(
-                    shl(128, 1),
-                    mul(xor(shl(128, 1), 0xfffcb933bd6fad37aa2d162d1a594001), and(absTick, 0x1))
-                )
+                price := xor(shl(128, 1), mul(xor(shl(128, 1), 0xfffcb933bd6fad37aa2d162d1a594001), and(absTick, 0x1)))
             }
             if (absTick & 0x2 != 0) price = (price * 0xfff97272373d413259a46990580e213a) >> 128;
             if (absTick & 0x4 != 0) price = (price * 0xfff2e50f5f656932ef12357cf3c7fdcc) >> 128;
@@ -1506,19 +1407,17 @@ library TickMath {
                 log_2 := or(log_2, shl(50, f))
             }
 
-            int256 log_sqrt10001 = log_2 * 255738958999603826347141; // Q22.128 number
+            int256 log_sqrt10001 = log_2 * 255_738_958_999_603_826_347_141; // Q22.128 number
 
             // Magic number represents the ceiling of the maximum value of the error when approximating log_sqrt10001(x)
-            int24 tickLow = int24((log_sqrt10001 - 3402992956809132418596140100660247210) >> 128);
+            int24 tickLow = int24((log_sqrt10001 - 3_402_992_956_809_132_418_596_140_100_660_247_210) >> 128);
 
             // Magic number represents the minimum value of the error when approximating log_sqrt10001(x), when
             // sqrtPrice is from the range (2^-64, 2^64). This is safe as MIN_SQRT_PRICE is more than 2^-64. If MIN_SQRT_PRICE
             // is changed, this may need to be changed too
-            int24 tickHi = int24((log_sqrt10001 + 291339464771989622907027621153398088495) >> 128);
+            int24 tickHi = int24((log_sqrt10001 + 291_339_464_771_989_622_907_027_621_153_398_088_495) >> 128);
 
-            tick = tickLow == tickHi
-                ? tickLow
-                : getSqrtPriceAtTick(tickHi) <= sqrtPriceX96 ? tickHi : tickLow;
+            tick = tickLow == tickHi ? tickLow : getSqrtPriceAtTick(tickHi) <= sqrtPriceX96 ? tickHi : tickLow;
         }
     }
 }
@@ -1663,16 +1562,10 @@ library CustomRevert {
 
             // Encode wrapped error selector, address, function selector, offset, additional context, size, revert reason
             mstore(fmp, wrappedErrorSelector)
-            mstore(
-                add(fmp, 0x04),
-                and(revertingContract, 0xffffffffffffffffffffffffffffffffffffffff)
-            )
+            mstore(add(fmp, 0x04), and(revertingContract, 0xffffffffffffffffffffffffffffffffffffffff))
             mstore(
                 add(fmp, 0x24),
-                and(
-                    revertingFunctionSelector,
-                    0xffffffff00000000000000000000000000000000000000000000000000000000
-                )
+                and(revertingFunctionSelector, 0xffffffff00000000000000000000000000000000000000000000000000000000)
             )
             // offset revert reason
             mstore(add(fmp, 0x44), 0x80)
@@ -1687,10 +1580,7 @@ library CustomRevert {
             // additional context
             mstore(
                 add(fmp, add(0xc4, encodedDataSize)),
-                and(
-                    additionalContext,
-                    0xffffffff00000000000000000000000000000000000000000000000000000000
-                )
+                and(additionalContext, 0xffffffff00000000000000000000000000000000000000000000000000000000)
             )
             revert(fmp, add(0xe4, encodedDataSize))
         }
@@ -1747,27 +1637,18 @@ library SwapMath {
         uint128 liquidity,
         int256 amountRemaining,
         uint24 feePips
-    )
-        internal
-        pure
-        returns (uint160 sqrtPriceNextX96, uint256 amountIn, uint256 amountOut, uint256 feeAmount)
-    {
+    ) internal pure returns (uint160 sqrtPriceNextX96, uint256 amountIn, uint256 amountOut, uint256 feeAmount) {
         unchecked {
             uint256 _feePips = feePips; // upcast once and cache
             bool zeroForOne = sqrtPriceCurrentX96 >= sqrtPriceTargetX96;
             bool exactIn = amountRemaining < 0;
 
             if (exactIn) {
-                uint256 amountRemainingLessFee = FullMath.mulDiv(
-                    uint256(-amountRemaining), MAX_SWAP_FEE - _feePips, MAX_SWAP_FEE
-                );
+                uint256 amountRemainingLessFee =
+                    FullMath.mulDiv(uint256(-amountRemaining), MAX_SWAP_FEE - _feePips, MAX_SWAP_FEE);
                 amountIn = zeroForOne
-                    ? SqrtPriceMath.getAmount0Delta(
-                        sqrtPriceTargetX96, sqrtPriceCurrentX96, liquidity, true
-                    )
-                    : SqrtPriceMath.getAmount1Delta(
-                        sqrtPriceCurrentX96, sqrtPriceTargetX96, liquidity, true
-                    );
+                    ? SqrtPriceMath.getAmount0Delta(sqrtPriceTargetX96, sqrtPriceCurrentX96, liquidity, true)
+                    : SqrtPriceMath.getAmount1Delta(sqrtPriceCurrentX96, sqrtPriceTargetX96, liquidity, true);
                 if (amountRemainingLessFee >= amountIn) {
                     // `amountIn` is capped by the target price
                     sqrtPriceNextX96 = sqrtPriceTargetX96;
@@ -1784,20 +1665,12 @@ library SwapMath {
                     feeAmount = uint256(-amountRemaining) - amountIn;
                 }
                 amountOut = zeroForOne
-                    ? SqrtPriceMath.getAmount1Delta(
-                        sqrtPriceNextX96, sqrtPriceCurrentX96, liquidity, false
-                    )
-                    : SqrtPriceMath.getAmount0Delta(
-                        sqrtPriceCurrentX96, sqrtPriceNextX96, liquidity, false
-                    );
+                    ? SqrtPriceMath.getAmount1Delta(sqrtPriceNextX96, sqrtPriceCurrentX96, liquidity, false)
+                    : SqrtPriceMath.getAmount0Delta(sqrtPriceCurrentX96, sqrtPriceNextX96, liquidity, false);
             } else {
                 amountOut = zeroForOne
-                    ? SqrtPriceMath.getAmount1Delta(
-                        sqrtPriceTargetX96, sqrtPriceCurrentX96, liquidity, false
-                    )
-                    : SqrtPriceMath.getAmount0Delta(
-                        sqrtPriceCurrentX96, sqrtPriceTargetX96, liquidity, false
-                    );
+                    ? SqrtPriceMath.getAmount1Delta(sqrtPriceTargetX96, sqrtPriceCurrentX96, liquidity, false)
+                    : SqrtPriceMath.getAmount0Delta(sqrtPriceCurrentX96, sqrtPriceTargetX96, liquidity, false);
                 if (uint256(amountRemaining) >= amountOut) {
                     // `amountOut` is capped by the target price
                     sqrtPriceNextX96 = sqrtPriceTargetX96;
@@ -1809,12 +1682,8 @@ library SwapMath {
                     );
                 }
                 amountIn = zeroForOne
-                    ? SqrtPriceMath.getAmount0Delta(
-                        sqrtPriceNextX96, sqrtPriceCurrentX96, liquidity, true
-                    )
-                    : SqrtPriceMath.getAmount1Delta(
-                        sqrtPriceCurrentX96, sqrtPriceNextX96, liquidity, true
-                    );
+                    ? SqrtPriceMath.getAmount0Delta(sqrtPriceNextX96, sqrtPriceCurrentX96, liquidity, true)
+                    : SqrtPriceMath.getAmount1Delta(sqrtPriceCurrentX96, sqrtPriceNextX96, liquidity, true);
                 // `feePips` cannot be `MAX_SWAP_FEE` for exact out
                 feeAmount = FullMath.mulDivRoundingUp(amountIn, _feePips, MAX_SWAP_FEE - _feePips);
             }
@@ -1832,11 +1701,7 @@ library FullMath {
     /// @param denominator The divisor
     /// @return result The 256-bit result
     /// @dev Credit to Remco Bloemen under MIT license https://xn--2-umb.com/21/muldiv
-    function mulDiv(uint256 a, uint256 b, uint256 denominator)
-        internal
-        pure
-        returns (uint256 result)
-    {
+    function mulDiv(uint256 a, uint256 b, uint256 denominator) internal pure returns (uint256 result) {
         unchecked {
             // 512-bit multiply [prod1 prod0] = a * b
             // Compute the product mod 2**256 and mod 2**256 - 1
@@ -1931,11 +1796,7 @@ library FullMath {
     /// @param b The multiplier
     /// @param denominator The divisor
     /// @return result The 256-bit result
-    function mulDivRoundingUp(uint256 a, uint256 b, uint256 denominator)
-        internal
-        pure
-        returns (uint256 result)
-    {
+    function mulDivRoundingUp(uint256 a, uint256 b, uint256 denominator) internal pure returns (uint256 result) {
         unchecked {
             result = mulDiv(a, b, denominator);
             if (mulmod(a, b, denominator) != 0) {
@@ -2016,10 +1877,7 @@ library SqrtPriceMath {
                 assembly ("memory-safe") {
                     if iszero(
                         and(
-                            eq(
-                                div(product, amount),
-                                and(sqrtPX96, 0xffffffffffffffffffffffffffffffffffffffff)
-                            ),
+                            eq(div(product, amount), and(sqrtPX96, 0xffffffffffffffffffffffffffffffffffffffff)),
                             gt(numerator1, product)
                         )
                     ) {
@@ -2228,17 +2086,15 @@ library SqrtPriceMath {
     /// @param sqrtPriceBX96 Another sqrt price
     /// @param liquidity The change in liquidity for which to compute the amount0 delta
     /// @return int256 Amount of currency0 corresponding to the passed liquidityDelta between the two prices
-    function getAmount0Delta(uint160 sqrtPriceAX96, uint160 sqrtPriceBX96, int128 liquidity)
-        internal
-        pure
-        returns (int256)
-    {
+    function getAmount0Delta(
+        uint160 sqrtPriceAX96,
+        uint160 sqrtPriceBX96,
+        int128 liquidity
+    ) internal pure returns (int256) {
         unchecked {
             return liquidity < 0
-                ? getAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(-liquidity), false)
-                    .toInt256()
-                : -getAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(liquidity), true)
-                    .toInt256();
+                ? getAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(-liquidity), false).toInt256()
+                : -getAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(liquidity), true).toInt256();
         }
     }
 
@@ -2247,17 +2103,15 @@ library SqrtPriceMath {
     /// @param sqrtPriceBX96 Another sqrt price
     /// @param liquidity The change in liquidity for which to compute the amount1 delta
     /// @return int256 Amount of currency1 corresponding to the passed liquidityDelta between the two prices
-    function getAmount1Delta(uint160 sqrtPriceAX96, uint160 sqrtPriceBX96, int128 liquidity)
-        internal
-        pure
-        returns (int256)
-    {
+    function getAmount1Delta(
+        uint160 sqrtPriceAX96,
+        uint160 sqrtPriceBX96,
+        int128 liquidity
+    ) internal pure returns (int256) {
         unchecked {
             return liquidity < 0
-                ? getAmount1Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(-liquidity), false)
-                    .toInt256()
-                : -getAmount1Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(liquidity), true)
-                    .toInt256();
+                ? getAmount1Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(-liquidity), false).toInt256()
+                : -getAmount1Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(liquidity), true).toInt256();
         }
     }
 }

@@ -14,10 +14,12 @@ interface IZQuoterBaseCore {
         uint256 amountOut;
     }
 
-    function getQuotes(bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount)
-        external
-        view
-        returns (Quote memory best, Quote[] memory quotes);
+    function getQuotes(
+        bool exactOut,
+        address tokenIn,
+        address tokenOut,
+        uint256 swapAmount
+    ) external view returns (Quote memory best, Quote[] memory quotes);
 
     function buildBestSwap(
         address to,
@@ -27,10 +29,7 @@ interface IZQuoterBaseCore {
         uint256 swapAmount,
         uint256 slippageBps,
         uint256 deadline
-    )
-        external
-        view
-        returns (Quote memory best, bytes memory callData, uint256 amountLimit, uint256 msgValue);
+    ) external view returns (Quote memory best, bytes memory callData, uint256 amountLimit, uint256 msgValue);
 
     function buildBestSwapViaETHMulticall(
         address to,
@@ -41,10 +40,7 @@ interface IZQuoterBaseCore {
         uint256 swapAmount,
         uint256 slippageBps,
         uint256 deadline
-    )
-        external
-        view
-        returns (Quote memory a, Quote memory b, bytes[] memory calls, uint256 msgValue);
+    ) external view returns (Quote memory a, Quote memory b, bytes[] memory calls, uint256 msgValue);
 }
 
 contract ZQuoter {
@@ -76,16 +72,16 @@ contract ZQuoter {
         ZROUTER = zRouter_;
     }
 
-    function getQuotes(bool exactOut, address tokenIn, address tokenOut, uint256 swapAmount)
-        public
-        view
-        returns (Quote memory best, Quote[] memory quotes)
-    {
-        (bool ok, bytes memory ret) = address(BASE).staticcall(
-            abi.encodeWithSelector(
-                IZQuoterBaseCore.getQuotes.selector, exactOut, tokenIn, tokenOut, swapAmount
-            )
-        );
+    function getQuotes(
+        bool exactOut,
+        address tokenIn,
+        address tokenOut,
+        uint256 swapAmount
+    ) public view returns (Quote memory best, Quote[] memory quotes) {
+        (bool ok, bytes memory ret) = address(BASE)
+            .staticcall(
+                abi.encodeWithSelector(IZQuoterBaseCore.getQuotes.selector, exactOut, tokenIn, tokenOut, swapAmount)
+            );
         require(ok, "getQuotes");
         (best, quotes) = abi.decode(ret, (Quote, Quote[]));
     }
@@ -98,23 +94,20 @@ contract ZQuoter {
         uint256 swapAmount,
         uint256 slippageBps,
         uint256 deadline
-    )
-        public
-        view
-        returns (Quote memory best, bytes memory callData, uint256 amountLimit, uint256 msgValue)
-    {
-        (bool ok, bytes memory ret) = address(BASE).staticcall(
-            abi.encodeWithSelector(
-                IZQuoterBaseCore.buildBestSwap.selector,
-                to,
-                exactOut,
-                tokenIn,
-                tokenOut,
-                swapAmount,
-                slippageBps,
-                deadline
-            )
-        );
+    ) public view returns (Quote memory best, bytes memory callData, uint256 amountLimit, uint256 msgValue) {
+        (bool ok, bytes memory ret) = address(BASE)
+            .staticcall(
+                abi.encodeWithSelector(
+                    IZQuoterBaseCore.buildBestSwap.selector,
+                    to,
+                    exactOut,
+                    tokenIn,
+                    tokenOut,
+                    swapAmount,
+                    slippageBps,
+                    deadline
+                )
+            );
         require(ok, "buildBestSwap");
         (best, callData, amountLimit, msgValue) = abi.decode(ret, (Quote, bytes, uint256, uint256));
     }
@@ -132,38 +125,36 @@ contract ZQuoter {
     )
         public
         view
-        returns (
-            Quote memory a,
-            Quote memory b,
-            bytes[] memory calls,
-            bytes memory multicall,
-            uint256 msgValue
-        )
+        returns (Quote memory a, Quote memory b, bytes[] memory calls, bytes memory multicall, uint256 msgValue)
     {
-        (bool ok, bytes memory ret) = address(BASE).staticcall(
-            abi.encodeWithSelector(
-                IZQuoterBaseCore.buildBestSwapViaETHMulticall.selector,
-                to,
-                refundTo,
-                exactOut,
-                tokenIn,
-                tokenOut,
-                swapAmount,
-                slippageBps,
-                deadline
-            )
-        );
+        (bool ok, bytes memory ret) = address(BASE)
+            .staticcall(
+                abi.encodeWithSelector(
+                    IZQuoterBaseCore.buildBestSwapViaETHMulticall.selector,
+                    to,
+                    refundTo,
+                    exactOut,
+                    tokenIn,
+                    tokenOut,
+                    swapAmount,
+                    slippageBps,
+                    deadline
+                )
+            );
         require(ok, "buildBestSwapViaETHMulticall");
         (a, b, calls, msgValue) = abi.decode(ret, (Quote, Quote, bytes[], uint256));
         multicall = abi.encodeWithSelector(bytes4(keccak256("multicall(bytes[])")), calls);
     }
 
     /// @dev Optional SDK path — not implemented on Sepolia (no Curve / split router).
-    function buildSplitSwap(address, address, address, uint256, uint256, uint256)
-        external
-        pure
-        returns (Quote[2] memory legs, bytes memory multicall, uint256 msgValue)
-    {
+    function buildSplitSwap(
+        address,
+        address,
+        address,
+        uint256,
+        uint256,
+        uint256
+    ) external pure returns (Quote[2] memory legs, bytes memory multicall, uint256 msgValue) {
         legs[0] = Quote(AMM.UNI_V2, 0, 0, 0);
         legs[1] = Quote(AMM.UNI_V2, 0, 0, 0);
         multicall = "";
@@ -171,7 +162,13 @@ contract ZQuoter {
     }
 
     /// @dev Optional SDK path — Curve is not deployed on Base Sepolia.
-    function quoteCurve(bool, address, address, uint256, uint256)
+    function quoteCurve(
+        bool,
+        address,
+        address,
+        uint256,
+        uint256
+    )
         external
         pure
         returns (

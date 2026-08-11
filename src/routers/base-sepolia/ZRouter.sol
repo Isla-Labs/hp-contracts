@@ -18,7 +18,7 @@ contract ZRouter {
         _;
     }
 
-    constructor() payable {}
+    constructor() payable { }
 
     function swapV2(
         address to,
@@ -107,9 +107,7 @@ contract ZRouter {
                     zeroForOne,
                     exactOut ? -(int256(swapAmount)) : int256(swapAmount),
                     sqrtPriceLimitX96,
-                    abi.encodePacked(
-                        ethIn, ethOut, false, msg.sender, tokenIn, tokenOut, to, swapFee
-                    )
+                    abi.encodePacked(ethIn, ethOut, false, msg.sender, tokenIn, tokenOut, to, swapFee)
                 );
 
             if (amountLimit != 0) {
@@ -147,17 +145,7 @@ contract ZRouter {
         (amountIn, amountOut) = abi.decode(
             IV4PoolManager(V4_POOL_MANAGER)
                 .unlock(
-                    abi.encode(
-                        msg.sender,
-                        to,
-                        exactOut,
-                        swapFee,
-                        tickSpace,
-                        tokenIn,
-                        tokenOut,
-                        swapAmount,
-                        amountLimit
-                    )
+                    abi.encode(msg.sender, to, exactOut, swapFee, tickSpace, tokenIn, tokenOut, swapAmount, amountLimit)
                 ),
             (uint256, uint256)
         );
@@ -173,16 +161,12 @@ contract ZRouter {
         address tokenOut,
         uint256 amountOut
     ) public payable returns (int256 delta) {
-        delta = IV4Router(V4_ROUTER).swap{value: ethIn}(data, deadline);
+        delta = IV4Router(V4_ROUTER).swap{ value: ethIn }(data, deadline);
         if (amountOut != 0) depositFor(tokenOut, 0, amountOut, address(this));
     }
 
     /// @dev Handle V4 PoolManager swap callback - hookless default.
-    function unlockCallback(bytes calldata callbackData)
-        public
-        payable
-        returns (bytes memory result)
-    {
+    function unlockCallback(bytes calldata callbackData) public payable returns (bytes memory result) {
         require(msg.sender == V4_POOL_MANAGER, Unauthorized());
 
         (
@@ -195,31 +179,20 @@ contract ZRouter {
             address tokenOut,
             uint256 swapAmount,
             uint256 amountLimit
-        ) = abi.decode(
-            callbackData,
-            (address, address, bool, uint24, int24, address, address, uint256, uint256)
-        );
+        ) = abi.decode(callbackData, (address, address, bool, uint24, int24, address, address, uint256, uint256));
 
         bool zeroForOne = tokenIn < tokenOut;
         bool ethIn = tokenIn == address(0);
 
         V4PoolKey memory key = V4PoolKey(
-            zeroForOne ? tokenIn : tokenOut,
-            zeroForOne ? tokenOut : tokenIn,
-            swapFee,
-            tickSpace,
-            address(0)
+            zeroForOne ? tokenIn : tokenOut, zeroForOne ? tokenOut : tokenIn, swapFee, tickSpace, address(0)
         );
 
         unchecked {
             int256 delta = _swap(swapAmount, key, zeroForOne, exactOut);
             uint256 takeAmount = zeroForOne
-                ? (!exactOut
-                        ? uint256(uint128(delta.amount1()))
-                        : uint256(uint128(-delta.amount0())))
-                : (!exactOut
-                        ? uint256(uint128(delta.amount0()))
-                        : uint256(uint128(-delta.amount1())));
+                ? (!exactOut ? uint256(uint128(delta.amount1())) : uint256(uint128(-delta.amount0())))
+                : (!exactOut ? uint256(uint128(delta.amount0())) : uint256(uint128(-delta.amount1())));
 
             IV4PoolManager(msg.sender).sync(tokenIn);
             uint256 amountIn = !exactOut ? swapAmount : takeAmount;
@@ -242,13 +215,11 @@ contract ZRouter {
             }
 
             uint256 amountOut = !exactOut ? takeAmount : swapAmount;
-            if (amountLimit != 0 && (exactOut ? takeAmount > amountLimit : amountOut < amountLimit))
-            {
+            if (amountLimit != 0 && (exactOut ? takeAmount > amountLimit : amountOut < amountLimit)) {
                 revert Slippage();
             }
 
-            IV4PoolManager(msg.sender)
-            .settle{value: ethIn ? (exactOut ? takeAmount : swapAmount) : 0}();
+            IV4PoolManager(msg.sender).settle{ value: ethIn ? (exactOut ? takeAmount : swapAmount) : 0 }();
             IV4PoolManager(msg.sender).take(tokenOut, to, amountOut);
 
             result = abi.encode(amountIn, amountOut);
@@ -261,10 +232,12 @@ contract ZRouter {
         }
     }
 
-    function _swap(uint256 swapAmount, V4PoolKey memory key, bool zeroForOne, bool exactOut)
-        internal
-        returns (int256 delta)
-    {
+    function _swap(
+        uint256 swapAmount,
+        V4PoolKey memory key,
+        bool zeroForOne,
+        bool exactOut
+    ) internal returns (int256 delta) {
         unchecked {
             delta = IV4PoolManager(msg.sender)
                 .swap(
@@ -297,30 +270,22 @@ contract ZRouter {
         PoolKey memory key = PoolKey(id0, id1, token0, token1, feeOrHook);
 
         bool ethIn = tokenIn == address(0);
-        if (!_useTransientBalance(
-                address(this), tokenIn, idIn, !exactOut ? swapAmount : amountLimit
-            )) {
+        if (!_useTransientBalance(address(this), tokenIn, idIn, !exactOut ? swapAmount : amountLimit)) {
             if (!ethIn) {
                 if (idIn == 0) {
-                    safeTransferFrom(
-                        tokenIn, msg.sender, address(this), !exactOut ? swapAmount : amountLimit
-                    );
+                    safeTransferFrom(tokenIn, msg.sender, address(this), !exactOut ? swapAmount : amountLimit);
                 } else {
                     IERC6909(tokenIn)
-                        .transferFrom(
-                            msg.sender, address(this), idIn, !exactOut ? swapAmount : amountLimit
-                        );
+                        .transferFrom(msg.sender, address(this), idIn, !exactOut ? swapAmount : amountLimit);
                 }
             }
         }
 
         uint256 swapResult;
         if (!exactOut) {
-            swapResult =
-                IZAMM(ZAMM).swapExactIn(key, swapAmount, amountLimit, zeroForOne, to, deadline);
+            swapResult = IZAMM(ZAMM).swapExactIn(key, swapAmount, amountLimit, zeroForOne, to, deadline);
         } else {
-            swapResult =
-                IZAMM(ZAMM).swapExactOut(key, swapAmount, amountLimit, zeroForOne, to, deadline);
+            swapResult = IZAMM(ZAMM).swapExactOut(key, swapAmount, amountLimit, zeroForOne, to, deadline);
         }
 
         // ── return values ────────────────────────────────
@@ -348,7 +313,7 @@ contract ZRouter {
         uint256 deadline
     ) public payable returns (uint256 amount0, uint256 amount1, uint256 liquidity) {
         bool ethIn = (poolKey.token0 == address(0));
-        (amount0, amount1, liquidity) = IZAMM(ZAMM).addLiquidity{value: ethIn ? amount0Desired : 0}(
+        (amount0, amount1, liquidity) = IZAMM(ZAMM).addLiquidity{ value: ethIn ? amount0Desired : 0 }(
             poolKey, amount0Desired, amount1Desired, amount0Min, amount1Min, to, deadline
         );
     }
@@ -439,9 +404,7 @@ contract ZRouter {
                     zeroForOne,
                     exactOut ? -(int256(swapAmount)) : int256(swapAmount),
                     sqrtPriceLimitX96,
-                    abi.encodePacked(
-                        ethIn, ethOut, true, msg.sender, tokenIn, tokenOut, to, tickSpacing
-                    )
+                    abi.encodePacked(ethIn, ethOut, true, msg.sender, tokenIn, tokenOut, to, tickSpacing)
                 );
 
             if (amountLimit != 0) {
@@ -466,10 +429,7 @@ contract ZRouter {
     }
 
     /// @dev `uniswapV3SwapCallback`.
-    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata)
-        public
-        payable
-    {
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) public payable {
         unchecked {
             bool ethIn;
             bool ethOut;
@@ -523,7 +483,7 @@ contract ZRouter {
             calldatacopy(0x40, data.offset, end)
             let resultsOffset := end
             end := add(results, end)
-            for {} 1 {} {
+            for { } 1 { } {
                 let o := add(data.offset, mload(results))
                 let m := add(resultsOffset, 0x40)
                 calldatacopy(m, add(o, 0x20), calldataload(o))
@@ -535,10 +495,7 @@ contract ZRouter {
                 results := add(results, 0x20)
                 mstore(m, returndatasize())
                 returndatacopy(add(m, 0x20), 0x00, returndatasize())
-                resultsOffset := and(
-                    add(add(resultsOffset, returndatasize()), 0x3f),
-                    0xffffffffffffffe0
-                )
+                resultsOffset := and(add(add(resultsOffset, returndatasize()), 0x3f), 0xffffffffffffffe0)
                 if iszero(lt(results, end)) { break }
             }
             return(0x00, add(resultsOffset, 0x40))
@@ -564,10 +521,12 @@ contract ZRouter {
         depositFor(token, id, amount, address(this)); // transient storage tracker
     }
 
-    function _useTransientBalance(address user, address token, uint256 id, uint256 amount)
-        internal
-        returns (bool credited)
-    {
+    function _useTransientBalance(
+        address user,
+        address token,
+        uint256 id,
+        uint256 amount
+    ) internal returns (bool credited) {
         assembly ("memory-safe") {
             let m := mload(0x40)
             mstore(0x00, user)
@@ -598,7 +557,7 @@ contract ZRouter {
 
     // ** RECEIVER & SWEEPER
 
-    receive() external payable {}
+    receive() external payable { }
 
     function sweep(address token, uint256 id, uint256 amount, address to) public payable {
         if (token == address(0)) {
@@ -606,10 +565,7 @@ contract ZRouter {
         } else if (id == 0) {
             safeTransfer(token, to, amount == 0 ? balanceOf(token) : amount);
         } else {
-            IERC6909(token)
-                .transfer(
-                    to, id, amount == 0 ? IERC6909(token).balanceOf(address(this), id) : amount
-                );
+            IERC6909(token).transfer(to, id, amount == 0 ? IERC6909(token).balanceOf(address(this), id) : amount);
         }
     }
 
@@ -627,11 +583,7 @@ contract ZRouter {
 
     // ** POOL HELPERS
 
-    function _v2PoolFor(address tokenA, address tokenB)
-        internal
-        pure
-        returns (address v2pool, bool zeroForOne)
-    {
+    function _v2PoolFor(address tokenA, address tokenB) internal pure returns (address v2pool, bool zeroForOne) {
         unchecked {
             (address token0, address token1, bool zF1) = _sortTokens(tokenA, tokenB);
             zeroForOne = zF1;
@@ -640,10 +592,7 @@ contract ZRouter {
                     uint256(
                         keccak256(
                             abi.encodePacked(
-                                hex"ff",
-                                V2_FACTORY,
-                                keccak256(abi.encodePacked(token0, token1)),
-                                V2_POOL_INIT_CODE_HASH
+                                hex"ff", V2_FACTORY, keccak256(abi.encodePacked(token0, token1)), V2_POOL_INIT_CODE_HASH
                             )
                         )
                     )
@@ -652,21 +601,17 @@ contract ZRouter {
         }
     }
 
-    function _v3PoolFor(address tokenA, address tokenB, uint24 fee)
-        internal
-        pure
-        returns (address v3pool, bool zeroForOne)
-    {
+    function _v3PoolFor(
+        address tokenA,
+        address tokenB,
+        uint24 fee
+    ) internal pure returns (address v3pool, bool zeroForOne) {
         (address token0, address token1, bool zF1) = _sortTokens(tokenA, tokenB);
         zeroForOne = zF1;
         v3pool = _computeV3pool(token0, token1, fee);
     }
 
-    function _computeV3pool(address token0, address token1, uint24 fee)
-        internal
-        pure
-        returns (address v3pool)
-    {
+    function _computeV3pool(address token0, address token1, uint24 fee) internal pure returns (address v3pool) {
         bytes32 salt = _hash(token0, token1, fee);
         assembly ("memory-safe") {
             mstore8(0x00, 0xff)
@@ -678,11 +623,7 @@ contract ZRouter {
         }
     }
 
-    function _hash(address value0, address value1, uint24 value2)
-        internal
-        pure
-        returns (bytes32 result)
-    {
+    function _hash(address value0, address value1, uint24 value2) internal pure returns (bytes32 result) {
         assembly ("memory-safe") {
             let m := mload(0x40)
             mstore(m, value0)
@@ -692,11 +633,11 @@ contract ZRouter {
         }
     }
 
-    function _aeroPoolFor(address tokenA, address tokenB, bool stable)
-        internal
-        pure
-        returns (address aeroPool, bool zeroForOne)
-    {
+    function _aeroPoolFor(
+        address tokenA,
+        address tokenB,
+        bool stable
+    ) internal pure returns (address aeroPool, bool zeroForOne) {
         (address token0, address token1, bool zF1) = _sortTokens(tokenA, tokenB);
         zeroForOne = zF1;
         bytes32 salt = keccak256(abi.encodePacked(token0, token1, stable));
@@ -712,11 +653,11 @@ contract ZRouter {
         }
     }
 
-    function _aeroCLPoolFor(address tokenA, address tokenB, int24 tickSpacing)
-        internal
-        pure
-        returns (address aeroCLPool, bool zeroForOne)
-    {
+    function _aeroCLPoolFor(
+        address tokenA,
+        address tokenB,
+        int24 tickSpacing
+    ) internal pure returns (address aeroCLPool, bool zeroForOne) {
         (address token0, address token1, bool zF1) = _sortTokens(tokenA, tokenB);
         zeroForOne = zF1;
         bytes32 salt = keccak256(abi.encode(token0, token1, tickSpacing));
@@ -724,10 +665,7 @@ contract ZRouter {
             let ptr := mload(0x40)
             mstore(ptr, 0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000000000000000000000)
             mstore(add(ptr, 0x14), shl(0x60, AERO_CL_IMPLEMENTATION))
-            mstore(
-                add(ptr, 0x28),
-                0x5af43d82803e903d91602b57fd5bf3ff00000000000000000000000000000000
-            )
+            mstore(add(ptr, 0x28), 0x5af43d82803e903d91602b57fd5bf3ff00000000000000000000000000000000)
             mstore(add(ptr, 0x38), shl(0x60, AERO_CL_FACTORY))
             mstore(add(ptr, 0x4c), salt)
             mstore(add(ptr, 0x6c), keccak256(ptr, 0x37))
@@ -735,11 +673,10 @@ contract ZRouter {
         }
     }
 
-    function _sortTokens(address tokenA, address tokenB)
-        internal
-        pure
-        returns (address token0, address token1, bool zeroForOne)
-    {
+    function _sortTokens(
+        address tokenA,
+        address tokenB
+    ) internal pure returns (address token0, address token1, bool zeroForOne) {
         (token0, token1) = (zeroForOne = tokenA < tokenB) ? (tokenA, tokenB) : (tokenB, tokenA);
     }
 
@@ -750,7 +687,7 @@ contract ZRouter {
             if iszero(calldatasize()) { return(calldatasize(), calldatasize()) }
             let o := 0
             let f := not(3)
-            for { let i := 0 } lt(i, calldatasize()) {} {
+            for { let i := 0 } lt(i, calldatasize()) { } {
                 let c := byte(0, xor(add(i, f), calldataload(i)))
                 i := add(i, 1)
                 if iszero(c) {
@@ -775,8 +712,7 @@ contract ZRouter {
 // Uniswap helpers:
 
 address constant V2_FACTORY = 0x7Ae58f10f7849cA6F5fB71b7f45CB416c9204b1e;
-bytes32 constant V2_POOL_INIT_CODE_HASH =
-    0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f;
+bytes32 constant V2_POOL_INIT_CODE_HASH = 0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f;
 
 interface IV2Pool {
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external;
@@ -784,10 +720,9 @@ interface IV2Pool {
 }
 
 address constant V3_FACTORY = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24;
-bytes32 constant V3_POOL_INIT_CODE_HASH =
-    0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54;
-uint160 constant MIN_SQRT_RATIO_PLUS_ONE = 4295128740;
-uint160 constant MAX_SQRT_RATIO_MINUS_ONE = 1461446703485210103287273052203988822378723970341;
+bytes32 constant V3_POOL_INIT_CODE_HASH = 0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54;
+uint160 constant MIN_SQRT_RATIO_PLUS_ONE = 4_295_128_740;
+uint160 constant MAX_SQRT_RATIO_MINUS_ONE = 1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_341;
 
 interface IV3Pool {
     function swap(
@@ -822,9 +757,11 @@ struct V4SwapParams {
 
 interface IV4PoolManager {
     function unlock(bytes calldata data) external returns (bytes memory);
-    function swap(V4PoolKey memory key, V4SwapParams memory params, bytes calldata hookData)
-        external
-        returns (int256 swapDelta);
+    function swap(
+        V4PoolKey memory key,
+        V4SwapParams memory params,
+        bytes calldata hookData
+    ) external returns (int256 swapDelta);
     function sync(address currency) external;
     function settle() external payable returns (uint256 paid);
     function take(address currency, address to, uint256 amount) external;
@@ -964,10 +901,7 @@ function balanceOf(address token) view returns (uint256 amount) {
     assembly ("memory-safe") {
         mstore(0x14, address())
         mstore(0x00, 0x70a08231000000000000000000000000)
-        amount := mul(
-            mload(0x20),
-            and(gt(returndatasize(), 0x1f), staticcall(gas(), token, 0x10, 0x24, 0x20, 0x20))
-        )
+        amount := mul(mload(0x20), and(gt(returndatasize(), 0x1f), staticcall(gas(), token, 0x10, 0x24, 0x20, 0x20)))
     }
 }
 
@@ -977,9 +911,7 @@ interface IERC6909 {
     function setOperator(address spender, bool approved) external returns (bool);
     function balanceOf(address owner, uint256 id) external view returns (uint256 amount);
     function transfer(address receiver, uint256 id, uint256 amount) external returns (bool);
-    function transferFrom(address sender, address receiver, uint256 id, uint256 amount)
-        external
-        returns (bool);
+    function transferFrom(address sender, address receiver, uint256 id, uint256 amount) external returns (bool);
 }
 
 // Low-level WETH helpers - we know WETH so we can make assumptions:

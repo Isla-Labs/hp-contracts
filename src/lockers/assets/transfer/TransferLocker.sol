@@ -16,7 +16,7 @@ import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
 import { ITransferLocker } from "@interfaces/governance/ITransferLocker.sol";
 import { CvmJob } from "@types/oracle/CvmTypes.sol";
 import { LifecycleQueueStatus, LifecycleReason, PendingLifecycle } from "@types/lockers/LifecycleTypes.sol";
-import { DopplerData, PlayerSet, PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
+import { PlayerSet, PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
 import { AddressProvider } from "@src/AddressProvider.sol";
 
 /// @dev Minimal FeeRouter surface for hub consistency checks (no markets import).
@@ -31,10 +31,9 @@ interface IFeeRouterHub {
  *      0) EligibilityVerifier (or Orchestrator) enqueues via `enqueueLifecycle`.
  *      1) 24h review window (`queueWait`); owner may `unqueueAsset`.
  *      2) Anyone calls `processLifecycle` after wait (rate-limited):
- *           - ContinuityUnderThreshold / LeftLeague → `setStatus(INACTIVE)`
- *             (unregisters vaults for live set; clears `leagueId` / `activeTournaments`)
+ *           - ContinuityUnderThreshold / LeftLeague → `deactivate()`
  *           - ChangedLeague / Reactivate → `CvmJob.LeagueTransfer` → fulfill →
- *             `setLeagueId` (+ Reactivate: `setStatus(BONDING|GRADUATED)` from pool hooks)
+ *             `setLeagueId` (+ Reactivate: `reactivate()` — status from `activePool` hooks)
  *
  *      Registry writes relay through `Orchestrator.execute` (this proxy must hold
  *      `AUTHORIZED_CONTRACT`).
@@ -265,10 +264,9 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
                 return requestId;
             }
 
-            // ContinuityUnderThreshold / LeftLeague → soft-inactive / deactivate
-            PlayerStatus status = PlayerStatus.INACTIVE;
-            _exec(address(playerSetRegistry), abi.encodeCall(IPlayerSetRegistry.setStatus, (playerId, status)));
-            emit Events.LifecycleApplied(playerId, reason, status);
+            // ContinuityUnderThreshold / LeftLeague → soft-inactive
+            _exec(address(playerSetRegistry), abi.encodeCall(IPlayerSetRegistry.deactivate, (playerId)));
+            emit Events.LifecycleApplied(playerId, reason, PlayerStatus.INACTIVE);
             _removeAt(i);
             return bytes32(0);
         }
@@ -311,12 +309,11 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
             abi.encodeCall(IPlayerSetRegistry.setLeagueId, (playerId, newLeagueId, activeTournamentIds))
         );
 
-        PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
         if (reason == LifecycleReason.Reactivate) {
-            status = _resolveReactivateStatus(playerId);
-            _exec(address(playerSetRegistry), abi.encodeCall(IPlayerSetRegistry.setStatus, (playerId, status)));
+            _exec(address(playerSetRegistry), abi.encodeCall(IPlayerSetRegistry.reactivate, (playerId)));
         }
 
+        PlayerStatus status = playerSetRegistry.getPlayerSet(playerId).status;
         emit Events.LifecycleApplied(playerId, reason, status);
         _removeAt(index);
     }
@@ -324,14 +321,6 @@ contract TransferLocker is Initializable, AddressBook, Ownable, Oracle, RateLimi
     // --------------------------------------------
     //  Internals
     // --------------------------------------------
-
-    function _resolveReactivateStatus(bytes32 playerId) private view returns (PlayerStatus) {
-        DopplerData memory d = playerSetRegistry.getDopplerData(playerId);
-        address hooks = address(d.activePool.hooks);
-        if (hooks == d.hookDoppler) return PlayerStatus.BONDING;
-        if (hooks == d.hookMigrator) return PlayerStatus.GRADUATED;
-        revert Errors.UnknownMarketPhase(playerId, hooks);
-    }
 
     /**
      * @dev Pre-flight for `setLeagueId`: non-zero league + hub, non-empty unique tournament

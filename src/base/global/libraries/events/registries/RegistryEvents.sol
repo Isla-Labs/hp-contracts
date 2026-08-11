@@ -14,9 +14,11 @@ library RegistryEvents {
     event LeagueIdUpdated(bytes32 indexed playerId, bytes32 indexed leagueId);
     event ActiveTournamentAdded(bytes32 indexed playerId, bytes32 indexed tournamentId);
     event ActiveTournamentRemoved(bytes32 indexed playerId, bytes32 indexed tournamentId);
+    /// @notice Emitted from `addPlayerSet` (vault is required at registration).
     event VaultDataAdded(bytes32 indexed playerId, address playerVault, address stToken);
     event VaultDataUpdated(bytes32 indexed playerId, address playerVault, address stToken, bool isUtilized);
-    event DopplerDataUpdated(bytes32 indexed playerId, address feeRouter);
+    /// @notice `DopplerData.activePool` updated (hooks / feeRouter stay immutable after register).
+    event ActivePoolUpdated(bytes32 indexed playerId);
     event AdvancedTradeDataAdded(bytes32 indexed playerId, address advancedTradeVault, address markSource);
 
     // --------------------------------------------

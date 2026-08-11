@@ -19,7 +19,7 @@ struct PlayerSet {
 }
 
 // --------------------------------------------
-//  Independently deployable registry sets
+//  PlayerSet field groups (`AdvancedTradeData` attached post-launch)
 // --------------------------------------------
 
 struct TokenData {
@@ -38,6 +38,7 @@ struct TournamentData {
     bytes32[] activeTournaments;
 }
 
+/// @dev `hookDoppler` / `hookMigrator` / `feeRouter` are immutable after register; only `activePool` is updated.
 struct DopplerData {
     PoolKey activePool;
     address hookDoppler;

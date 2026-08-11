@@ -65,7 +65,7 @@ struct EligibilityGroups {
  *        - ETH fees: direct (`numeraireFeesToNumeraireBuybackWad`)
  *        - Player-token fees: swap to ETH (`assetFeesToNumeraireBuybackWad`)
  *        - Rehype: 5% of swap fee → Airlock owner; remaining 95% → FeeRouter
- *        - FeeRouter (one per market; `status` cache via `PlayerSetRegistry.setStatus`):
+ *        - FeeRouter (one per market; `status` cache via PSR `graduatePool` / `deactivate` / `reactivate`):
  *            BONDING: 10/95 integrator → gross 5:10:85 (Doppler : HP : redistrib)
  *            GRADUATED / INACTIVE: 5/95 → gross 5:5:90
  *        - Spot pool LP fee default 0.15% (`migratorFee`) → StreamableFeesLocker 5:95

@@ -64,7 +64,20 @@ contract MockPlayerSetRegistry {
         return _sets[playerId].dopplerData;
     }
 
-    function setStatus(bytes32 playerId, PlayerStatus status) external {
+    function deactivate(bytes32 playerId) external {
+        _sets[playerId].status = PlayerStatus.INACTIVE;
+        lastStatusPlayerId = playerId;
+        lastStatus = PlayerStatus.INACTIVE;
+        unchecked {
+            ++setStatusCount;
+        }
+    }
+
+    function reactivate(bytes32 playerId) external {
+        DopplerData memory d = _sets[playerId].dopplerData;
+        address hooks = address(d.activePool.hooks);
+        PlayerStatus status =
+            hooks == d.hookDoppler ? PlayerStatus.BONDING : PlayerStatus.GRADUATED;
         _sets[playerId].status = status;
         lastStatusPlayerId = playerId;
         lastStatus = status;

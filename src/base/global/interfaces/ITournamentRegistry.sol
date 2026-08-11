@@ -33,15 +33,16 @@ interface ITournamentRegistry {
     //  Vault membership SoT — owner (Orchestrator)
     // --------------------------------------------
 
-    /// @notice Register vaults for `tournamentId` and sync the treasury cache.
+    /// @notice Register vaults for `tournamentId`; sync treasury, vault cache, PSR index.
     /// @dev Cancels a deferred unregister if the vault was pending removal during `Locked`.
     function registerVaults(bytes32 tournamentId, address[] calldata vaults) external;
 
     /**
-     * @notice Unregister vaults for `tournamentId` and sync the treasury cache.
+     * @notice Unregister vaults for `tournamentId`; sync treasury, vault cache, PSR index.
      * @dev If the tournament treasury's active round is `Locked`, removal is deferred until
      *      `flushPendingUnregisters` (called from `PbrTreasury.settle`) so SettlePbr still
      *      sees the vault in `getRegisteredVaults` / treasury `isVault` through distribute.
+     *      PSR index is updated on actual unregister (immediate or flush), not while pending.
      */
     function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external;
 

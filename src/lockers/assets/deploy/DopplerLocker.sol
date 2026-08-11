@@ -769,7 +769,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
      *      1) FeeRouter via Orchestrator (`FeeRouterFactory.create` returns existing)
      *      2) Airlock.create (skipped when `tokenPredicted` already has Airlock state)
      *      3) PlayerVault + stToken (skipped when `vaultPredicted` already has code)
-     *      4) PlayerSetRegistry writes (skipped when already registered / vault attached)
+     *      4) PlayerSetRegistry.write (skipped when already registered)
      *      5) StakeVesting.allocate (50/50 AT reserve + full vault-half stake; unlocks are manual)
      *
      *      Prerequisites / follow-ups (do not skip when wiring production intake):
@@ -861,7 +861,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         if (vault != e.vaultPredicted) revert Errors.DeployAddressMismatch(e.vaultPredicted, vault);
     }
 
-    /// @dev Skip registry writes that already landed; require addresses match on resume.
+    /// @dev Skip registry write that already landed; require addresses match on resume.
     function _registerPlayerSet(
         QueueEntry storage e,
         address asset,
@@ -878,47 +878,36 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
             if (set.tournamentData.leagueId != e.leagueId) {
                 revert Errors.LeagueMismatch(e.leagueId, set.tournamentData.leagueId);
             }
-        } else {
-            IDopplerConfig cfg = dopplerConfig;
-            PoolKey memory poolKey;
-            (,,,,, poolKey,) = IDopplerHookInitializerView(cfg.poolInitializer()).getState(asset);
-
-            // Domestic league id is also the DOMESTIC_LEAGUE tournament id.
-            bytes32[] memory activeTournaments = new bytes32[](1);
-            activeTournaments[0] = e.leagueId;
-
-            _exec(
-                address(playerSetRegistry),
-                abi.encodeCall(
-                    IPlayerSetRegistry.addPlayerSet,
-                    (
-                        e.playerId,
-                        TokenData({ token: asset, name: e.name, symbol: e.symbol }),
-                        TournamentData({ leagueId: e.leagueId, activeTournaments: activeTournaments }),
-                        DopplerData({
-                            activePool: poolKey,
-                            hookDoppler: cfg.rehypeHookInitializer(),
-                            hookMigrator: cfg.rehypeHookMigrator(),
-                            feeRouter: feeRouter
-                        })
-                    )
-                )
-            );
-        }
-
-        VaultData memory existingVault = playerSetRegistry.getVaultData(e.playerId);
-        if (existingVault.playerVault != address(0)) {
-            if (existingVault.playerVault != vault || existingVault.stToken != stToken) {
-                revert Errors.DeployAddressMismatch(vault, existingVault.playerVault);
+            if (set.vaultData.playerVault != vault || set.vaultData.stToken != stToken) {
+                revert Errors.DeployAddressMismatch(vault, set.vaultData.playerVault);
             }
             return;
         }
 
+        IDopplerConfig cfg = dopplerConfig;
+        PoolKey memory poolKey;
+        (,,,,, poolKey,) = IDopplerHookInitializerView(cfg.poolInitializer()).getState(asset);
+
+        // Domestic league id is also the DOMESTIC_LEAGUE tournament id.
+        bytes32[] memory activeTournaments = new bytes32[](1);
+        activeTournaments[0] = e.leagueId;
+
         _exec(
             address(playerSetRegistry),
             abi.encodeCall(
-                IPlayerSetRegistry.addVaultData,
-                (e.playerId, VaultData({ playerVault: vault, stToken: stToken, isUtilized: false }))
+                IPlayerSetRegistry.addPlayerSet,
+                (
+                    e.playerId,
+                    TokenData({ token: asset, name: e.name, symbol: e.symbol }),
+                    TournamentData({ leagueId: e.leagueId, activeTournaments: activeTournaments }),
+                    DopplerData({
+                        activePool: poolKey,
+                        hookDoppler: cfg.rehypeHookInitializer(),
+                        hookMigrator: cfg.rehypeHookMigrator(),
+                        feeRouter: feeRouter
+                    }),
+                    VaultData({ playerVault: vault, stToken: stToken, isUtilized: false })
+                )
             )
         );
     }

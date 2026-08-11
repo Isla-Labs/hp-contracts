@@ -29,7 +29,7 @@ interface ITransferLocker {
      * @notice Finalize the next mature `Queued` entry (anyone; rate-limited).
      * @dev Continuity / LeftLeague → `INACTIVE` (clears league / actives, unregisters vaults).
      *      ChangedLeague / Reactivate → `CvmJob.LeagueTransfer` (apply on fulfill:
-     *      `setLeagueId`, then Reactivate also `setStatus(BONDING|GRADUATED)`).
+     *      `setLeagueId`, then Reactivate also `reactivate()`).
      */
     function processLifecycle() external returns (bytes32 requestId);
 

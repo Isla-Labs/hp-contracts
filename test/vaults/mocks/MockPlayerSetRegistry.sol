@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
+import { PoolKey } from "@v4-core/types/PoolKey.sol";
+
 import { DopplerData, TournamentData, VaultData } from "@types/registries/PlayerSetTypes.sol";
 
 /// @notice Records utilization flips from PlayerVault stake/unstake; minimal PSR reads for routers.
@@ -31,6 +33,10 @@ contract MockPlayerSetRegistry {
 
     function setDopplerData(bytes32 playerId, DopplerData calldata data) external {
         _dopplerData[playerId] = data;
+    }
+
+    function graduatePool(bytes32 playerId, PoolKey calldata activePool) external {
+        _dopplerData[playerId].activePool = activePool;
     }
 
     function updateUtilization(bool isUtilized) external {

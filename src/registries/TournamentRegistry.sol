@@ -35,9 +35,10 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  *      `setInternational`). League hubs own their `leagueTreasury` at hub init.
  *
  *      Vault membership is the SoT here; each write syncs local caches on the tournament's
- *      `PbrTreasury` and the vault's active-treasury list. Unregister while the treasury active
- *      round is `Locked` is deferred until settle so SettlePbr still observes the vault through
- *      distribute.
+ *      `PbrTreasury` and the vault's active-treasury list. When the caller is not
+ *      `PlayerSetRegistry`, also mirrors into PSR `activeTournaments`. PSR-driven paths
+ *      update that index themselves (avoids PSR→TR→PSR). Unregister while Locked/SettlePending
+ *      is deferred until flush so SettlePbr still observes the vault through distribute.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -175,6 +176,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         Tournament storage t = _requireTournament(tournamentId);
         address treasury = t.pbrTreasury;
         uint256 length = vaults.length;
+
         for (uint256 i; i < length; ++i) {
             address vault = vaults[i];
             // Cancel deferred removal — vault stays registered for the locked round.
@@ -190,13 +192,16 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         address treasury = t.pbrTreasury;
         bool locked = _isTreasuryActiveRoundLocked(treasury);
         uint256 length = vaults.length;
-        for (uint256 i; i < length; ++i) {
-            address vault = vaults[i];
-            if (locked) {
-                _queuePendingUnregister(tournamentId, vault);
-            } else {
-                _unregisterVault(tournamentId, treasury, vault);
+
+        if (locked) {
+            for (uint256 i; i < length; ++i) {
+                _queuePendingUnregister(tournamentId, vaults[i]);
             }
+            return;
+        }
+
+        for (uint256 i; i < length; ++i) {
+            _unregisterVault(tournamentId, treasury, vaults[i]);
         }
     }
 
@@ -635,7 +640,8 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     function _registerVault(bytes32 tournamentId, address treasury, address vault) private {
         if (vault == address(0)) revert Errors.ZeroAddress();
         if (vault.code.length == 0) revert Errors.UnknownVault(vault);
-        if (playerSetRegistry.playerIdOfVault(vault) == bytes32(0)) revert Errors.UnknownVault(vault);
+        bytes32 playerId = playerSetRegistry.playerIdOfVault(vault);
+        if (playerId == bytes32(0)) revert Errors.UnknownVault(vault);
         if (_isVaultRegistered[tournamentId][vault]) revert Errors.VaultAlreadyRegistered(tournamentId, vault);
 
         _registeredVaults[tournamentId].push(vault);
@@ -646,6 +652,10 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         // Vault cache first so treasury register / live utilization sync sees membership.
         IPlayerVault(vault).syncActiveTreasury(tournamentId, treasury, true);
         IPbrTreasury(treasury).syncRegisterVault(vault);
+        // PSR-driven calls update the discovery index themselves.
+        if (msg.sender != address(playerSetRegistry)) {
+            playerSetRegistry.addActiveTournament(playerId, tournamentId);
+        }
     }
 
     function _unregisterVault(bytes32 tournamentId, address treasury, address vault) private {
@@ -669,6 +679,14 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
 
         IPbrTreasury(treasury).syncUnregisterVault(vault);
         IPlayerVault(vault).syncActiveTreasury(tournamentId, treasury, false);
+
+        // PSR-driven calls update the discovery index themselves; flush/owner still mirror here.
+        if (msg.sender != address(playerSetRegistry)) {
+            bytes32 playerId = playerSetRegistry.playerIdOfVault(vault);
+            if (playerId != bytes32(0)) {
+                playerSetRegistry.removeActiveTournament(playerId, tournamentId);
+            }
+        }
     }
 
     /// @dev In-place insertion sort by `seasonStartYear` ascending (stable for equal years).

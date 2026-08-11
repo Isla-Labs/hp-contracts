@@ -7,8 +7,8 @@ pragma solidity ^0.8.34;
  *      LeftLeague = no club after a season squad snapshot (exit / relegation).
  *      ChangedLeague = still active, cross-league membership move (migrate topology).
  *      Reactivate = already `INACTIVE`, now back above continuity threshold.
- *      Uses the same `LeagueTransfer` oracle as ChangedLeague to restore
- *      `leagueId` / `activeTournaments` (cleared on deactivate) before `setStatus`.
+ *      Uses the same `LeagueTransfer` oracle as ChangedLeague to restore membership via
+ *      `setLeagueId` (then `reactivate()`). Discovery index is cleared on deactivate.
  */
 enum LifecycleReason {
     ContinuityUnderThreshold,

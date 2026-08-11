@@ -19,10 +19,11 @@ library RegistryErrors {
     // --------------------------------------------
 
     error NotAuthorized();
-    error VaultDataAlreadySet(bytes32 playerId);
     error AdvancedTradeDataAlreadySet(bytes32 playerId);
     error TournamentAlreadyActive(bytes32 tournamentId);
     error TournamentNotActive(bytes32 tournamentId);
+    /// @dev `activePool.hooks` is neither registered `hookDoppler` nor `hookMigrator`.
+    error InvalidActivePool(bytes32 playerId, address hooks);
 
     // --------------------------------------------
     //  TournamentRegistry Errors

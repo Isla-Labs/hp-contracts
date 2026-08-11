@@ -197,7 +197,8 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
         }
         if (!hasLeague) revert Errors.TournamentNotActive(newLeagueId);
 
-        ITournamentRegistry tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+        ITournamentRegistry tournamentRegistry =
+            ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
         address hub = tournamentRegistry.pbrFeeHubOf(newLeagueId);
         if (hub == address(0)) revert Errors.HubNotRegistered(newLeagueId);
 
@@ -396,10 +397,7 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
     }
 
     /// @dev BONDING if initializer hooks; GRADUATED if migrator hooks.
-    function _statusFromActivePool(
-        bytes32 playerId,
-        PlayerSet storage set
-    ) private view returns (PlayerStatus) {
+    function _statusFromActivePool(bytes32 playerId, PlayerSet storage set) private view returns (PlayerStatus) {
         address hooks = address(set.dopplerData.activePool.hooks);
         if (hooks == set.dopplerData.hookDoppler) return PlayerStatus.BONDING;
         if (hooks == set.dopplerData.hookMigrator) return PlayerStatus.GRADUATED;
@@ -448,7 +446,8 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
     function _syncVaultOnTournament(bytes32 tournamentId, address vault, bool register) private {
         if (vault == address(0)) return;
 
-        ITournamentRegistry tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+        ITournamentRegistry tournamentRegistry =
+            ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
         if (!tournamentRegistry.tournamentExists(tournamentId)) return;
 
         bytes32 playerId = playerIdOfVault[vault];

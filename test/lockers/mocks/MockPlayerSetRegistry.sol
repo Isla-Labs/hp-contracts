@@ -76,8 +76,7 @@ contract MockPlayerSetRegistry {
     function reactivate(bytes32 playerId) external {
         DopplerData memory d = _sets[playerId].dopplerData;
         address hooks = address(d.activePool.hooks);
-        PlayerStatus status =
-            hooks == d.hookDoppler ? PlayerStatus.BONDING : PlayerStatus.GRADUATED;
+        PlayerStatus status = hooks == d.hookDoppler ? PlayerStatus.BONDING : PlayerStatus.GRADUATED;
         _sets[playerId].status = status;
         lastStatusPlayerId = playerId;
         lastStatus = status;

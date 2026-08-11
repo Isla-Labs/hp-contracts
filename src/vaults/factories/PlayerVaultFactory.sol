@@ -69,9 +69,8 @@ contract PlayerVaultFactory is AddressBook {
 
         string memory stName = string.concat("Staked ", baseName);
         string memory stSymbol = string.concat(baseSymbol, "42");
-        bytes memory stInitCode = abi.encodePacked(
-            type(StakedToken).creationCode, abi.encode(stName, stSymbol, playerVault, stakedURI)
-        );
+        bytes memory stInitCode =
+            abi.encodePacked(type(StakedToken).creationCode, abi.encode(stName, stSymbol, playerVault, stakedURI));
         stToken = CREATE_X.deployCreate3(stTokenSalt, stInitCode);
 
         PlayerVault(playerVault).initialize(playerId, playerToken, stToken);

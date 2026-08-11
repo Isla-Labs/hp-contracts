@@ -73,13 +73,13 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
         if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.NotAuthorized();
         _;
     }
-    
+
     // --------------------------------------------
     //  Construction
     // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
-    constructor(address addressProvider_) AddressBook(addressProvider_) {}
+    constructor(address addressProvider_) AddressBook(addressProvider_) { }
 
     // --------------------------------------------
     //  Domestic hubs (FeeRouter) — Orchestrator
@@ -203,10 +203,9 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
     /// @inheritdoc ITournamentRegistry
     function flushPendingUnregisters(bytes32 tournamentId) external {
         Tournament storage t = _requireTournament(tournamentId);
-        if (
-            msg.sender != t.pbrTreasury 
-            && msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))
-        ) revert Errors.NotAuthorized();
+        if (msg.sender != t.pbrTreasury && msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) {
+            revert Errors.NotAuthorized();
+        }
 
         // Settle must have moved the round out of `Locked` before flush.
         if (_isTreasuryActiveRoundLocked(t.pbrTreasury)) revert Errors.RoundStillLocked(tournamentId);
@@ -639,7 +638,8 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
     function _registerVault(bytes32 tournamentId, address treasury, address vault) private {
         if (vault == address(0)) revert Errors.ZeroAddress();
         if (vault.code.length == 0) revert Errors.UnknownVault(vault);
-        IPlayerSetRegistry playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+        IPlayerSetRegistry playerSetRegistry =
+            IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
         bytes32 playerId = playerSetRegistry.playerIdOfVault(vault);
         if (playerId == bytes32(0)) revert Errors.UnknownVault(vault);
         if (_isVaultRegistered[tournamentId][vault]) revert Errors.VaultAlreadyRegistered(tournamentId, vault);
@@ -681,7 +681,8 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
         IPbrTreasury(treasury).syncUnregisterVault(vault);
         IPlayerVault(vault).syncActiveTreasury(tournamentId, treasury, false);
 
-        IPlayerSetRegistry playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+        IPlayerSetRegistry playerSetRegistry =
+            IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
 
         // PSR-driven calls update the discovery index themselves; flush/Orchestrator still mirror here.
         if (msg.sender != address(playerSetRegistry)) {

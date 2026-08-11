@@ -25,10 +25,12 @@ contract StakedToken is ERC20, ERC20BlockCheckpoint, ERC20Permit {
     /// @dev ERC-7572 contract-level metadata URI (`ipfs://…` JSON).
     string private _contractURI;
 
-    constructor(string memory name_, string memory symbol_, address vault_, string memory contractURI_)
-        ERC20(name_, symbol_)
-        ERC20Permit(name_)
-    {
+    constructor(
+        string memory name_,
+        string memory symbol_,
+        address vault_,
+        string memory contractURI_
+    ) ERC20(name_, symbol_) ERC20Permit(name_) {
         if (vault_ == address(0)) revert Errors.ZeroAddress();
         if (bytes(contractURI_).length == 0) revert Errors.EmptyURI();
         vault = vault_;

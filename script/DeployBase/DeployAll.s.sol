@@ -212,10 +212,7 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
     //  Register
     // -------------------------------------------------------------------------
 
-    function _registerProtocol(AddressProvider ap, CoreDeployment memory d)
-        internal
-        returns (CoreDeployment memory)
-    {
+    function _registerProtocol(AddressProvider ap, CoreDeployment memory d) internal returns (CoreDeployment memory) {
         console.log("--- register protocol ---");
         _set(ap, Keys.ORCHESTRATOR, d.orchestrator);
 

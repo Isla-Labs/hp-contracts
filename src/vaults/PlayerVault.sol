@@ -153,10 +153,7 @@ contract PlayerVault is Initializable, AddressBook, Pausable, ReentrancyGuard, I
     }
 
     /// @inheritdoc IPlayerVault
-    function syncActiveTreasury(bytes32 tournamentId_, address treasury, bool active)
-        external
-        onlyTournamentRegistry
-    {
+    function syncActiveTreasury(bytes32 tournamentId_, address treasury, bool active) external onlyTournamentRegistry {
         if (treasury == address(0)) revert Errors.ZeroAddress();
         if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
 

@@ -1,6 +1,9 @@
 -include .env
 export
 
+# Optional forge CLI flags, e.g. `make deploy-base-sepolia-all FORGE_FLAGS="-vvvv"`
+FORGE_FLAGS ?=
+
 # Deployment history (requires bun)
 generate-history:
 	@bun run ./deployments/cli.ts --output history
@@ -82,7 +85,7 @@ deploy-base-sepolia-all:
 	@forge script script/DeployBase/DeployAll.s.sol:DeployAll \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--broadcast --slow
+		--broadcast --slow $(FORGE_FLAGS)
 	$(MAKE) generate-history
 
 # Optional: redeploy routers only against an existing AP (post-handoff uses Orchestrator.execute).
@@ -91,7 +94,7 @@ deploy-base-sepolia-routers:
 	@forge script script/DeployBase/DeployRouters.s.sol:DeployRouters \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--broadcast --slow
+		--broadcast --slow $(FORGE_FLAGS)
 	$(MAKE) generate-history
 
 # 1) Oracle (registers CVM_* on AP when ADDRESS_PROVIDER set + owned by deployer)

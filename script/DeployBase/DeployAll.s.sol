@@ -30,15 +30,16 @@ import { ProxyUtils } from "../utils/ProxyUtils.sol";
  * @dev Flow:
  *      1) Deploy AddressProvider
  *      2) Seed Preconfig (treasury, Doppler, Automata, oracle, …)
- *      3) Deploy InitGuard shells + Orchestrator
+ *      3) Deploy InitGuard shells + Orchestrator (deployer = DEFAULT_ADMIN)
  *      4) Register all protocol names on AP
  *      5) Initialize in dependency order
- *      6) Authorize DeployTournament + DopplerLocker
+ *      6) Authorize DeployTournament + DopplerLocker + TransferLocker
  *      7) Deploy + register zAMM stack, StakeRouter, TradeRouter
  *      8) Handoff AP + ProxyAdmins → Orchestrator
+ *      9) Transfer Orchestrator DEFAULT_ADMIN → owner (multisig)
  *
  *      Env: PRIVATE_KEY; optional OWNER_ADDRESS / DAO_ADDRESS (default Preconfig.hpMultisig).
- *      Make: `make deploy-base-sepolia-all`
+ *      Make: `make deploy-base-sepolia-all` (optional `FORGE_FLAGS="-vvvv"`)
  */
 contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogic {
     struct CoreDeployment {
@@ -86,7 +87,7 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         console.log("=== DeployAll ===");
         console.log("chainId", context.chainId);
         console.log("deployer", deployer);
-        console.log("owner (Orchestrator admin)", owner);
+        console.log("owner (final Orchestrator admin)", owner);
 
         vm.startBroadcast(privateKey);
 
@@ -97,10 +98,10 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
 
         _seedPreconfig(ap, context.preconfig);
 
-        d = _deployShells(ap, deployer, owner, d);
+        d = _deployShells(ap, deployer, d);
         _registerProtocol(ap, d);
         _initializeAll(d);
-        _authorizeModules(d.orchestrator, owner, deployer, d.deployTournament, d.dopplerLocker);
+        _authorizeModules(d.orchestrator, d.deployTournament, d.dopplerLocker, d.transferLocker);
 
         RouterDeployment memory routers = _deployAndRegisterRouters(ap, d.orchestrator, deployer, context.chainId);
         d.zRouter = routers.zRouter;
@@ -115,6 +116,12 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         // DeployHandoff reads ADDRESS_PROVIDER from env.
         vm.setEnv("ADDRESS_PROVIDER", vm.toString(d.addressProvider));
         _handoff(deployer);
+
+        // Multisig (or OWNER_ADDRESS) becomes sole Orchestrator admin after bootstrap auth.
+        if (owner != deployer) {
+            Orchestrator(d.orchestrator).transferDefaultAdmin(owner);
+            console.log("Orchestrator DEFAULT_ADMIN ->", owner);
+        }
 
         vm.stopBroadcast();
 
@@ -165,13 +172,13 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
     function _deployShells(
         AddressProvider ap,
         address deployer,
-        address owner,
         CoreDeployment memory d
     ) internal returns (CoreDeployment memory) {
         console.log("--- deploy shells ---");
         address apAddr = address(ap);
 
-        d.orchestrator = address(new Orchestrator(owner));
+        // Deployer holds DEFAULT_ADMIN through authorize + handoff; transferred to `owner` at end.
+        d.orchestrator = address(new Orchestrator(deployer));
 
         InitGuard guard = new InitGuard();
         d.initGuard = address(guard);
@@ -267,20 +274,18 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
 
     function _authorizeModules(
         address orchestrator,
-        address owner,
-        address deployer,
         address deployTournament,
-        address dopplerLocker
+        address dopplerLocker,
+        address transferLocker
     ) internal {
-        if (deployer != owner) {
-            console.log("OWNER != deployer: grant AUTHORIZED_CONTRACT on Orchestrator for:");
-            console.log("  DEPLOY_TOURNAMENT", deployTournament);
-            console.log("  DOPPLER_LOCKER", dopplerLocker);
-            return;
-        }
-        Orchestrator(orchestrator).addAuthorizedContract(deployTournament);
-        Orchestrator(orchestrator).addAuthorizedContract(dopplerLocker);
-        console.log("Authorized DeployTournament + DopplerLocker on Orchestrator");
+        Orchestrator orch = Orchestrator(orchestrator);
+        orch.addAuthorizedContract(deployTournament);
+        orch.addAuthorizedContract(dopplerLocker);
+        orch.addAuthorizedContract(transferLocker);
+        console.log("AUTHORIZED_CONTRACT on Orchestrator:");
+        console.log("  DEPLOY_TOURNAMENT", deployTournament);
+        console.log("  DOPPLER_LOCKER", dopplerLocker);
+        console.log("  TRANSFER_LOCKER", transferLocker);
     }
 
     function _persistOutputs(DeployContext memory context, CoreDeployment memory d) internal {

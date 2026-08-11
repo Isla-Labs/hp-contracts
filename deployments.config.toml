@@ -1,7 +1,3 @@
-# HighPotential protocol deployments config (forge-std Config).
-# Preconfig externals are seeded onto AddressProvider before InitGuard deploy/init.
-# Protocol output addresses are written back on broadcast by DeployAll.
-
 [84532]
 endpoint_url = "${BASE_SEPOLIA_RPC_URL}"
 
@@ -9,29 +5,17 @@ endpoint_url = "${BASE_SEPOLIA_RPC_URL}"
 is_testnet = true
 
 [84532.address]
-# DAO / ops
 hp_treasury = "0x7Ca4d3C95b4A843aeD5C14e356973fCD400c5d00"
 hp_multisig = "0x0D4034c1538d2435D99D2b953302e8374D15C432"
-
-# Optional externals (zero = skip seed except where DeployAll requires them).
-# z_router / z_quoter / z_quoter_base all zero → DeployRouters self-deploys Base Sepolia stack.
 cre_forwarder = "0xF8344CFd5c43616a4366C34E3EEE75af79a74482"
-z_router = "0x0000000000000000000000000000000000000000"
-z_quoter_base = "0x0000000000000000000000000000000000000000"
-z_quoter = "0x0000000000000000000000000000000000000000"
-
-# Uniswap v4 (TradeRouter ctor; Base Sepolia canonical PoolManager)
+z_router = "0x9Ece6490933251B9D7CBa26CbF6766c3F66D0E86"
+z_quoter_base = "0xb82ffA25a5757A21B93D036ABe8F018B3f98C05c"
+z_quoter = "0x8412d83Ac32e5B62f45c24fDdEa982ef397a9410"
 uniswap_v4_pool_manager = "0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408"
-
-# Automata DCAP
 automata_dcap_attestation = "0xaDdeC7e85c2182202b66E331f2a4A0bBB2cEEa1F"
 automata_pccs_router = "0xaf2a0D5473062b36E2dE986DA09d945EB26d492B"
-
-# Oracle (already launched; also fall back to deployments/base-sepolia-oracle.json)
 cvm_coordinator = "0x321564785385E1F2C426297B06afcc129C1DbDE5"
 cvm_router = "0xA6392AE508A940D92cf4458dd66D098aC7717883"
-
-# Doppler modules (passthrough before broadcast if rehype / launchpad changed)
 doppler_airlock = "0x3411306Ce66c9469BFF1535BA955503c4Bde1C6e"
 dn404_factory = "0x98b0Aa2e0f134dbB3eb157b5646D387E6D55243a"
 no_op_governance_factory = "0x7bD798fafC99A3b17E261F8308A8C11B56935ea1"
@@ -40,22 +24,18 @@ doppler_hook_initializer = "0xBDF938149ac6a781F94FAa0ed45E6A0e984c6544"
 rehype_doppler_hook_initializer = "0x780f88fB8D81CdcD5De8c5B7De810E362D9fFC6b"
 doppler_hook_migrator = "0x1E40b0875DDa35f41E15cFB475403859B8c860c4"
 rehype_doppler_hook_migrator = "0x5E2A91F8eBE288e0AA76a0C1A47877Ded801e90d"
-
-# Protocol outputs (written by DeployAll on broadcast)
-address_provider = "0x0000000000000000000000000000000000000000"
-orchestrator = "0x0000000000000000000000000000000000000000"
-tournament_registry = "0x0000000000000000000000000000000000000000"
-player_set_registry = "0x0000000000000000000000000000000000000000"
-deploy_tournament = "0x0000000000000000000000000000000000000000"
-stake_vesting = "0x0000000000000000000000000000000000000000"
-fee_router_factory = "0x0000000000000000000000000000000000000000"
-player_vault_factory = "0x0000000000000000000000000000000000000000"
-pbr_treasury_factory = "0x0000000000000000000000000000000000000000"
-pbr_fee_hub_factory = "0x0000000000000000000000000000000000000000"
-doppler_config = "0x0000000000000000000000000000000000000000"
-doppler_locker = "0x0000000000000000000000000000000000000000"
-transfer_locker = "0x0000000000000000000000000000000000000000"
-
-# Routers (written by DeployRouters on broadcast)
-stake_router = "0x0000000000000000000000000000000000000000"
-trade_router = "0x0000000000000000000000000000000000000000"
+address_provider = "0x9a596654ecC35CC69055Fa12CcCd7F41629F3691"
+orchestrator = "0x71FB59aC42FF7081aa3F12eA4FD7C92B47064198"
+tournament_registry = "0x5Bf48CB770C54e943Ab4EDDdCBdb328337E9964C"
+player_set_registry = "0x48cE4D791B2b3a600015e14188f7b4cC0a26539A"
+deploy_tournament = "0xEdb7DcD6a7f594d449a22CF06CF4a68C3E5415Be"
+stake_vesting = "0x3571F1c8710DcC970F6c733d8877fdDBDef8a4B9"
+fee_router_factory = "0x5d6A54f43DaA3dafEf46b233Fe578C97c7D9C91A"
+player_vault_factory = "0xA4314047b5509DA351bA39c5a49046EEbabf76BD"
+pbr_treasury_factory = "0xC93032eeE2220Bff9e7fc6eC586EEdF9E823CE8D"
+pbr_fee_hub_factory = "0x791EbBAb83C648feaE920351503adD0eF93bbBb0"
+doppler_config = "0xaCb107B7088a22AC162C574D640Dc5949a8310a8"
+doppler_locker = "0x04f2eB7b5a0494FEDe21cd7d542c416A8f72c477"
+transfer_locker = "0x9011Fc5F01102dFc87841306322417C06EBda0c8"
+stake_router = "0x06869B97D950aa9A38948F9b7beB57D885547929"
+trade_router = "0xE77F8dF8b1215EF5bec1AD7cC42774ef793c4361"

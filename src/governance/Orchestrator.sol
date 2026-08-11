@@ -51,6 +51,16 @@ contract Orchestrator is AccessControl, IOrchestrator {
         _revokeRole(AUTHORIZED_CONTRACT, account);
     }
 
+    /// @notice Atomically move `DEFAULT_ADMIN_ROLE` from the caller to `newAdmin`.
+    function transferDefaultAdmin(address newAdmin) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newAdmin == address(0)) revert Errors.ZeroAddress();
+        address previousAdmin = _msgSender();
+        if (newAdmin == previousAdmin) return;
+        _grantRole(DEFAULT_ADMIN_ROLE, newAdmin);
+        _revokeRole(DEFAULT_ADMIN_ROLE, previousAdmin);
+        emit DefaultAdminTransferred(previousAdmin, newAdmin);
+    }
+
     // --------------------------------------------
     //  Execute
     // --------------------------------------------

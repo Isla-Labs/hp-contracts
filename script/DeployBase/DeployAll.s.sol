@@ -250,11 +250,9 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
     function _initializeAll(CoreDeployment memory d) internal {
         console.log("--- initialize ---");
 
-        // 1) Registries (cross-resolve)
-        _upgradeAndCall(
-            d.tournamentRegistry, d.tournamentRegistryImpl, abi.encodeCall(TournamentRegistry.initialize, ())
-        );
-        _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, abi.encodeCall(PlayerSetRegistry.initialize, ()));
+        // 1) Registries (AP-gated; no initialize)
+        _upgradeAndCall(d.tournamentRegistry, d.tournamentRegistryImpl, "");
+        _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, "");
 
         // 2) Market/vault factories are immutable — already constructed in _registerProtocol
 

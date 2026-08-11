@@ -13,8 +13,9 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployRegistries
- * @notice Step 4: TournamentRegistry + PlayerSetRegistry (TUP). Register both names, then initialize.
- * @dev ProxyAdmin stays with deployer until DeployHandoff.
+ * @notice Step 4: TournamentRegistry + PlayerSetRegistry (TUP). Register both names, then upgrade.
+ * @dev Neither registry has `initialize` (AP role checks). ProxyAdmin stays with deployer until
+ *      DeployHandoff.
  */
 abstract contract DeployRegistries is AddressProviderOps, ProxyUtils {
     struct RegistryDeployment {
@@ -39,14 +40,11 @@ abstract contract DeployRegistries is AddressProviderOps, ProxyUtils {
         d.tournamentRegistryImpl = address(new TournamentRegistry(addressProvider));
         d.playerSetRegistryImpl = address(new PlayerSetRegistry(addressProvider));
 
-        // Both names must exist before either initialize() (cross-resolve).
         _registerName(deployer, Keys.TOURNAMENT_REGISTRY, d.tournamentRegistry);
         _registerName(deployer, Keys.PLAYER_SET_REGISTRY, d.playerSetRegistry);
 
-        _upgradeAndCall(
-            d.tournamentRegistry, d.tournamentRegistryImpl, abi.encodeCall(TournamentRegistry.initialize, ())
-        );
-        _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, abi.encodeCall(PlayerSetRegistry.initialize, ()));
+        _upgradeAndCall(d.tournamentRegistry, d.tournamentRegistryImpl, "");
+        _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, "");
 
         console.log("=== DeployRegistries ===");
         console.log("TournamentRegistry (proxy)", d.tournamentRegistry);

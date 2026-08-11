@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
@@ -37,11 +35,11 @@ interface IPlayerVaultLifecycle {
 /**
  * @title PlayerSetRegistry
  * @notice Canonical per-player market discovery set (`playerId` → `PlayerSet`).
- * @dev Access:
- *      - Owner (`Orchestrator`): registration, `graduatePool` / `deactivate` / `reactivate`,
- *        `setLeagueId`.
- *      - Vault membership SoT is `TournamentRegistry`. Non-PSR callers get a PSR index mirror;
- *        PSR-driven lifecycle updates `activeTournaments` itself (no PSR→TR→PSR).
+ * @dev Access (AddressProvider; no Ownable / initialize):
+ *      - `ORCHESTRATOR`: registration, `graduatePool` / `deactivate` / `reactivate`, `setLeagueId`.
+ *      - `TOURNAMENT_REGISTRY`: `add`/`removeActiveTournament` mirror (when TR caller ≠ PSR).
+ *      - Vault membership SoT is `TournamentRegistry`. PSR-driven lifecycle updates
+ *        `activeTournaments` itself (no PSR→TR→PSR).
  *      - `deactivate` / `reactivate` / `setLeagueId` fan out TR membership + FeeRouter +
  *        `PlayerVault.setActive`.
  *      - Registered vaults: `updateUtilization` via `onlyVault`.
@@ -50,12 +48,10 @@ interface IPlayerVaultLifecycle {
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetRegistry {
+contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
-
-    ITournamentRegistry public tournamentRegistry;
 
     mapping(bytes32 playerId => PlayerSet) private _playerSets;
     mapping(address token => bytes32 playerId) public playerIdOfToken;
@@ -72,21 +68,22 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
         _;
     }
 
+    modifier onlyOrchestrator() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.NotAuthorized();
+        _;
+    }
+
+    modifier onlyTournamentRegistry() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY))) revert Errors.NotAuthorized();
+        _;
+    }
+
     // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
-        _disableInitializers();
-    }
-
-    /// @notice Transfers ownership to `Orchestrator` and resolves `TournamentRegistry` from `AddressProvider` once.
-    function initialize() external initializer {
-        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-    }
+    constructor(address addressProvider_) AddressBook(addressProvider_) { }
 
     // --------------------------------------------
     //  Registration
@@ -102,7 +99,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
         TournamentData calldata tournamentData,
         DopplerData calldata dopplerData,
         VaultData calldata vaultData
-    ) external onlyOwner {
+    ) external onlyOrchestrator {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
         if (tokenData.token == address(0)) revert Errors.ZeroAddress();
         if (
@@ -142,7 +139,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
     /**
      * @notice Attaches Advanced Trade vault + mark source after those deployments.
      */
-    function addAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data) external onlyOwner {
+    function addAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data) external onlyOrchestrator {
         PlayerSet storage set = _requirePlayer(playerId);
         if (set.advancedTradeData.advancedTradeVault != address(0)) {
             revert Errors.AdvancedTradeDataAlreadySet(playerId);
@@ -158,16 +155,14 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
     // --------------------------------------------
 
     /// @inheritdoc IPlayerSetRegistry
-    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external {
-        if (msg.sender != address(tournamentRegistry)) revert Errors.NotAuthorized();
+    function addActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyTournamentRegistry {
         _requirePlayer(playerId);
         if (tournamentId == bytes32(0)) revert Errors.ZeroId();
         _addActiveTournamentIfAbsent(playerId, tournamentId);
     }
 
     /// @inheritdoc IPlayerSetRegistry
-    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external {
-        if (msg.sender != address(tournamentRegistry)) revert Errors.NotAuthorized();
+    function removeActiveTournament(bytes32 playerId, bytes32 tournamentId) external onlyTournamentRegistry {
         _requirePlayer(playerId);
         if (tournamentId == bytes32(0)) revert Errors.ZeroId();
         _removeActiveTournamentIfPresent(playerId, tournamentId);
@@ -186,7 +181,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
         bytes32 playerId,
         bytes32 newLeagueId,
         bytes32[] calldata activeTournamentIds
-    ) external onlyOwner {
+    ) external onlyOrchestrator {
         if (newLeagueId == bytes32(0)) revert Errors.ZeroId();
         uint256 n = activeTournamentIds.length;
         if (n == 0) revert Errors.LengthMismatch();
@@ -202,6 +197,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
         }
         if (!hasLeague) revert Errors.TournamentNotActive(newLeagueId);
 
+        ITournamentRegistry tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
         address hub = tournamentRegistry.pbrFeeHubOf(newLeagueId);
         if (hub == address(0)) revert Errors.HubNotRegistered(newLeagueId);
 
@@ -240,7 +236,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
      * @dev Syncs FeeRouter status cache (spot integrator share). No vault / tournament fan-out.
      *      `activePool.hooks` must be the registered `hookMigrator`.
      */
-    function graduatePool(bytes32 playerId, PoolKey calldata activePool) external onlyOwner {
+    function graduatePool(bytes32 playerId, PoolKey calldata activePool) external onlyOrchestrator {
         PlayerSet storage set = _requirePlayer(playerId);
         if (address(activePool.hooks) != set.dopplerData.hookMigrator) {
             revert Errors.InvalidActivePool(playerId, address(activePool.hooks));
@@ -262,7 +258,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
      * @notice Soft-inactive path (TransferLocker Continuity / LeftLeague).
      * @dev FeeRouter OOF, vault inactive, unregister (may defer while Locked), clear discovery topology.
      */
-    function deactivate(bytes32 playerId) external onlyOwner {
+    function deactivate(bytes32 playerId) external onlyOrchestrator {
         PlayerSet storage set = _requirePlayer(playerId);
         set.status = PlayerStatus.INACTIVE;
         emit Events.StatusUpdated(playerId, PlayerStatus.INACTIVE);
@@ -286,7 +282,7 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
      * @notice Restore-from-INACTIVE (TransferLocker Reactivate, after `setLeagueId`).
      * @dev Status derived from `activePool.hooks`. Membership already applied in `setLeagueId`.
      */
-    function reactivate(bytes32 playerId) external onlyOwner {
+    function reactivate(bytes32 playerId) external onlyOrchestrator {
         PlayerSet storage set = _requirePlayer(playerId);
         PlayerStatus status = _statusFromActivePool(playerId, set);
 
@@ -451,6 +447,8 @@ contract PlayerSetRegistry is Initializable, AddressBook, Ownable, IPlayerSetReg
      */
     function _syncVaultOnTournament(bytes32 tournamentId, address vault, bool register) private {
         if (vault == address(0)) return;
+
+        ITournamentRegistry tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
         if (!tournamentRegistry.tournamentExists(tournamentId)) return;
 
         bytes32 playerId = playerIdOfVault[vault];

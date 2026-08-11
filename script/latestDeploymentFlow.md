@@ -2,7 +2,7 @@
 
 Canonical bootstrap for HighPotential protocol contracts on Base / Base Sepolia.
 
-**Rule:** constructors take `AddressProvider` (via `AddressBook`). Dependencies and ownership are resolved only in `initialize`, after names exist on the provider. Orchestrator is the Ownable owner of protocol contracts; the EOA (later Safe) holds `DEFAULT_ADMIN_ROLE` on Orchestrator and calls through `Orchestrator.execute`.
+**Rule:** constructors take `AddressProvider` (via `AddressBook`). Dependencies are resolved from AP at call time (or in `initialize` where Ownable/cached deps remain). Registries (`TournamentRegistry`, `PlayerSetRegistry`) have no `initialize` — AP role checks only. Where Ownable remains, Orchestrator is the owner; the EOA (later Safe) holds `DEFAULT_ADMIN_ROLE` on Orchestrator and calls through `Orchestrator.execute`.
 
 ---
 
@@ -89,10 +89,10 @@ Deploy upgradeable shells (InitGuard → Transparent proxy) and implementations.
 
 ### Registries
 
-| Contract | Name key |
-|---|---|
-| `TournamentRegistry` | `TOURNAMENT_REGISTRY` |
-| `PlayerSetRegistry` | `PLAYER_SET_REGISTRY` |
+| Contract | Name key | Notes |
+|---|---|---|
+| `TournamentRegistry` | `TOURNAMENT_REGISTRY` | Upgrade with empty data (no `initialize`) |
+| `PlayerSetRegistry` | `PLAYER_SET_REGISTRY` | Upgrade with empty data (no `initialize`) |
 
 ### Lockers
 

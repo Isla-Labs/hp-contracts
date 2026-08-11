@@ -9,7 +9,7 @@ import { Hub, RoundSchedule, Season, TournamentType } from "@types/registries/To
  */
 interface ITournamentRegistry {
     // --------------------------------------------
-    //  Domestic hubs — owner (Orchestrator)
+    //  Domestic hubs — Orchestrator
     // --------------------------------------------
 
     function registerHub(Hub calldata hub) external;
@@ -17,7 +17,7 @@ interface ITournamentRegistry {
     function pbrFeeHubOf(bytes32 leagueId) external view returns (address);
 
     // --------------------------------------------
-    //  Tournament registration — owner (Orchestrator)
+    //  Tournament registration — Orchestrator
     // --------------------------------------------
 
     function createTournament(
@@ -30,11 +30,12 @@ interface ITournamentRegistry {
     function linkHub(bytes32 tournamentId, Hub calldata hub) external;
 
     // --------------------------------------------
-    //  Vault membership SoT — owner (Orchestrator)
+    //  Vault membership SoT — Orchestrator or PlayerSetRegistry
     // --------------------------------------------
 
     /// @notice Register vaults for `tournamentId`; sync treasury, vault cache, PSR index.
     /// @dev Cancels a deferred unregister if the vault was pending removal during `Locked`.
+    ///      PSR index mirror skipped when caller is `PlayerSetRegistry`.
     function registerVaults(bytes32 tournamentId, address[] calldata vaults) external;
 
     /**
@@ -42,15 +43,16 @@ interface ITournamentRegistry {
      * @dev If the tournament treasury's active round is `Locked`, removal is deferred until
      *      `flushPendingUnregisters` (called from `PbrTreasury.settle`) so SettlePbr still
      *      sees the vault in `getRegisteredVaults` / treasury `isVault` through distribute.
-     *      PSR index is updated on actual unregister (immediate or flush), not while pending.
+     *      PSR index is updated on actual unregister (immediate or flush), not while pending,
+     *      except when caller is `PlayerSetRegistry` (PSR updates its own index).
      */
     function unregisterVaults(bytes32 tournamentId, address[] calldata vaults) external;
 
-    /// @notice Apply deferred unregisters after settle (`Claimable`). Callable by treasury or owner.
+    /// @notice Apply deferred unregisters after settle (`Claimable`). Callable by treasury or Orchestrator.
     function flushPendingUnregisters(bytes32 tournamentId) external;
 
     // --------------------------------------------
-    //  Season calendar — owner (Orchestrator)
+    //  Season calendar — Orchestrator
     // --------------------------------------------
 
     /// @notice Open a season with `finalRound`; rounds filled later via `upsertRound(s)`.

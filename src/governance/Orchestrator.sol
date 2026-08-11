@@ -41,6 +41,7 @@ contract Orchestrator is AccessControl, IOrchestrator {
     // --------------------------------------------
 
     /// @notice Grant `AUTHORIZED_CONTRACT` to a module (e.g. `DeployTournament`).
+    /// - TransferLocker, DopplerLocker, DeployTournament, MigrationListener, HPMultisig
     function addAuthorizedContract(address account) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (account == address(0)) revert Errors.ZeroAddress();
         _grantRole(AUTHORIZED_CONTRACT, account);

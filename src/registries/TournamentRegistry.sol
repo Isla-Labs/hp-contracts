@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
-
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { RegistryErrors as Errors } from "@errors/registries/RegistryErrors.sol";
@@ -24,11 +21,11 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  *        - `FACUP`: DOMESTIC_CUP, feeHubs = [{EPL, hub}], treasury = FA Cup pot
  *        - `UCL`: CONTINENTAL, feeHubs = all domestic hubs, treasury = UCL pot
  *
- *      Access:
- *      - Owner (`Orchestrator`): `registerHub`, tournament create, `linkHub`, vault membership,
+ *      Access (AddressProvider; no Ownable / initialize):
+ *      - `ORCHESTRATOR`: `registerHub`, tournament create, `linkHub`, vault membership,
  *        and season calendar (`openSeason` / `upsertRound(s)`).
- *      - `PlayerSetRegistry`: vault register/unregister fan-out.
- *      - Tournament `PbrTreasury`: `flushPendingUnregisters` after settle.
+ *      - `PLAYER_SET_REGISTRY`: vault register/unregister fan-out.
+ *      - Tournament `PbrTreasury` or Orchestrator: `flushPendingUnregisters` after settle.
  *
  *      Non-`DOMESTIC_LEAGUE` create / `linkHub` dual-writes the tournament treasury onto each
  *      linked `PbrFeeHub` destination list (`setDomesticCups` / `setContinental` /
@@ -43,12 +40,10 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentRegistry {
+contract TournamentRegistry is AddressBook, ITournamentRegistry {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
-
-    IPlayerSetRegistry public playerSetRegistry;
 
     /// @notice Globally registered domestic hubs (`leagueId` → hub). Used by FeeRouter OOF split.
     mapping(bytes32 leagueId => address) public pbrFeeHubOf;
@@ -71,23 +66,23 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     mapping(bytes32 tournamentId => mapping(address vault => uint256)) private _pendingUnregisterIndex; // 1-based
 
     // --------------------------------------------
-    //  Initialization
+    //  Access Control
+    // --------------------------------------------
+
+    modifier onlyOrchestrator() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.NotAuthorized();
+        _;
+    }
+    
+    // --------------------------------------------
+    //  Construction
     // --------------------------------------------
 
     /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
-        _disableInitializers();
-    }
-
-    /// @notice Transfers ownership to `Orchestrator` and resolves `PlayerSetRegistry` from `AddressProvider` once.
-    function initialize() external initializer {
-        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
-        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
-    }
+    constructor(address addressProvider_) AddressBook(addressProvider_) {}
 
     // --------------------------------------------
-    //  Domestic hubs (FeeRouter) — owner
+    //  Domestic hubs (FeeRouter) — Orchestrator
     // --------------------------------------------
 
     /**
@@ -96,7 +91,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
      *      STEP1: call registerHub
      *      STEP2: call createTournament
      */
-    function registerHub(Hub calldata hub) external onlyOwner {
+    function registerHub(Hub calldata hub) external onlyOrchestrator {
         if (hub.leagueId == bytes32(0)) revert Errors.ZeroId();
         if (hub.pbrFeeHub == address(0)) revert Errors.ZeroAddress();
         if (pbrFeeHubOf[hub.leagueId] != address(0)) revert Errors.HubAlreadyRegistered(hub.leagueId);
@@ -107,7 +102,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     }
 
     // --------------------------------------------
-    //  Tournament registration — owner
+    //  Tournament registration — Orchestrator
     // --------------------------------------------
 
     /**
@@ -125,7 +120,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         TournamentType tournamentType,
         Hub[] calldata feeHubs,
         address pbrTreasury
-    ) external onlyOwner {
+    ) external onlyOrchestrator {
         if (tournamentId == bytes32(0)) revert Errors.ZeroId();
         if (pbrTreasury == address(0)) revert Errors.ZeroAddress();
         if (_tournaments[tournamentId].tournamentId != bytes32(0)) revert Errors.Exists();
@@ -157,7 +152,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
      *      international destination list. Domestic leagues/cups get their hub only at
      *      `createTournament`.
      */
-    function linkHub(bytes32 tournamentId, Hub calldata hub) external onlyOwner {
+    function linkHub(bytes32 tournamentId, Hub calldata hub) external onlyOrchestrator {
         Tournament storage t = _requireTournament(tournamentId);
         TournamentType tournamentType = t.tournamentType;
         if (tournamentType != TournamentType.CONTINENTAL && tournamentType != TournamentType.INTERNATIONAL) {
@@ -167,7 +162,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     }
 
     // --------------------------------------------
-    //  Vault membership SoT — owner
+    //  Vault membership SoT — Orchestrator or PSR
     // --------------------------------------------
 
     /// @inheritdoc ITournamentRegistry
@@ -208,7 +203,11 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     /// @inheritdoc ITournamentRegistry
     function flushPendingUnregisters(bytes32 tournamentId) external {
         Tournament storage t = _requireTournament(tournamentId);
-        if (msg.sender != t.pbrTreasury && msg.sender != owner()) revert Errors.NotAuthorized();
+        if (
+            msg.sender != t.pbrTreasury 
+            && msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))
+        ) revert Errors.NotAuthorized();
+
         // Settle must have moved the round out of `Locked` before flush.
         if (_isTreasuryActiveRoundLocked(t.pbrTreasury)) revert Errors.RoundStillLocked(tournamentId);
 
@@ -226,15 +225,15 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         if (count != 0) emit Events.VaultUnregisterFlushed(tournamentId, count);
     }
 
-    /// @dev Owner or `PlayerSetRegistry` (lifecycle SoT fan-out).
+    /// @dev Orchestrator or `PlayerSetRegistry` (lifecycle fan-out).
     function _checkVaultMembershipCaller() internal view {
-        if (msg.sender == owner()) return;
-        if (msg.sender == address(playerSetRegistry)) return;
+        if (msg.sender == _getAddress(_addressKey(Addresses.ORCHESTRATOR))) return;
+        if (msg.sender == _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY))) return;
         revert Errors.NotAuthorized();
     }
 
     // --------------------------------------------
-    //  Season calendar — owner
+    //  Season calendar — Orchestrator
     // --------------------------------------------
 
     /**
@@ -249,7 +248,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         bytes32 seasonId,
         uint16 seasonStartYear,
         uint32 finalRound
-    ) external onlyOwner {
+    ) external onlyOrchestrator {
         if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
         if (finalRound == 0) revert Errors.InvalidFinalRound();
 
@@ -282,7 +281,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         bytes32 tournamentId,
         uint16 seasonStartYear,
         RoundSchedule calldata round
-    ) external onlyOwner {
+    ) external onlyOrchestrator {
         _upsertRound(tournamentId, seasonStartYear, round);
     }
 
@@ -291,7 +290,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         bytes32 tournamentId,
         uint16 seasonStartYear,
         RoundSchedule[] calldata rounds
-    ) external onlyOwner {
+    ) external onlyOrchestrator {
         uint256 length = rounds.length;
         for (uint256 i; i < length; ++i) {
             _upsertRound(tournamentId, seasonStartYear, rounds[i]);
@@ -640,6 +639,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
     function _registerVault(bytes32 tournamentId, address treasury, address vault) private {
         if (vault == address(0)) revert Errors.ZeroAddress();
         if (vault.code.length == 0) revert Errors.UnknownVault(vault);
+        IPlayerSetRegistry playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
         bytes32 playerId = playerSetRegistry.playerIdOfVault(vault);
         if (playerId == bytes32(0)) revert Errors.UnknownVault(vault);
         if (_isVaultRegistered[tournamentId][vault]) revert Errors.VaultAlreadyRegistered(tournamentId, vault);
@@ -652,6 +652,7 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         // Vault cache first so treasury register / live utilization sync sees membership.
         IPlayerVault(vault).syncActiveTreasury(tournamentId, treasury, true);
         IPbrTreasury(treasury).syncRegisterVault(vault);
+
         // PSR-driven calls update the discovery index themselves.
         if (msg.sender != address(playerSetRegistry)) {
             playerSetRegistry.addActiveTournament(playerId, tournamentId);
@@ -680,7 +681,9 @@ contract TournamentRegistry is Initializable, AddressBook, Ownable, ITournamentR
         IPbrTreasury(treasury).syncUnregisterVault(vault);
         IPlayerVault(vault).syncActiveTreasury(tournamentId, treasury, false);
 
-        // PSR-driven calls update the discovery index themselves; flush/owner still mirror here.
+        IPlayerSetRegistry playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+
+        // PSR-driven calls update the discovery index themselves; flush/Orchestrator still mirror here.
         if (msg.sender != address(playerSetRegistry)) {
             bytes32 playerId = playerSetRegistry.playerIdOfVault(vault);
             if (playerId != bytes32(0)) {

@@ -16,6 +16,8 @@ library AddressKeys {
     string internal constant TRADE_ROUTER = "TRADE_ROUTER";
     /// @dev External multi-AMM router (e.g. zRouter) for non-player ERC20 ↔ ETH legs.
     string internal constant Z_ROUTER = "Z_ROUTER";
+    /// @dev SDK-facing zQuoter (calldata / quotes for zRouter wings).
+    string internal constant Z_QUOTER = "Z_QUOTER";
 
     // Registries
     string internal constant TOURNAMENT_REGISTRY = "TOURNAMENT_REGISTRY";

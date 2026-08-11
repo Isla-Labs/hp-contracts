@@ -25,8 +25,9 @@ import { Beneficiary, Position } from "@types/governance/StakeVestingTypes.sol";
  *      Airlock transfers excess during `create` (before the vault exists). DopplerLocker then
  *      calls `allocate(token)` after `PlayerSetRegistry` has the vault:
  *        - 50% ringfenced as AdvancedTrade short-supply inventory (held here until AT ships)
- *        - 50% staked into the PlayerVault with a 4×25% unlock over 4 years (tranche 0 immediate)
+ *        - 50% staked into the PlayerVault with a 4×25% unlock over 4 years (all tranches manual)
  *
+ *      Mature tranches are unstaked only when someone calls `unlock` / `unlockAndDistribute`.
  *      Unlocked underlying and PBR ETH yield are distributed to a configurable beneficiary split.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
@@ -42,6 +43,10 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
     uint256 public constant WAD = 1e18;
     uint256 public constant TRANCHE_COUNT = 4;
     uint256 public constant TRANCHE_DURATION = 365 days;
+
+    /// @dev Default vesting / PBR split co-beneficiaries (with HP Treasury).
+    address public constant BENEFICIARY_A = 0x6B5aA3294BeD96Bb5092b62D1b1C9dBEC7D05C56; // 20%
+    address public constant BENEFICIARY_B = 0x536F81818B2c05690ee9B5b74F52C79bd7A69bf9; // 40%
 
     IPlayerSetRegistry public playerSetRegistry;
 
@@ -60,7 +65,7 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Resolve registry; default beneficiary = HP Treasury (100%); ownership → Orchestrator.
+     * @notice Resolve registry; default beneficiaries HP Treasury 40% / B 40% / A 20%; ownership → Orchestrator.
      */
     function initialize() external initializer {
         playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
@@ -68,10 +73,14 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
         address hpTreasury = _getAddress(_addressKey(Addresses.HP_TREASURY));
         if (hpTreasury == address(0)) revert Errors.ZeroAddress();
 
-        address[] memory accounts = new address[](1);
+        address[] memory accounts = new address[](3);
         accounts[0] = hpTreasury;
-        uint256[] memory sharesWad = new uint256[](1);
-        sharesWad[0] = WAD;
+        accounts[1] = BENEFICIARY_B;
+        accounts[2] = BENEFICIARY_A;
+        uint256[] memory sharesWad = new uint256[](3);
+        sharesWad[0] = 4e17; // 40%
+        sharesWad[1] = 4e17; // 40%
+        sharesWad[2] = 2e17; // 20%
         _setBeneficiaries(accounts, sharesWad);
 
         _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
@@ -137,8 +146,10 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
     // -------------------------------------------------------------------------
 
     /**
-     * @notice Split held excess 50/50: AT reserve + PlayerVault stake; unlock first vesting tranche.
+     * @notice Split held excess 50/50: AT reserve + PlayerVault stake (full vault half stays staked).
      * @dev Requires vault already on `PlayerSetRegistry`. Idempotent guard per token.
+     *      Tranche 0 is already mature at `allocatedAt`; beneficiaries (or anyone) call
+     *      `unlockAndDistribute` when they want to unstake + pay out.
      */
     function allocate(address token) external onlyOwner nonReentrant {
         if (token == address(0)) revert Errors.ZeroAddress();
@@ -175,8 +186,6 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
         }
 
         emit Events.ExcessAllocated(token, playerId, atAmount, vaultAmount);
-
-        _unlockMatured(token, p);
     }
 
     // -------------------------------------------------------------------------

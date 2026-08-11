@@ -32,6 +32,7 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         // Soft-require lockers / factories so handoff can proceed if partial — but warn.
         // TEMP: ROUND_MANAGER parked with data plane — restore when DeployData returns.
         // _warnIfMissing(Keys.ROUND_MANAGER);
+        _warnIfMissing(Keys.STAKE_VESTING);
         _warnIfMissing(Keys.DOPPLER_CONFIG);
         _warnIfMissing(Keys.DOPPLER_LOCKER);
         _warnIfMissing(Keys.TRANSFER_LOCKER);
@@ -46,6 +47,7 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         _transferProxyAdmin(deployTournament, orchestrator);
         // _transferProxyAdminIfSet(Keys.ROUND_MANAGER, orchestrator);
 
+        _transferProxyAdminIfSet(Keys.STAKE_VESTING, orchestrator);
         _transferProxyAdminIfSet(Keys.DOPPLER_CONFIG, orchestrator);
         _transferProxyAdminIfSet(Keys.DOPPLER_LOCKER, orchestrator);
         _transferProxyAdminIfSet(Keys.TRANSFER_LOCKER, orchestrator);
@@ -56,7 +58,7 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
 
         console.log("=== DeployHandoff ===");
         console.log("AddressProvider owner -> Orchestrator", orchestrator);
-        console.log("ProxyAdmins transferred for registries / DT / lockers / factories");
+        console.log("ProxyAdmins transferred for registries / DT / StakeVesting / lockers / factories");
     }
 
     function _transferProxyAdminIfSet(string memory name, address newOwner) internal {

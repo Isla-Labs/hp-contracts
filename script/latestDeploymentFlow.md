@@ -6,6 +6,43 @@ Canonical bootstrap for HighPotential protocol contracts on Base / Base Sepolia.
 
 ---
 
+## Preferred testnet order
+
+```bash
+make deploy-base-sepolia-oracle    # 1) CVM coordinator + router (JSON)
+make deploy-base-sepolia-all       # 2) core + routers + handoff
+```
+
+Optional redeploy routers only: `make deploy-base-sepolia-routers`.
+
+### DeployAll (step 2)
+
+Script: [`DeployAll.s.sol`](DeployBase/DeployAll.s.sol)  
+Config / Preconfig: [`deployments.config.toml`](../deployments.config.toml) (treasury, multisig, Doppler, Automata, oracle, `uniswap_v4_pool_manager`, optional z_*)
+
+Order inside DeployAll:
+
+1. Deploy AddressProvider  
+2. Seed Preconfig (incl. existing oracle) onto AP  
+3. Deploy InitGuard shells + Orchestrator (+ StakeVesting)  
+4. Register all protocol names  
+5. Initialize: registries → factories → StakeVesting → DopplerConfig → lockers → DeployTournament  
+6. Authorize DeployTournament + DopplerLocker  
+7. **Routers** (pre-handoff, direct `setName`): zAMM stack + StakeRouter + TradeRouter  
+8. Handoff AP + ProxyAdmins → Orchestrator  
+
+**Routers step** (shared with [`DeployRoutersLogic`](utils/DeployRoutersLogic.sol)):
+
+- Base Sepolia zAMM self-deploy when `z_router` / `z_quoter` / `z_quoter_base` are all zero (`src/routers/base-sepolia/`):
+  1. `ZRouter` → 2. `ZQuoterBase` → 3. `ZQuoter` (SDK address)
+- Registers `Z_ROUTER`, `Z_QUOTER`, `STAKE_ROUTER`, `TRADE_ROUTER`
+- Requires `uniswap_v4_pool_manager` in TOML (TradeRouter ctor)
+- Backend: point zamm SDK at written `z_quoter` / `z_router`
+
+Passthrough Doppler / Rehype addresses in the TOML before broadcasting. Staged make targets below remain for partial redeploys.
+
+---
+
 ## 1. Deploy AddressProvider
 
 - Deploy `AddressProvider` with the deployer EOA as temporary owner.
@@ -189,6 +226,7 @@ Contract.owner         →  Orchestrator (set in initialize)
 
 | Step | Make target |
 |---|---|
+| **One-shot core bootstrap** | `deploy-base-sepolia-all` |
 | 1 AddressProvider | `deploy-base-sepolia-address-provider` |
 | 2 Oracle | `deploy-base-sepolia-oracle` |
 | 3–5 Orchestrator | `deploy-base-sepolia-orchestrator` |

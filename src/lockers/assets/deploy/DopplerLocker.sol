@@ -751,7 +751,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
      *      2) Airlock.create (skipped when `tokenPredicted` already has Airlock state)
      *      3) PlayerVault + stToken (skipped when `vaultPredicted` already has code)
      *      4) PlayerSetRegistry writes (skipped when already registered / vault attached)
-     *      5) StakeVesting.allocate (50/50 AT reserve + vested vault stake)
+     *      5) StakeVesting.allocate (50/50 AT reserve + full vault-half stake; unlocks are manual)
      *
      *      Prerequisites / follow-ups (do not skip when wiring production intake):
      *        - DopplerLocker proxy MUST hold Orchestrator `AUTHORIZED_CONTRACT` so `_exec`

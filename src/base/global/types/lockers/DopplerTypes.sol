@@ -5,7 +5,6 @@ import { CreateParams } from "@doppler/src/Airlock.sol";
 import {
     FeeDistributionInfo,
     FeeRoutingMode,
-    InitData as RehypeBondingHookData,
     MigratorInitData as RehypeMigratorHookData
 } from "@doppler/src/types/RehypeTypes.sol";
 import { WAD } from "@doppler/src/types/Wad.sol";
@@ -132,6 +131,19 @@ library DopplerTypes {
     struct Beneficiary {
         address beneficiary;
         uint96 shares;
+    }
+
+    /// @dev Matches Doppler `InitData` (path-local so `Beneficiary[]` does not clash with remappings).
+    struct RehypeBondingHookData {
+        address numeraire;
+        address buybackDst;
+        uint24 startFee;
+        uint24 endFee;
+        uint32 durationSeconds;
+        uint32 startingTime;
+        FeeRoutingMode feeRoutingMode;
+        FeeDistributionInfo feeDistributionInfo;
+        Beneficiary[] feeBeneficiaries;
     }
 
     // -------------------------------------------------------------------------
@@ -307,6 +319,7 @@ library DopplerTypes {
         address numeraire,
         MarketLaunchConfig memory config
     ) internal pure returns (bytes memory) {
+        // Empty feeBeneficiaries: stay on DirectBuyback → FeeRouter (not RouteToBeneficiaryFees).
         return abi.encode(
             RehypeBondingHookData({
                 numeraire: numeraire,
@@ -316,7 +329,8 @@ library DopplerTypes {
                 durationSeconds: config.rehypeFeeDurationSeconds,
                 startingTime: config.rehypeStartingTime,
                 feeRoutingMode: config.feeRoutingMode,
-                feeDistributionInfo: config.feeDistribution
+                feeDistributionInfo: config.feeDistribution,
+                feeBeneficiaries: new Beneficiary[](0)
             })
         );
     }

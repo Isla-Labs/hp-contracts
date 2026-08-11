@@ -70,6 +70,30 @@ deploy-base-handoff:
 # Base Sepolia — sequential isolated deploys
 # ---------------------------------------------------------------------------
 
+# Preferred testnet order:
+#   1) make deploy-base-sepolia-oracle
+#   2) make deploy-base-sepolia-all   (core + routers + handoff)
+#
+# One-shot bootstrap: AP → Preconfig → shells → init → routers → handoff.
+# Requires oracle already launched (deployments.config.toml or deployments/base-sepolia-oracle.json).
+# Passthrough Doppler/Rehype addresses in deployments.config.toml before broadcast.
+# Also requires uniswap_v4_pool_manager (TradeRouter) and z_*=0 for zAMM self-deploy.
+deploy-base-sepolia-all:
+	@forge script script/DeployBase/DeployAll.s.sol:DeployAll \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# Optional: redeploy routers only against an existing AP (post-handoff uses Orchestrator.execute).
+# Prefer deploy-base-sepolia-all for first bootstrap.
+deploy-base-sepolia-routers:
+	@forge script script/DeployBase/DeployRouters.s.sol:DeployRouters \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
 # 1) Oracle (registers CVM_* on AP when ADDRESS_PROVIDER set + owned by deployer)
 deploy-base-sepolia-oracle:
 	@forge script script/oracle/DeployOracle.s.sol:DeployOracle \
@@ -238,6 +262,7 @@ fmt-check:
 .PHONY: generate-history \
 	deploy-base-address-provider deploy-base-orchestrator deploy-base-registries \
 	deploy-base-deploy-tournament deploy-base-data deploy-base-lockers deploy-base-factories deploy-base-handoff \
+	deploy-base-sepolia-all \
 	deploy-base-sepolia-oracle deploy-base-sepolia-address-provider deploy-base-sepolia-orchestrator \
 	deploy-base-sepolia-registries deploy-base-sepolia-deploy-tournament deploy-base-sepolia-data \
 	deploy-base-sepolia-lockers deploy-base-sepolia-factories deploy-base-sepolia-handoff \

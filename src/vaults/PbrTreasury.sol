@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
+import { Pausable } from "@openzeppelin/utils/Pausable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/utils/math/Math.sol";
 
@@ -23,13 +23,14 @@ import { IStakedToken } from "@interfaces/vaults/IStakedToken.sol";
  * @notice Single-tournament PBR pot: O(bitmap-words) lock / per-fixture zk settle / pull claims.
  * @dev Crank: `lockVaults` → `requestSettle` → `applyFixtureSettlement`* → Claimable.
  *      Vaults sync live utilization (`S > 0`) on 0↔nonzero; `lockVaults` freezes the live bitmap.
+ *      `TOURNAMENT_REGISTRY` / `PBR_SETTLE` are resolved per call via `AddressProvider`.
+ *      Pause (`HP_MULTISIG`) gates settle apply + claim payouts only — circuit breaker while
+ *      beacon upgrades ship via `TIMELOCK`.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IPbrTreasury {
-    ITournamentRegistry public tournamentRegistry;
-
+contract PbrTreasury is Initializable, AddressBook, Pausable, ReentrancyGuard, IPbrTreasury {
     // --------------------------------------------
     //  Config
     // --------------------------------------------
@@ -86,19 +87,22 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     mapping(uint16 seasonStartYear => mapping(uint32 roundNumber => mapping(bytes32 fixtureId => bytes32))) public
         fixtureDigestOf;
 
-    address public pbrSettle;
-
     // --------------------------------------------
     //  Access control
     // --------------------------------------------
 
     modifier onlyTournamentRegistry() {
-        if (msg.sender != address(tournamentRegistry)) revert Errors.Unauthorized();
+        if (msg.sender != _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY))) revert Errors.Unauthorized();
         _;
     }
 
     modifier onlyPbrSettle() {
-        if (msg.sender != pbrSettle) revert Errors.Unauthorized();
+        if (msg.sender != _getAddress(_addressKey(Addresses.PBR_SETTLE))) revert Errors.Unauthorized();
+        _;
+    }
+
+    modifier onlyAdmin() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.HP_MULTISIG))) revert Errors.Unauthorized();
         _;
     }
 
@@ -107,19 +111,13 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
         _disableInitializers();
     }
 
     function initialize(bytes32 tournamentId_, uint16 initialSeasonStartYear_) external initializer {
         if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
         if (initialSeasonStartYear_ == 0) revert Errors.ZeroSeason();
-
-        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
-        address pbrSettle_ = addressProvider.get(_addressKey(Addresses.PBR_SETTLE));
-        if (pbrSettle_ != address(0)) pbrSettle = pbrSettle_;
-
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
 
         tournamentId = tournamentId_;
         seasonStartYear = initialSeasonStartYear_;
@@ -132,6 +130,18 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         rewardsR += msg.value;
         totalRewardsR += msg.value;
         emit Events.FeesReceived(msg.value);
+    }
+
+    // --------------------------------------------
+    //  Admin
+    // --------------------------------------------
+
+    function pause() external onlyAdmin {
+        _pause();
+    }
+
+    function unpause() external onlyAdmin {
+        _unpause();
     }
 
     // --------------------------------------------
@@ -209,6 +219,8 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         }
 
         bytes32 tid = tournamentId;
+        ITournamentRegistry tournamentRegistry =
+            ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
         if (!tournamentRegistry.isRoundPublished(tid, seasonStartYear_, roundNumber_)) revert Errors.NothingDue();
 
         RoundSchedule memory schedule = tournamentRegistry.getRound(tid, seasonStartYear_, roundNumber_);
@@ -240,8 +252,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
     // --------------------------------------------
 
     function requestSettle() external returns (bytes32[] memory requestIds_) {
-        address settle_ = pbrSettle;
-        if (settle_ == address(0)) revert Errors.ZeroAddress();
+        address settle_ = _getAddress(_addressKey(Addresses.PBR_SETTLE));
 
         uint16 seasonStartYear_ = seasonStartYear;
         uint32 roundNumber_ = activeRound;
@@ -257,12 +268,15 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         uint32 utilizedCount = _roundUtilizedCount[seasonStartYear_][roundNumber_];
         round.status = RoundStatus.SettlePending;
 
+        ITournamentRegistry tournamentRegistry =
+            ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
+
         if (utilizedCount == 0) {
             round.M_adj = 0;
             round.fixturesExpected = 0;
             round.fixturesSettled = 0;
             emit Events.RoundSettleRequested(seasonStartYear_, roundNumber_, settle_, utilizedHash, 0);
-            _openClaimable(seasonStartYear_, roundNumber_, round, 0);
+            _openClaimable(seasonStartYear_, roundNumber_, round, 0, tournamentRegistry);
             return requestIds_;
         }
 
@@ -290,7 +304,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         bytes32 fixtureDigest_,
         address[] calldata vaults_,
         uint256[] calldata mwPoints_
-    ) external onlyPbrSettle returns (bool done_) {
+    ) external onlyPbrSettle whenNotPaused returns (bool done_) {
         if (fixtureId_ == bytes32(0) || fixtureDigest_ == bytes32(0)) {
             revert Errors.ZeroId();
         }
@@ -339,7 +353,13 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         );
 
         if (done_) {
-            _openClaimable(seasonStartYear_, roundNumber_, round, _roundUtilizedCount[seasonStartYear_][roundNumber_]);
+            _openClaimable(
+                seasonStartYear_,
+                roundNumber_,
+                round,
+                _roundUtilizedCount[seasonStartYear_][roundNumber_],
+                ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)))
+            );
         }
     }
 
@@ -347,7 +367,8 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         uint16 seasonStartYear_,
         uint32 roundNumber_,
         RoundState storage round,
-        uint256 utilizedCount_
+        uint256 utilizedCount_,
+        ITournamentRegistry tournamentRegistry
     ) internal {
         round.status = RoundStatus.Claimable;
 
@@ -379,7 +400,7 @@ contract PbrTreasury is Initializable, AddressBook, Ownable, ReentrancyGuard, IP
         uint16 seasonStartYear_,
         uint32 roundNumber_,
         address user_
-    ) external nonReentrant returns (uint256 payout_) {
+    ) external nonReentrant whenNotPaused returns (uint256 payout_) {
         if (user_ == address(0)) revert Errors.ZeroAddress();
         if (!_isUtilized(seasonStartYear_, roundNumber_, msg.sender)) revert Errors.UnknownVault(msg.sender);
 

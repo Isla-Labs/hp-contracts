@@ -4,6 +4,7 @@ pragma solidity ^0.8.34;
 library GovernanceErrors {
     error ExecutionFailed();
     error ZeroAddress();
+    error TargetNotAllowed(address target);
     error ArrayLengthsMismatch();
     error EmptyVerifiedCallers();
     error EmptyDestinations();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
+import { AccessControl } from "@openzeppelin/access/AccessControl.sol";
 import { EnumerableSet } from "@openzeppelin/utils/structs/EnumerableSet.sol";
 
 import { AddressProviderErrors as Errors } from "@errors/AddressProviderErrors.sol";
@@ -9,9 +9,10 @@ import { AddressProviderEvents as Events } from "@events/AddressProviderEvents.s
 
 /// @title HighPotential Address Provider
 /// @notice Dynamic registry: each logical slot is a `bytes32` key; string names use `keccak256(bytes(name))`.
-/// @dev Enumeration tracks keys with a non-zero address. Mutations are owner-gated; bootstrap may
-///      register under the temporary deployer owner, then transfer ownership to `Orchestrator`.
-contract AddressProvider is Ownable {
+/// @dev Enumeration tracks keys with a non-zero address. Mutations are `DEFAULT_ADMIN_ROLE`-gated;
+///      bootstrap grants the deployer admin, who may later `transferDefaultAdmin` to
+///      `ConstitutionalTimelock`.
+contract AddressProvider is AccessControl {
     using EnumerableSet for EnumerableSet.Bytes32Set;
 
     EnumerableSet.Bytes32Set private _keys;
@@ -22,16 +23,36 @@ contract AddressProvider is Ownable {
     //  Initialization
     // --------------------------------------------
 
-    constructor(address owner_) Ownable(owner_) {
-        if (owner_ == address(0)) revert Errors.ZeroAddress();
+    /**
+     * @param admin_ Deployer EOA — temporary `DEFAULT_ADMIN_ROLE` until handoff to
+     *        `ConstitutionalTimelock`.
+     */
+    constructor(address admin_) {
+        if (admin_ == address(0)) revert Errors.ZeroAddress();
+        _grantRole(DEFAULT_ADMIN_ROLE, admin_);
     }
 
     // --------------------------------------------
-    //  Mutations (owner)
+    //  Role admin helpers
+    // --------------------------------------------
+
+    /// @notice Atomically move `DEFAULT_ADMIN_ROLE` from the caller to `newAdmin`.
+    /// @dev Intended path: deployer → `ConstitutionalTimelock`.
+    function transferDefaultAdmin(address newAdmin) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newAdmin == address(0)) revert Errors.ZeroAddress();
+        address previousAdmin = _msgSender();
+        if (newAdmin == previousAdmin) return;
+        _grantRole(DEFAULT_ADMIN_ROLE, newAdmin);
+        _revokeRole(DEFAULT_ADMIN_ROLE, previousAdmin);
+        emit Events.DefaultAdminTransferred(previousAdmin, newAdmin);
+    }
+
+    // --------------------------------------------
+    //  Mutations (DEFAULT_ADMIN_ROLE)
     // --------------------------------------------
 
     /// @notice First-write only: reverts if `key` already holds a non-zero address.
-    function registerName(string calldata name, address addr) external onlyOwner {
+    function registerName(string calldata name, address addr) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (bytes(name).length == 0) revert Errors.EmptyName();
         if (addr == address(0)) return;
 
@@ -44,7 +65,7 @@ contract AddressProvider is Ownable {
     }
 
     /// @notice First-write only for raw keys.
-    function registerKey(bytes32 key, address addr, string calldata name) external onlyOwner {
+    function registerKey(bytes32 key, address addr, string calldata name) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (key == bytes32(0)) revert Errors.ZeroKey();
         if (addr == address(0)) return;
         if (bytes(name).length != 0 && keccak256(bytes(name)) != key) revert Errors.NameKeyMismatch();
@@ -62,7 +83,7 @@ contract AddressProvider is Ownable {
     }
 
     /// @notice Upsert by human-readable `name`. Storage key is `keccak256(bytes(name))`.
-    function setName(string calldata name, address addr) external onlyOwner {
+    function setName(string calldata name, address addr) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (bytes(name).length == 0) revert Errors.EmptyName();
 
         bytes32 key = keccak256(bytes(name));
@@ -72,7 +93,7 @@ contract AddressProvider is Ownable {
     }
 
     /// @notice Upsert by raw key. Non-empty `name` must satisfy `keccak256(bytes(name)) == key`; use "" to keep the existing label.
-    function setKey(bytes32 key, address addr, string calldata name) external onlyOwner {
+    function setKey(bytes32 key, address addr, string calldata name) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (key == bytes32(0)) revert Errors.ZeroKey();
         if (bytes(name).length != 0) {
             if (keccak256(bytes(name)) != key) revert Errors.NameKeyMismatch();

@@ -16,8 +16,9 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployFactories
- * @notice Upgradeable market + vault beacon factories; register on AP; initialize DeployTournament.
- * @dev InitGuard TUP per factory; ProxyAdmin stays with deployer until DeployHandoff.
+ * @notice Market + vault factories; register on AP; initialize DeployTournament.
+ * @dev FeeRouter / PbrFeeHub factories remain InitGuard TUPs (ProxyAdmin → Orchestrator at handoff).
+ *      PlayerVault / PbrTreasury factories are immutable (`new` after ORCHESTRATOR is on AP).
  *      DeployTournament initialize runs here so factory names already exist on AddressProvider.
  */
 abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
@@ -28,8 +29,6 @@ abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
         address playerVaultFactory;
         address feeRouterFactoryImpl;
         address pbrFeeHubFactoryImpl;
-        address pbrTreasuryFactoryImpl;
-        address playerVaultFactoryImpl;
         address deployTournamentImpl;
         address initGuard;
     }
@@ -40,45 +39,38 @@ abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
         address addressProvider = address(_requireAddressProvider());
         address deployTournament = _requireName(Keys.DEPLOY_TOURNAMENT);
         _requireName(Keys.ORCHESTRATOR);
+        _requireName(Keys.TIMELOCK);
 
         InitGuard guard = new InitGuard();
         f.initGuard = address(guard);
 
         f.feeRouterFactory = _deployInitGuardProxy(guard, deployer);
-        f.playerVaultFactory = _deployInitGuardProxy(guard, deployer);
-        f.pbrTreasuryFactory = _deployInitGuardProxy(guard, deployer);
         f.pbrFeeHubFactory = _deployInitGuardProxy(guard, deployer);
 
         f.feeRouterFactoryImpl = address(new FeeRouterFactory(addressProvider));
-        f.playerVaultFactoryImpl = address(new PlayerVaultFactory(addressProvider));
-        f.pbrTreasuryFactoryImpl = address(new PbrTreasuryFactory(addressProvider));
         f.pbrFeeHubFactoryImpl = address(new PbrFeeHubFactory(addressProvider));
 
-        // Register before initialize (initialize resolves Orchestrator from AP; names are for ops).
+        // Immutable vault factories (constructor resolves Orchestrator + deploys beacons).
+        f.playerVaultFactory = address(new PlayerVaultFactory(addressProvider));
+        f.pbrTreasuryFactory = address(new PbrTreasuryFactory(addressProvider));
+
         _registerName(deployer, Keys.FEE_ROUTER_FACTORY, f.feeRouterFactory);
         _registerName(deployer, Keys.PLAYER_VAULT_FACTORY, f.playerVaultFactory);
         _registerName(deployer, Keys.PBR_TREASURY_FACTORY, f.pbrTreasuryFactory);
         _registerName(deployer, Keys.PBR_FEE_HUB_FACTORY, f.pbrFeeHubFactory);
 
         _upgradeAndCall(f.feeRouterFactory, f.feeRouterFactoryImpl, abi.encodeCall(FeeRouterFactory.initialize, ()));
-        _upgradeAndCall(
-            f.playerVaultFactory, f.playerVaultFactoryImpl, abi.encodeCall(PlayerVaultFactory.initialize, ())
-        );
-        _upgradeAndCall(
-            f.pbrTreasuryFactory, f.pbrTreasuryFactoryImpl, abi.encodeCall(PbrTreasuryFactory.initialize, ())
-        );
         _upgradeAndCall(f.pbrFeeHubFactory, f.pbrFeeHubFactoryImpl, abi.encodeCall(PbrFeeHubFactory.initialize, ()));
 
         // DeployTournament resolves factories from AP — initialize only after the names above exist.
-        // Ownership transfers to Orchestrator inside initialize().
         f.deployTournamentImpl = address(new DeployTournament(addressProvider));
         _upgradeAndCall(deployTournament, f.deployTournamentImpl, abi.encodeCall(DeployTournament.initialize, ()));
 
-        console.log("=== DeployFactories (proxies) ===");
-        console.log("FeeRouterFactory", f.feeRouterFactory);
-        console.log("PlayerVaultFactory", f.playerVaultFactory);
-        console.log("PbrTreasuryFactory", f.pbrTreasuryFactory);
-        console.log("PbrFeeHubFactory", f.pbrFeeHubFactory);
+        console.log("=== DeployFactories ===");
+        console.log("FeeRouterFactory (proxy)", f.feeRouterFactory);
+        console.log("PlayerVaultFactory (immutable)", f.playerVaultFactory);
+        console.log("PbrTreasuryFactory (immutable)", f.pbrTreasuryFactory);
+        console.log("PbrFeeHubFactory (proxy)", f.pbrFeeHubFactory);
         console.log("DeployTournament (impl)", f.deployTournamentImpl);
     }
 }

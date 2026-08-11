@@ -4,7 +4,8 @@ pragma solidity ^0.8.34;
 import { Test } from "forge-std/Test.sol";
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
-import { TransparentUpgradeableProxy } from "@openzeppelin/proxy/transparent/TransparentUpgradeableProxy.sol";
+
+import { ICreateX } from "@createx/ICreateX.sol";
 
 import { AddressProvider } from "@src/AddressProvider.sol";
 import { AddressKeys as Addresses } from "@addresses/AddressKeys.sol";
@@ -28,6 +29,8 @@ abstract contract VaultsTestBase is Test {
 
     address internal dao = makeAddr("dao");
     address internal orchestrator = makeAddr("orchestrator");
+    address internal timelock = makeAddr("timelock");
+    address internal hpMultisig = makeAddr("hpMultisig");
     address internal user = makeAddr("user");
     address internal user2 = makeAddr("user2");
 
@@ -51,10 +54,12 @@ abstract contract VaultsTestBase is Test {
         pbrSettle = new MockPbrSettle();
 
         ap.setName(Addresses.ORCHESTRATOR, orchestrator);
+        ap.setName(Addresses.TIMELOCK, timelock);
+        ap.setName(Addresses.HP_MULTISIG, hpMultisig);
         ap.setName(Addresses.TOURNAMENT_REGISTRY, address(tournamentRegistry));
         ap.setName(Addresses.PLAYER_SET_REGISTRY, address(playerSetRegistry));
         ap.setName(Addresses.PBR_SETTLE, address(pbrSettle));
-        // PlayerVault.initialize caches STAKE_ROUTER; real router tests overwrite before deploy.
+        // PlayerVault auth checks resolve STAKE_ROUTER from AP per call; real router tests overwrite before use.
         ap.setName(Addresses.STAKE_ROUTER, makeAddr("stakeRouter"));
 
         bytes32[] memory tournaments = new bytes32[](1);
@@ -69,26 +74,16 @@ abstract contract VaultsTestBase is Test {
     }
 
     function _deployVaultFactory() internal returns (PlayerVaultFactory) {
-        PlayerVaultFactory impl = new PlayerVaultFactory(address(ap));
-        return PlayerVaultFactory(
-            address(
-                new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(PlayerVaultFactory.initialize, ()))
-            )
-        );
+        return new PlayerVaultFactory(address(ap));
     }
 
     function _deployTreasuryFactory() internal returns (PbrTreasuryFactory) {
-        PbrTreasuryFactory impl = new PbrTreasuryFactory(address(ap));
-        return PbrTreasuryFactory(
-            address(
-                new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(PbrTreasuryFactory.initialize, ()))
-            )
-        );
+        return new PbrTreasuryFactory(address(ap));
     }
 
     function _deployVault(bytes32 playerId) internal returns (PlayerVault vault, StakedToken stToken) {
         vault = PlayerVault(payable(address(new BeaconProxy(address(vaultBeacon), ""))));
-        stToken = new StakedToken("Staked Player", "stPLY", address(vault));
+        stToken = new StakedToken("Staked Player", "PLY42", address(vault), "ipfs://staked-test");
         vault.initialize(playerId, address(playerToken), address(stToken));
 
         bytes32[] memory tournaments = new bytes32[](1);
@@ -146,6 +141,17 @@ abstract contract VaultsTestBase is Test {
         require(success, "CreateX init failed");
         vm.etch(CreateXAddresses.CREATE_X, runtimeBytecode);
         require(CreateXAddresses.CREATE_X.code.length > 0, "CreateX etch empty");
+    }
+
+    /// @dev CreateX permissioned salt: `factory || 0x00 || entropy11` (mined offchain in production).
+    function _permissionedSalt(address factory, bytes11 entropy) internal pure returns (bytes32) {
+        return bytes32(uint256(uint160(factory))) << 96 | bytes32(uint256(uint88(entropy)));
+    }
+
+    /// @dev Predict CREATE3 address for a permissioned (flag `0x00`) salt from `factory`.
+    function _predictCreate3(address factory, bytes32 salt) internal view returns (address) {
+        bytes32 guarded = keccak256(abi.encode(bytes32(uint256(uint160(factory))), salt));
+        return ICreateX(CreateXAddresses.CREATE_X).computeCreate3Address(guarded);
     }
 
     function _lockVaults(PbrTreasury treasury) internal {

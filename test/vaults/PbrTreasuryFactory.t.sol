@@ -12,28 +12,26 @@ contract PbrTreasuryFactoryTest is VaultsTestBase {
         _etchCreateX();
     }
 
-    function test_initialize_setsOrchestratorAndBeacon() public view {
-        assertEq(treasuryFactory.orchestrator(), orchestrator);
-        assertEq(treasuryFactory.owner(), orchestrator);
-        assertEq(treasuryFactory.beacon().owner(), orchestrator);
+    function test_constructor_setsTimelockOwnedBeacon() public view {
+        assertEq(treasuryFactory.beacon().owner(), timelock);
         assertTrue(treasuryFactory.implementation() != address(0));
     }
 
     function test_create_revertsUnauthorized() public {
-        bytes32 salt = treasuryFactory.makeSalt(bytes11(uint88(1)));
+        bytes32 salt = _permissionedSalt(address(treasuryFactory), bytes11(uint88(1)));
         vm.expectRevert(Errors.Unauthorized.selector);
         treasuryFactory.create(TOURNAMENT, START_YEAR, salt);
     }
 
     function test_create_revertsZeroId() public {
-        bytes32 salt = treasuryFactory.makeSalt(bytes11(uint88(1)));
+        bytes32 salt = _permissionedSalt(address(treasuryFactory), bytes11(uint88(1)));
         vm.prank(orchestrator);
         vm.expectRevert(Errors.ZeroId.selector);
         treasuryFactory.create(bytes32(0), START_YEAR, salt);
     }
 
     function test_create_revertsZeroSeason() public {
-        bytes32 salt = treasuryFactory.makeSalt(bytes11(uint88(1)));
+        bytes32 salt = _permissionedSalt(address(treasuryFactory), bytes11(uint88(1)));
         vm.prank(orchestrator);
         vm.expectRevert(Errors.ZeroSeason.selector);
         treasuryFactory.create(TOURNAMENT, 0, salt);
@@ -46,8 +44,8 @@ contract PbrTreasuryFactoryTest is VaultsTestBase {
     }
 
     function test_create_wiresTreasury() public {
-        bytes32 salt = treasuryFactory.makeSalt(bytes11(uint88(99)));
-        address predicted = treasuryFactory.computeCreate3Address(salt);
+        bytes32 salt = _permissionedSalt(address(treasuryFactory), bytes11(uint88(99)));
+        address predicted = _predictCreate3(address(treasuryFactory), salt);
 
         vm.prank(orchestrator);
         address treasuryAddr = treasuryFactory.create(TOURNAMENT, START_YEAR, salt);
@@ -59,7 +57,5 @@ contract PbrTreasuryFactoryTest is VaultsTestBase {
         assertEq(treasury.seasonStartYear(), START_YEAR);
         assertEq(treasury.activeRound(), 1);
         assertEq(treasury.tradingRound(), 1);
-        assertEq(treasury.owner(), orchestrator);
-        assertEq(treasury.pbrSettle(), address(pbrSettle));
     }
 }

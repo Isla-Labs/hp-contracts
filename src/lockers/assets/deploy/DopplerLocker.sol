@@ -62,7 +62,7 @@ interface IRehypePoolInfoView {
  *        → next `queueAssets` promotes `ReadyToQueue` → `Queued` (`queuedAt = now`)
  *        → owner may `editMetadata` / `unqueueAsset` during the 24h window
  *        → anyone calls `deployAssets` after wait; RateLimit gates frequency
- *        → FinalConfig: oracle pins IPFS metadata + mines salts + returns `baseURI`
+ *        → FinalConfig: oracle pins DN404 + staked IPFS metadata + mines salts + returns URIs
  *        → fulfill → `_onDeployReady` (FeeRouter w/ hub → Airlock → Vault → PlayerSet + registerVaults
  *          → StakeVesting.allocate)
  *        → oracle/validation failure: re-queue for a new FinalConfig (`retryWait`, default 5m)
@@ -102,7 +102,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
     enum OracleKind {
         None,
         PlayerMetadata,
-        /// @dev FinalConfig fulfill → store salts/`baseURI` → `_onDeployReady`.
+        /// @dev FinalConfig fulfill → store salts/URIs → `_onDeployReady`.
         Deploy
     }
 
@@ -116,6 +116,8 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         string symbol;
         /// @dev DN404 metadata prefix from FinalConfig (`ipfs://…/`); empty until fulfill.
         string baseURI;
+        /// @dev StakedToken ERC-7572 `contractURI` from FinalConfig (`ipfs://…`); empty until fulfill.
+        string stakedURI;
         bool metadataSet;
         uint64 queuedAt;
         /// @dev Per-entry wait override (`0` → use `queueWait`; set to `retryWait` on deploy fail).
@@ -254,7 +256,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
 
     /**
      * @notice Clear `DeployFailed` so ops can redeploy after a bugfix.
-     * @param keepSalts If true and salts/`baseURI` remain, resume as `DeployReady` (post-Airlock path).
+     * @param keepSalts If true and salts/URIs remain, resume as `DeployReady` (post-Airlock path).
      *        Otherwise clear salts and return to `Queued` with a short `retryWait` gate.
      */
     function resetFailedDeploy(bytes32 playerId, bool keepSalts) external onlyOwner {
@@ -264,11 +266,15 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         e.deployAttempts = 0;
         e.queuedAt = uint64(block.timestamp);
 
-        if (keepSalts && e.tokenPredicted != address(0) && bytes(e.baseURI).length != 0) {
+        if (
+            keepSalts && e.tokenPredicted != address(0) && bytes(e.baseURI).length != 0
+                && bytes(e.stakedURI).length != 0
+        ) {
             e.status = QueueStatus.DeployReady;
             e.waitSeconds = 0; // eligible immediately
         } else {
             e.baseURI = "";
+            e.stakedURI = "";
             e.tokenSalt = bytes32(0);
             e.tokenPredicted = address(0);
             e.vaultSalt = bytes32(0);
@@ -310,6 +316,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
                     name: "",
                     symbol: "",
                     baseURI: "",
+                    stakedURI: "",
                     metadataSet: false,
                     queuedAt: 0,
                     waitSeconds: 0,
@@ -353,8 +360,9 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
 
         e.name = name;
         e.symbol = symbol;
-        // `baseURI` is set at FinalConfig (IPFS); clear any stale value if re-editing.
+        // URIs are set at FinalConfig (IPFS); clear any stale values if re-editing.
         e.baseURI = "";
+        e.stakedURI = "";
         e.metadataSet = true;
         e.queuedAt = uint64(block.timestamp);
         e.waitSeconds = 0; // full `queueWait` after manual edit
@@ -378,11 +386,13 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
 
         uint256 length = _queue.length;
 
-        // Prefer resuming a DeployReady entry (same salts/`baseURI`) before a new FinalConfig.
+        // Prefer resuming a DeployReady entry (same salts/URIs) before a new FinalConfig.
         for (uint256 i; i < length; ++i) {
             QueueEntry storage e = _queue[i];
             if (e.status != QueueStatus.DeployReady) continue;
-            if (e.tokenPredicted == address(0) || bytes(e.baseURI).length == 0) continue;
+            if (e.tokenPredicted == address(0) || bytes(e.baseURI).length == 0 || bytes(e.stakedURI).length == 0) {
+                continue;
+            }
             if (block.timestamp < uint256(e.queuedAt) + _deployWait(e)) continue;
 
             try this.executeDeploy(e.playerId) { }
@@ -577,6 +587,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
             e.name = names[i];
             e.symbol = symbols[i];
             e.baseURI = "";
+            e.stakedURI = "";
             e.metadataSet = true;
             e.status = QueueStatus.ReadyToQueue;
 
@@ -585,7 +596,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
     }
 
     // -------------------------------------------------------------------------
-    //  Internal — deploy fulfill (IPFS baseURI + salts → market deploy)
+    //  Internal — deploy fulfill (IPFS URIs + salts → market deploy)
     // -------------------------------------------------------------------------
 
     function _fulfillDeploy(bytes32 requestId, bytes memory response, bytes memory err) private {
@@ -615,7 +626,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
     }
 
     /**
-     * @notice Validate FinalConfig response and persist salts/`baseURI` as `DeployReady`.
+     * @notice Validate FinalConfig response and persist salts/URIs as `DeployReady`.
      * @dev External so `_fulfillDeploy` can `try/catch` without reverting the CVM callback.
      */
     function applyFinalConfig(bytes32 playerId, bytes calldata response) external {
@@ -626,12 +637,18 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
             revert Errors.BadQueueStatus(playerId, uint8(e.status));
         }
 
-        (bytes32 tokenSalt, address tokenPredicted, bytes32 vaultSalt, address vaultPredicted, string memory baseURI_) =
-            abi.decode(response, (bytes32, address, bytes32, address, string));
+        (
+            bytes32 tokenSalt,
+            address tokenPredicted,
+            bytes32 vaultSalt,
+            address vaultPredicted,
+            string memory baseURI_,
+            string memory stakedURI_
+        ) = abi.decode(response, (bytes32, address, bytes32, address, string, string));
 
         if (
             tokenSalt == bytes32(0) || vaultSalt == bytes32(0) || tokenPredicted == address(0)
-                || vaultPredicted == address(0) || bytes(baseURI_).length == 0
+                || vaultPredicted == address(0) || bytes(baseURI_).length == 0 || bytes(stakedURI_).length == 0
         ) {
             revert Errors.NotConfigured();
         }
@@ -639,6 +656,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         // Salts / predictions come from FinalConfig (oracle). Address match is enforced at Airlock.create /
         // vault CREATE3 (`DeployAddressMismatch` / `SaltOccupied` on resume).
         e.baseURI = baseURI_;
+        e.stakedURI = stakedURI_;
         e.tokenSalt = tokenSalt;
         e.tokenPredicted = tokenPredicted;
         e.vaultSalt = vaultSalt;
@@ -666,6 +684,7 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         bool exhausted = _noteDeployFailure(e);
 
         e.baseURI = "";
+        e.stakedURI = "";
         e.tokenSalt = bytes32(0);
         e.tokenPredicted = address(0);
         e.vaultSalt = bytes32(0);
@@ -826,13 +845,15 @@ contract DopplerLocker is Initializable, AddressBook, Ownable, Oracle, RateLimit
         }
 
         address vaultFactory_ = dopplerConfig.vaultFactory();
-        bytes32 stTokenSalt =
-            PlayerVaultFactory(vaultFactory_).makeSalt(bytes11(keccak256(abi.encodePacked(e.playerId, bytes2("st")))));
+        // CreateX permissioned salt: `factory || 0x00 || entropy11` (deterministic; not vanity-mined).
+        bytes11 stEntropy = bytes11(keccak256(abi.encodePacked(e.playerId, bytes2("st"))));
+        bytes32 stTokenSalt = bytes32(uint256(uint160(vaultFactory_))) << 96 | bytes32(uint256(uint88(stEntropy)));
         (vault, stToken) = abi.decode(
             _exec(
                 vaultFactory_,
                 abi.encodeCall(
-                    PlayerVaultFactory.create, (e.playerId, asset, e.name, e.symbol, e.vaultSalt, stTokenSalt)
+                    PlayerVaultFactory.create,
+                    (e.playerId, asset, e.name, e.symbol, e.vaultSalt, stTokenSalt, e.stakedURI)
                 )
             ),
             (address, address)

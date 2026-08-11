@@ -5,6 +5,7 @@ pragma solidity ^0.8.34;
 /// @dev Keep in sync with `HP8453` / `HP84532` constant names.
 library AddressKeys {
     // Access
+    string internal constant TIMELOCK = "TIMELOCK";
     string internal constant ORCHESTRATOR = "ORCHESTRATOR";
     string internal constant DEPLOY_TOURNAMENT = "DEPLOY_TOURNAMENT";
 
@@ -36,6 +37,7 @@ library AddressKeys {
 
     // DAO / fee beneficiaries
     string internal constant HP_TREASURY = "HP_TREASURY";
+    string internal constant HP_MULTISIG = "HP_MULTISIG";
 
     // Factories
     string internal constant FEE_ROUTER_FACTORY = "FEE_ROUTER_FACTORY";

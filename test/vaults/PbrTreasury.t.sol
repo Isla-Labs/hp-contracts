@@ -2,6 +2,7 @@
 pragma solidity ^0.8.34;
 
 import { Math } from "@openzeppelin/utils/math/Math.sol";
+import { Pausable } from "@openzeppelin/utils/Pausable.sol";
 
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { RoundStatus } from "@types/vaults/VaultTypes.sol";
@@ -365,6 +366,59 @@ contract PbrTreasuryTest is VaultsTestBase {
         assertEq(treasury.getVaultPoints(START_YEAR, 1, address(vault)), 30);
         assertEq(treasury.getVaultPoints(START_YEAR, 1, address(vault2)), 70);
         assertEq(treasury.getRound(START_YEAR, 1).M_adj, 100);
+    }
+
+    function test_pause_onlyHpMultisig() public {
+        vm.prank(user);
+        vm.expectRevert(Errors.Unauthorized.selector);
+        treasury.pause();
+
+        vm.prank(hpMultisig);
+        treasury.pause();
+        assertTrue(treasury.paused());
+    }
+
+    function test_payClaim_revertsPaused() public {
+        _stake(user, vault, 10 ether);
+        _sendEth(address(treasury), 100 ether);
+        vm.warp(startTime);
+        _lockVaults(treasury);
+        vm.warp(endTime);
+
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(vault);
+        uint256[] memory points = new uint256[](1);
+        points[0] = 100;
+        _settle(treasury, vaults, points);
+
+        vm.prank(hpMultisig);
+        treasury.pause();
+
+        vm.prank(address(vault));
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        treasury.payClaim(START_YEAR, 1, user);
+    }
+
+    function test_applyFixtureSettlement_revertsPaused() public {
+        _stake(user, vault, 10 ether);
+        _sendEth(address(treasury), 100 ether);
+        vm.warp(startTime);
+        _lockVaults(treasury);
+        vm.warp(endTime);
+        treasury.requestSettle();
+
+        vm.prank(hpMultisig);
+        treasury.pause();
+
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(vault);
+        uint256[] memory points = new uint256[](1);
+        points[0] = 100;
+        bytes32[] memory fixtures = tournamentRegistry.getRound(TOURNAMENT, START_YEAR, 1).fixtureIds;
+
+        vm.prank(address(pbrSettle));
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        treasury.applyFixtureSettlement(fixtures[0], keccak256("d"), vaults, points);
     }
 }
 

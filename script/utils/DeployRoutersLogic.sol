@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { console2 as console } from "forge-std/console2.sol";
 
 import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { Orchestrator } from "@governance/Orchestrator.sol";
 import { StakeRouter } from "@routers/StakeRouter.sol";
 import { TradeRouter } from "@routers/TradeRouter.sol";
 import { ZQuoter } from "@routers/base-sepolia/ZQuoter.sol";
@@ -17,7 +15,7 @@ import { HpDeployBase } from "./HpDeployBase.sol";
 
 /**
  * @title DeployRoutersLogic
- * @notice Shared Base Sepolia router bootstrap used by DeployAll (pre-handoff) and DeployRouters.
+ * @notice Shared Base Sepolia router bootstrap used by DeployAll (pre–timelock AP handoff) and DeployRouters.
  */
 abstract contract DeployRoutersLogic is HpDeployBase {
     struct RouterDeployment {
@@ -81,28 +79,21 @@ abstract contract DeployRoutersLogic is HpDeployBase {
         _setConfigAddress(context, "trade_router", r.tradeRouter);
     }
 
-    /// @dev Direct `setName` while deployer owns AP; otherwise `Orchestrator.execute` post-handoff.
+    /// @dev Direct `setName` while deployer holds AP `DEFAULT_ADMIN_ROLE`.
+    ///      After `transferDefaultAdmin(ConstitutionalTimelock)`, register via timelock schedule/execute.
     function _setRouterName(
         AddressProvider ap,
-        address orchestrator,
+        address, /* orchestrator */
         address deployer,
         string memory name,
         address addr
     ) internal {
         require(addr != address(0), string.concat("DeployRouters: zero ", name));
-
-        address owner = Ownable(address(ap)).owner();
-        if (owner == deployer) {
-            ap.setName(name, addr);
-        } else if (owner == orchestrator) {
-            require(
-                Orchestrator(orchestrator).hasRole(bytes32(0), deployer),
-                "DeployRouters: deployer must be Orchestrator DEFAULT_ADMIN"
-            );
-            Orchestrator(orchestrator).execute(address(ap), 0, abi.encodeCall(AddressProvider.setName, (name, addr)));
-        } else {
-            revert("DeployRouters: AddressProvider owner is neither deployer nor Orchestrator");
-        }
+        require(
+            ap.hasRole(ap.DEFAULT_ADMIN_ROLE(), deployer),
+            "DeployRouters: deployer must be AddressProvider DEFAULT_ADMIN"
+        );
+        ap.setName(name, addr);
         console.log(name, addr);
     }
 }

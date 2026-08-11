@@ -2,7 +2,6 @@
 pragma solidity ^0.8.34;
 
 import { console2 as console } from "forge-std/console2.sol";
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Script } from "forge-std/Script.sol";
 
 import { AddressProvider } from "@src/AddressProvider.sol";
@@ -10,7 +9,7 @@ import { AddressProvider } from "@src/AddressProvider.sol";
 /**
  * @title AddressProviderOps
  * @notice Shared helpers for sequential deploy scripts that register names while
- *         deployer still owns AddressProvider (pre-handoff).
+ *         deployer still holds AddressProvider `DEFAULT_ADMIN_ROLE` (pre–timelock handoff).
  */
 abstract contract AddressProviderOps is Script {
     function _addressProviderOrZero() internal view returns (address) {
@@ -24,11 +23,11 @@ abstract contract AddressProviderOps is Script {
         ap = AddressProvider(payable(addr));
     }
 
-    /// @notice `setName` — reverts unless AP is set and `owner == deployer`.
+    /// @notice `setName` — reverts unless AP is set and deployer has `DEFAULT_ADMIN_ROLE`.
     function _registerName(address deployer, string memory name, address addr) internal {
         AddressProvider ap = _requireAddressProvider();
-        if (Ownable(address(ap)).owner() != deployer) {
-            revert("AddressProvider owner must be deployer until handoff");
+        if (!ap.hasRole(ap.DEFAULT_ADMIN_ROLE(), deployer)) {
+            revert("AddressProvider DEFAULT_ADMIN must be deployer until ConstitutionalTimelock handoff");
         }
         if (addr == address(0)) revert("cannot register zero address");
         ap.setName(name, addr);
@@ -42,15 +41,16 @@ abstract contract AddressProviderOps is Script {
             console.log("ADDRESS_PROVIDER unset - skip setName for", name);
             return;
         }
-        if (Ownable(apAddr).owner() != deployer) {
-            console.log("AddressProvider owner != deployer - skip setName for", name);
+        AddressProvider ap = AddressProvider(payable(apAddr));
+        if (!ap.hasRole(ap.DEFAULT_ADMIN_ROLE(), deployer)) {
+            console.log("AddressProvider DEFAULT_ADMIN != deployer - skip setName for", name);
             return;
         }
         if (addr == address(0)) {
             console.log("zero address - skip setName for", name);
             return;
         }
-        AddressProvider(payable(apAddr)).setName(name, addr);
+        ap.setName(name, addr);
         console.log(name, addr);
     }
 

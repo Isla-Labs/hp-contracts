@@ -3,8 +3,6 @@ pragma solidity ^0.8.34;
 
 import { BeaconProxy } from "@openzeppelin/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/proxy/beacon/UpgradeableBeacon.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { ICreateX } from "@createx/ICreateX.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
@@ -17,39 +15,40 @@ import { StakedToken } from "@vaults/StakedToken.sol";
 
 /**
  * @title PlayerVaultFactory
- * @notice Deploys per-market `PlayerVault` beacon proxies + bound `StakedToken`s via CreateX CREATE3.
- * @dev Upgradeable factory (InitGuard TUP). CREATE3 salts are permissioned to the proxy address.
+ * @notice Immutable factory: deploys per-market `PlayerVault` beacon proxies + bound `StakedToken`s
+ *         via CreateX CREATE3.
+ * @dev Shared `UpgradeableBeacon` is owned by `TIMELOCK` (delayed logic upgrades). `create` is
+ *      Orchestrator-gated via live AddressProvider lookup. Vanity salts (`0x42…`) are mined
+ *      offchain (oracle workers) and passed in; CreateX enforces permissioned salts.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerVaultFactory is Initializable, AddressBook, Ownable {
+contract PlayerVaultFactory is AddressBook {
     ICreateX public constant CREATE_X = ICreateX(CreateXAddresses.CREATE_X);
 
-    UpgradeableBeacon public beacon;
+    /// @notice Shared beacon for all PlayerVault BeaconProxies (owned by `TIMELOCK`).
+    UpgradeableBeacon public immutable beacon;
 
-    /// @notice Owns the beacon (logic upgrades); sole caller of `create`
-    address public orchestrator;
-
-    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
-        _disableInitializers();
+    /// @param addressProvider_ Canonical `AddressProvider` (`TIMELOCK` must already be set).
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
+        beacon = new UpgradeableBeacon(
+            address(new PlayerVault(addressProvider_)), _getAddress(_addressKey(Addresses.TIMELOCK))
+        );
     }
 
-    /// @notice Resolve Orchestrator, deploy shared PlayerVault beacon.
-    function initialize() external initializer {
-        orchestrator = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
-        beacon = new UpgradeableBeacon(address(new PlayerVault(address(addressProvider))), orchestrator);
-        _transferOwnership(orchestrator);
+    modifier onlyOrchestrator() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.Unauthorized();
+        _;
     }
 
     /**
      * @notice Deploy a vanity-capable vault + stToken pair and initialize the vault.
      * @param baseName PlayerToken name from Doppler (stToken becomes `Staked {baseName}`).
-     * @param baseSymbol PlayerToken symbol from Doppler (stToken becomes `st{baseSymbol}`).
+     * @param baseSymbol PlayerToken symbol from Doppler (stToken becomes `{baseSymbol}42`).
      * @param vaultSalt CreateX salt for the `BeaconProxy` (mine offchain for `0x42…`).
-     * @param stTokenSalt CreateX salt for the `StakedToken`.
+     * @param stTokenSalt CreateX salt for the `StakedToken` (deterministic offchain / caller).
+     * @param stakedURI ERC-7572 `contractURI` for the stToken (IPFS JSON from FinalConfig).
      */
     function create(
         bytes32 playerId,
@@ -57,20 +56,22 @@ contract PlayerVaultFactory is Initializable, AddressBook, Ownable {
         string calldata baseName,
         string calldata baseSymbol,
         bytes32 vaultSalt,
-        bytes32 stTokenSalt
-    ) external returns (address playerVault, address stToken) {
-        if (msg.sender != orchestrator) revert Errors.Unauthorized();
+        bytes32 stTokenSalt,
+        string calldata stakedURI
+    ) external onlyOrchestrator returns (address playerVault, address stToken) {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
         if (playerToken == address(0)) revert Errors.ZeroAddress();
         if (vaultSalt == bytes32(0) || stTokenSalt == bytes32(0)) revert Errors.ZeroSalt();
+        if (bytes(stakedURI).length == 0) revert Errors.EmptyURI();
 
         bytes memory vaultInitCode = abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(address(beacon), ""));
         playerVault = CREATE_X.deployCreate3(vaultSalt, vaultInitCode);
 
         string memory stName = string.concat("Staked ", baseName);
-        string memory stSymbol = string.concat("st", baseSymbol);
-        bytes memory stInitCode =
-            abi.encodePacked(type(StakedToken).creationCode, abi.encode(stName, stSymbol, playerVault));
+        string memory stSymbol = string.concat(baseSymbol, "42");
+        bytes memory stInitCode = abi.encodePacked(
+            type(StakedToken).creationCode, abi.encode(stName, stSymbol, playerVault, stakedURI)
+        );
         stToken = CREATE_X.deployCreate3(stTokenSalt, stInitCode);
 
         PlayerVault(playerVault).initialize(playerId, playerToken, stToken);
@@ -78,50 +79,7 @@ contract PlayerVaultFactory is Initializable, AddressBook, Ownable {
         emit Events.PlayerVaultCreated(playerId, playerVault, stToken);
     }
 
-    /**
-     * @notice Builds a CreateX salt permissioned to this factory: `address(this) || 0x00 || entropy`.
-     * @dev Byte 21 `0x00` = permissioned deploy, no cross-chain redeploy guard. Last 11 bytes are mineable.
-     */
-    function makeSalt(bytes11 entropy) external view returns (bytes32) {
-        return bytes32(uint256(uint160(address(this)))) << 96 | bytes32(uint256(uint88(entropy)));
-    }
-
-    /// @notice Guarded salt CreateX will use when this factory is `msg.sender`.
-    function computeGuardedSalt(bytes32 salt) public view returns (bytes32) {
-        address senderBytes = address(bytes20(salt));
-        bytes1 redeployProtectionFlag = salt[20];
-
-        if (senderBytes == address(this)) {
-            if (redeployProtectionFlag == hex"00") {
-                return _efficientHash(bytes32(uint256(uint160(address(this)))), salt);
-            }
-            if (redeployProtectionFlag == hex"01") {
-                return keccak256(abi.encode(address(this), block.chainid, salt));
-            }
-            revert Errors.InvalidSalt();
-        }
-
-        if (senderBytes == address(0) && redeployProtectionFlag == hex"01") {
-            return _efficientHash(bytes32(block.chainid), salt);
-        }
-
-        return keccak256(abi.encode(salt));
-    }
-
-    /// @notice Predicted CREATE3 address for `salt` when deployed through this factory.
-    function computeCreate3Address(bytes32 salt) external view returns (address) {
-        return CREATE_X.computeCreate3Address(computeGuardedSalt(salt));
-    }
-
     function implementation() external view returns (address) {
         return beacon.implementation();
-    }
-
-    function _efficientHash(bytes32 a, bytes32 b) private pure returns (bytes32 hash) {
-        assembly ("memory-safe") {
-            mstore(0x00, a)
-            mstore(0x20, b)
-            hash := keccak256(0x00, 0x40)
-        }
     }
 }

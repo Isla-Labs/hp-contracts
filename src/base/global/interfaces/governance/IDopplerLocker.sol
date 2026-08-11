@@ -20,7 +20,7 @@ interface IDopplerLocker {
 
     /**
      * @notice Manual name/symbol override during the 24h review window (re-arms `queuedAt`).
-     * @dev Clears any prior `baseURI`; IPFS prefix is set later by `CvmJob.FinalConfig`.
+     * @dev Clears any prior IPFS URIs; they are set later by `CvmJob.FinalConfig`.
      */
     function editMetadata(bytes32 playerId, string calldata name, string calldata symbol) external;
 
@@ -32,7 +32,7 @@ interface IDopplerLocker {
 
     /**
      * @notice Clear a `DeployFailed` entry after ops intervention.
-     * @param keepSalts Resume as `DeployReady` when salts/`baseURI` are still valid; else re-queue for FinalConfig.
+     * @param keepSalts Resume as `DeployReady` when salts/URIs are still valid; else re-queue for FinalConfig.
      */
     function resetFailedDeploy(bytes32 playerId, bool keepSalts) external;
 }

@@ -17,11 +17,6 @@ forge-std/=lib/forge-std/src/
 @vaults/=src/vaults/
 
 @doppler/=lib/doppler/
-@zrouter/=lib/zRouter/
-@cre/=lib/chainlink-evm/contracts/cre/src/
-@chainlink/=lib/chainlink-evm/contracts/src/v0.8/
-lib/chainlink-evm/:@openzeppelin/contracts@5.0.2/=lib/doppler/lib/v4-core/lib/openzeppelin-contracts/contracts/
-
 @openzeppelin/=lib/doppler/lib/v4-core/lib/openzeppelin-contracts/contracts/
 @createx/=lib/doppler/lib/createx/src/
 

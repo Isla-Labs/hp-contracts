@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { Pausable } from "@openzeppelin/utils/Pausable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
@@ -22,17 +21,14 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
 /**
  * @title PlayerVault
  * @notice Stake custody; mirrors utilization to cached active treasuries; claims use `lockBlock` checkpoints.
+ * @dev Protocol deps (`STAKE_ROUTER`, `TOURNAMENT_REGISTRY`, `PLAYER_SET_REGISTRY`) are resolved
+ *      per call via `AddressProvider` so registry/router redeploys do not require vault upgrades.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, ReentrancyGuard, IPlayerVault {
+contract PlayerVault is Initializable, AddressBook, Pausable, ReentrancyGuard, IPlayerVault {
     using SafeERC20 for IERC20;
-
-    ITournamentRegistry public tournamentRegistry;
-    IPlayerSetRegistry public playerSetRegistry;
-
-    address public stakeRouter;
 
     // --------------------------------------------
     //  Config
@@ -93,24 +89,41 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     mapping(address treasury => ScanTip) private _scanTip;
 
     // --------------------------------------------
+    //  Access control
+    // --------------------------------------------
+
+    modifier onlyAdmin() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.HP_MULTISIG))) revert Errors.Unauthorized();
+        _;
+    }
+
+    modifier onlyPlayerSetRegistry() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY))) revert Errors.Unauthorized();
+        _;
+    }
+
+    modifier onlyTournamentRegistry() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY))) revert Errors.Unauthorized();
+        _;
+    }
+
+    modifier onlyRouter() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.STAKE_ROUTER))) revert Errors.Unauthorized();
+        _;
+    }
+
+    // --------------------------------------------
     //  Initialization
     // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
         _disableInitializers();
     }
 
     function initialize(bytes32 playerId_, address playerToken_, address stToken_) external initializer {
         if (playerToken_ == address(0) || stToken_ == address(0)) revert Errors.ZeroAddress();
         if (playerId_ == bytes32(0)) revert Errors.ZeroId();
-
-        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
-
-        stakeRouter = _getAddress(_addressKey(Addresses.STAKE_ROUTER));
-
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
 
         playerId = playerId_;
         playerToken = playerToken_;
@@ -122,11 +135,11 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     //  Admin
     // --------------------------------------------
 
-    function pause() external onlyOwner {
+    function pause() external onlyAdmin {
         _pause();
     }
 
-    function unpause() external onlyOwner {
+    function unpause() external onlyAdmin {
         _unpause();
     }
 
@@ -134,15 +147,16 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
     //  Lifecycle
     // --------------------------------------------
 
-    function setActive(bool active_) external {
-        _checkLifecycleCaller();
+    function setActive(bool active_) external onlyPlayerSetRegistry {
         isActive = active_;
         emit Events.ActiveUpdated(playerId, active_);
     }
 
     /// @inheritdoc IPlayerVault
-    function syncActiveTreasury(bytes32 tournamentId_, address treasury, bool active) external {
-        if (msg.sender != address(tournamentRegistry)) revert Errors.Unauthorized();
+    function syncActiveTreasury(bytes32 tournamentId_, address treasury, bool active)
+        external
+        onlyTournamentRegistry
+    {
         if (treasury == address(0)) revert Errors.ZeroAddress();
         if (tournamentId_ == bytes32(0)) revert Errors.ZeroId();
 
@@ -175,37 +189,28 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
         emit Events.ActiveTreasuryUpdated(tournamentId_, treasury, false);
     }
 
-    function _checkLifecycleCaller() internal view {
-        if (msg.sender == owner()) return;
-        if (msg.sender == _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY))) return;
-        revert Errors.Unauthorized();
-    }
-
     // --------------------------------------------
     //  Router
     // --------------------------------------------
 
     /// @inheritdoc IPlayerVault
     /// @dev Pulls `playerToken` from `user` (user must approve this vault). Mint stToken to `user`.
-    function stakeFor(address user, uint256 amount) external nonReentrant whenNotPaused {
-        if (msg.sender != stakeRouter) revert Errors.Unauthorized();
+    function stakeFor(address user, uint256 amount) external onlyRouter nonReentrant whenNotPaused {
         _stake(user, amount);
     }
 
     /// @inheritdoc IPlayerVault
-    function unstakeFor(address user, uint256 amount) external nonReentrant whenNotPaused {
-        if (msg.sender != stakeRouter) revert Errors.Unauthorized();
+    function unstakeFor(address user, uint256 amount) external onlyRouter nonReentrant whenNotPaused {
         _unstake(user, amount);
     }
 
     /// @inheritdoc IPlayerVault
-    function claimFor(address user) external nonReentrant whenNotPaused returns (uint256) {
-        if (msg.sender != stakeRouter) revert Errors.Unauthorized();
+    function claimFor(address user) external onlyRouter nonReentrant whenNotPaused returns (uint256) {
         return _claim(user);
     }
 
     // --------------------------------------------
-    //  Stake / Unstake
+    //  Stake
     // --------------------------------------------
 
     function stake(uint256 amount) external nonReentrant whenNotPaused {
@@ -227,6 +232,10 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
 
         emit Events.Staked(user, amount, next);
     }
+
+    // --------------------------------------------
+    //  Unstake
+    // --------------------------------------------
 
     function unstake(uint256 amount) external nonReentrant whenNotPaused {
         _unstake(msg.sender, amount);
@@ -341,7 +350,7 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
         bool isUtilized = newTotal > 0;
         if (wasUtilized == isUtilized) return;
 
-        playerSetRegistry.updateUtilization(isUtilized);
+        IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY))).updateUtilization(isUtilized);
 
         uint256 n = _activeTreasuries.length;
         for (uint256 i; i < n;) {
@@ -368,6 +377,8 @@ contract PlayerVault is Initializable, AddressBook, Ownable, Pausable, Reentranc
         (uint16 season, uint32 active,) = treasury.getCursors();
         ScanTip memory tip = _scanTip[treasuryAddr];
 
+        ITournamentRegistry tournamentRegistry =
+            ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
         (, uint16[] memory seasonYears) = tournamentRegistry.getSeasonsOldestFirst(tid);
 
         if (tip.nextRound == 0) {

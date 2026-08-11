@@ -8,9 +8,9 @@ import { AddressProvider } from "@src/AddressProvider.sol";
 /**
  * @title DeployAddressProvider
  * @notice Standalone bootstrap: deploy the canonical address book only.
- * @dev Temporary owner = deployer so sequential deploy steps can `setName` until
- *      `DeployHandoff` transfers ownership to Orchestrator. Paste the logged address
- *      into `.env` as `ADDRESS_PROVIDER` (sole env address pointer).
+ * @dev Temporary `DEFAULT_ADMIN_ROLE` = deployer so sequential deploy steps can `setName`
+ *      until a later `transferDefaultAdmin(ConstitutionalTimelock)`. Paste the logged
+ *      address into `.env` as `ADDRESS_PROVIDER` (sole env address pointer).
  *
  *      Makefile:
  *        `make deploy-base-address-provider`
@@ -29,7 +29,7 @@ contract DeployAddressProvider is Script {
 
         console.log("=== paste into .env ===");
         console.log("ADDRESS_PROVIDER", addressProvider);
-        console.log("owner (temporary deployer)", deployer);
+        console.log("DEFAULT_ADMIN (temporary deployer)", deployer);
         console.log("Next: make deploy-*-orchestrator (then registries, DT, data, lockers, factories, handoff)");
     }
 }

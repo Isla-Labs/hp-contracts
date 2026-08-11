@@ -8,6 +8,9 @@ pragma solidity ^0.8.34;
 interface IStakedToken {
     function vault() external view returns (address);
 
+    /// @notice ERC-7572 contract-level metadata URI (`ipfs://…` JSON with image).
+    function contractURI() external view returns (string memory);
+
     function balanceOfAt(address account, uint256 blockNumber) external view returns (uint256);
 
     function totalSupplyAt(uint256 blockNumber) external view returns (uint256);

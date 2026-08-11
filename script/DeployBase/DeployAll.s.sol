@@ -35,7 +35,7 @@ import { ProxyUtils } from "../utils/ProxyUtils.sol";
  *      5) Initialize in dependency order
  *      6) Authorize DeployTournament + DopplerLocker + TransferLocker
  *      7) Deploy + register zAMM stack, StakeRouter, TradeRouter
- *      8) Handoff AP + ProxyAdmins → Orchestrator
+ *      8) Handoff ProxyAdmins → Orchestrator (vault factories are immutable — no ProxyAdmin)
  *      9) Transfer Orchestrator DEFAULT_ADMIN → owner (multisig)
  *
  *      Env: PRIVATE_KEY; optional OWNER_ADDRESS / DAO_ADDRESS (default Preconfig.hpMultisig).
@@ -62,8 +62,6 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         address deployTournamentImpl;
         address stakeVestingImpl;
         address feeRouterFactoryImpl;
-        address playerVaultFactoryImpl;
-        address pbrTreasuryFactoryImpl;
         address pbrFeeHubFactoryImpl;
         address dopplerConfigImpl;
         address dopplerLockerImpl;
@@ -99,7 +97,15 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         _seedPreconfig(ap, context.preconfig);
 
         d = _deployShells(ap, deployer, d);
-        _registerProtocol(ap, d);
+
+        // Vault factory beacons are owned by TIMELOCK at construction. Bootstrap placeholder =
+        // final owner until ConstitutionalTimelock is deployed and beacon ownership transferred.
+        if (ap.getByName(Keys.TIMELOCK) == address(0)) {
+            _set(ap, Keys.TIMELOCK, owner);
+            console.log("TIMELOCK bootstrap placeholder (owner) - replace with ConstitutionalTimelock later");
+        }
+
+        d = _registerProtocol(ap, d);
         _initializeAll(d);
         _authorizeModules(d.orchestrator, d.deployTournament, d.dopplerLocker, d.transferLocker);
 
@@ -188,21 +194,18 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         d.deployTournament = _deployInitGuardProxy(guard, deployer);
         d.stakeVesting = _deployInitGuardProxy(guard, deployer);
         d.feeRouterFactory = _deployInitGuardProxy(guard, deployer);
-        d.playerVaultFactory = _deployInitGuardProxy(guard, deployer);
-        d.pbrTreasuryFactory = _deployInitGuardProxy(guard, deployer);
         d.pbrFeeHubFactory = _deployInitGuardProxy(guard, deployer);
         d.dopplerConfig = _deployInitGuardProxy(guard, deployer);
         d.dopplerLocker = _deployInitGuardProxy(guard, deployer);
         d.transferLocker = _deployInitGuardProxy(guard, deployer);
 
         // Impls after CVM_ROUTER is on AP (locker ctors bind it immutably).
+        // Vault factories are immutable and constructed after ORCHESTRATOR is registered.
         d.tournamentRegistryImpl = address(new TournamentRegistry(apAddr));
         d.playerSetRegistryImpl = address(new PlayerSetRegistry(apAddr));
         d.deployTournamentImpl = address(new DeployTournament(apAddr));
         d.stakeVestingImpl = address(new StakeVesting(apAddr));
         d.feeRouterFactoryImpl = address(new FeeRouterFactory(apAddr));
-        d.playerVaultFactoryImpl = address(new PlayerVaultFactory(apAddr));
-        d.pbrTreasuryFactoryImpl = address(new PbrTreasuryFactory(apAddr));
         d.pbrFeeHubFactoryImpl = address(new PbrFeeHubFactory(apAddr));
         d.dopplerConfigImpl = address(new DopplerConfig(apAddr));
         d.dopplerLockerImpl = address(new DopplerLocker(apAddr));
@@ -215,9 +218,19 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
     //  Register
     // -------------------------------------------------------------------------
 
-    function _registerProtocol(AddressProvider ap, CoreDeployment memory d) internal {
+    function _registerProtocol(AddressProvider ap, CoreDeployment memory d)
+        internal
+        returns (CoreDeployment memory)
+    {
         console.log("--- register protocol ---");
         _set(ap, Keys.ORCHESTRATOR, d.orchestrator);
+
+        // Immutable vault factories require TIMELOCK on AP at construction.
+        d.playerVaultFactory = address(new PlayerVaultFactory(address(ap)));
+        d.pbrTreasuryFactory = address(new PbrTreasuryFactory(address(ap)));
+        console.log("PLAYER_VAULT_FACTORY", d.playerVaultFactory);
+        console.log("PBR_TREASURY_FACTORY", d.pbrTreasuryFactory);
+
         _set(ap, Keys.TOURNAMENT_REGISTRY, d.tournamentRegistry);
         _set(ap, Keys.PLAYER_SET_REGISTRY, d.playerSetRegistry);
         _set(ap, Keys.DEPLOY_TOURNAMENT, d.deployTournament);
@@ -229,6 +242,7 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         _set(ap, Keys.DOPPLER_CONFIG, d.dopplerConfig);
         _set(ap, Keys.DOPPLER_LOCKER, d.dopplerLocker);
         _set(ap, Keys.TRANSFER_LOCKER, d.transferLocker);
+        return d;
     }
 
     // -------------------------------------------------------------------------
@@ -244,14 +258,8 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         );
         _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, abi.encodeCall(PlayerSetRegistry.initialize, ()));
 
-        // 2) Factories
+        // 2) Factories (vault factories are immutable — already constructed)
         _upgradeAndCall(d.feeRouterFactory, d.feeRouterFactoryImpl, abi.encodeCall(FeeRouterFactory.initialize, ()));
-        _upgradeAndCall(
-            d.playerVaultFactory, d.playerVaultFactoryImpl, abi.encodeCall(PlayerVaultFactory.initialize, ())
-        );
-        _upgradeAndCall(
-            d.pbrTreasuryFactory, d.pbrTreasuryFactoryImpl, abi.encodeCall(PbrTreasuryFactory.initialize, ())
-        );
         _upgradeAndCall(d.pbrFeeHubFactory, d.pbrFeeHubFactoryImpl, abi.encodeCall(PbrFeeHubFactory.initialize, ()));
 
         // 3) StakeVesting (needs registry + HP_TREASURY)

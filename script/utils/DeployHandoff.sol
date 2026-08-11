@@ -2,7 +2,6 @@
 pragma solidity ^0.8.34;
 
 import { console2 as console } from "forge-std/console2.sol";
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 
 import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { AddressProvider } from "@src/AddressProvider.sol";
@@ -12,16 +11,18 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployHandoff
- * @notice Step 9: transfer AddressProvider + ProxyAdmins to Orchestrator.
- * @dev Oracle proxy admins stay with OWNER (out of band). Call after factories.
+ * @notice Step 9: transfer ProxyAdmins to Orchestrator.
+ * @dev AddressProvider `DEFAULT_ADMIN_ROLE` stays with deployer until a later
+ *      `transferDefaultAdmin(ConstitutionalTimelock)`. Oracle proxy admins stay
+ *      with OWNER (out of band). Call after factories.
  */
 abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
     function _handoff(address deployer) internal {
         if (deployer == address(0)) revert("deployer required");
 
         AddressProvider ap = _requireAddressProvider();
-        if (Ownable(address(ap)).owner() != deployer) {
-            revert("AddressProvider owner must be deployer for handoff");
+        if (!ap.hasRole(ap.DEFAULT_ADMIN_ROLE(), deployer)) {
+            revert("AddressProvider DEFAULT_ADMIN must be deployer for handoff");
         }
 
         address orchestrator = _requireName(Keys.ORCHESTRATOR);
@@ -41,7 +42,6 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         _warnIfMissing(Keys.PBR_TREASURY_FACTORY);
         _warnIfMissing(Keys.PBR_FEE_HUB_FACTORY);
 
-        Ownable(address(ap)).transferOwnership(orchestrator);
         _transferProxyAdmin(tournamentRegistry, orchestrator);
         _transferProxyAdmin(playerSetRegistry, orchestrator);
         _transferProxyAdmin(deployTournament, orchestrator);
@@ -52,13 +52,14 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         _transferProxyAdminIfSet(Keys.DOPPLER_LOCKER, orchestrator);
         _transferProxyAdminIfSet(Keys.TRANSFER_LOCKER, orchestrator);
         _transferProxyAdminIfSet(Keys.FEE_ROUTER_FACTORY, orchestrator);
-        _transferProxyAdminIfSet(Keys.PLAYER_VAULT_FACTORY, orchestrator);
-        _transferProxyAdminIfSet(Keys.PBR_TREASURY_FACTORY, orchestrator);
+        // PLAYER_VAULT_FACTORY / PBR_TREASURY_FACTORY are immutable — no ProxyAdmin.
         _transferProxyAdminIfSet(Keys.PBR_FEE_HUB_FACTORY, orchestrator);
 
         console.log("=== DeployHandoff ===");
-        console.log("AddressProvider owner -> Orchestrator", orchestrator);
-        console.log("ProxyAdmins transferred for registries / DT / StakeVesting / lockers / factories");
+        console.log("AddressProvider DEFAULT_ADMIN remains deployer (transfer to ConstitutionalTimelock later)");
+        console.log(
+            "ProxyAdmins transferred for registries / DT / StakeVesting / lockers / market factories ->", orchestrator
+        );
     }
 
     function _transferProxyAdminIfSet(string memory name, address newOwner) internal {

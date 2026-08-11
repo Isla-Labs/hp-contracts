@@ -50,11 +50,11 @@ library VaultsErrors {
     // --------------------------------------------
 
     error OnlyVault();
+    error EmptyURI();
 
     // --------------------------------------------
     //  Factory Errors
     // --------------------------------------------
 
     error ZeroSalt();
-    error InvalidSalt();
 }

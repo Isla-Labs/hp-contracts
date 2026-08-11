@@ -4,6 +4,3 @@
 [submodule "lib/doppler"]
 	path = lib/doppler
 	url = https://github.com/whetstoneresearch/doppler
-[submodule "lib/zRouter"]
-	path = lib/zRouter
-	url = https://github.com/z-fi/zRouter

@@ -16,6 +16,10 @@ contract StakedTokenTest is VaultsTestBase {
         (vault, stToken) = _deployVault(PLAYER);
     }
 
+    function test_contractURI() public view {
+        assertEq(stToken.contractURI(), "ipfs://staked-test");
+    }
+
     function test_mint_burn_onlyVault() public {
         vm.expectRevert(Errors.OnlyVault.selector);
         stToken.mint(user, 1 ether);

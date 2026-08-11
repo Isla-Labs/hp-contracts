@@ -11,7 +11,7 @@ import { AddressProviderOps } from "./AddressProviderOps.sol";
 /**
  * @title DeployOrchestrator
  * @notice Step 3: deploy Orchestrator and register `ORCHESTRATOR` on AddressProvider.
- * @dev Does not transfer AddressProvider ownership (see DeployHandoff).
+ * @dev Does not transfer AddressProvider admin (later: `transferDefaultAdmin` → ConstitutionalTimelock).
  */
 abstract contract DeployOrchestrator is AddressProviderOps {
     function _deployOrchestrator(address owner, address deployer) internal returns (address orchestrator) {

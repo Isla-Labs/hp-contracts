@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { Pausable } from "@openzeppelin/utils/Pausable.sol";
 
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
@@ -57,7 +56,7 @@ contract PlayerVaultTest is VaultsTestBase {
     }
 
     function test_stake_revertsInactive() public {
-        vm.prank(orchestrator);
+        vm.prank(address(playerSetRegistry));
         vault.setActive(false);
 
         playerToken.mint(user, 1 ether);
@@ -69,7 +68,7 @@ contract PlayerVaultTest is VaultsTestBase {
     }
 
     function test_stake_revertsPaused() public {
-        vm.prank(orchestrator);
+        vm.prank(hpMultisig);
         vault.pause();
 
         playerToken.mint(user, 1 ether);
@@ -263,7 +262,7 @@ contract PlayerVaultTest is VaultsTestBase {
         _stake(user, vault, 10 ether);
         _runRoundToClaimable(100);
 
-        vm.prank(orchestrator);
+        vm.prank(hpMultisig);
         vault.pause();
 
         vm.prank(user);
@@ -334,8 +333,8 @@ contract PlayerVaultTest is VaultsTestBase {
         assertEq(user.balance, beforeBal + expected);
     }
 
-    function test_setActive_allowsOrchestratorAndPsr() public {
-        vm.prank(orchestrator);
+    function test_setActive_allowsPsr() public {
+        vm.prank(address(playerSetRegistry));
         vault.setActive(false);
         assertFalse(vault.isActive());
 
@@ -350,10 +349,14 @@ contract PlayerVaultTest is VaultsTestBase {
         vault.setActive(false);
     }
 
-    function test_pause_onlyOwner() public {
+    function test_pause_onlyHpMultisig() public {
         vm.prank(user);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, user));
+        vm.expectRevert(Errors.Unauthorized.selector);
         vault.pause();
+
+        vm.prank(hpMultisig);
+        vault.pause();
+        assertTrue(vault.paused());
     }
 
     function _runRoundToClaimable(uint256 vaultPoints_) internal {

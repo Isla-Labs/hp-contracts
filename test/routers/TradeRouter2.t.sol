@@ -8,7 +8,7 @@ import { AddressKeys as Addresses } from "@addresses/AddressKeys.sol";
 import { RoutersErrors as Errors } from "@errors/routers/RoutersErrors.sol";
 import { RoutersEvents as Events } from "@events/routers/RoutersEvents.sol";
 import { DopplerData } from "@types/registries/PlayerSetTypes.sol";
-import { TradeRouter } from "@routers/TradeRouter.sol";
+import { TradeRouter } from "@routers/TradeRouter2.sol";
 
 import { IHooks } from "@v4-core/interfaces/IHooks.sol";
 import { Currency, CurrencyLibrary } from "@v4-core/types/Currency.sol";
@@ -17,10 +17,10 @@ import { PoolKey } from "@v4-core/types/PoolKey.sol";
 import { MockPlayerSetRegistry } from "../vaults/mocks/MockPlayerSetRegistry.sol";
 import { MockPlayerToken } from "../vaults/mocks/MockPlayerToken.sol";
 import { MockPoolManager } from "./mocks/MockPoolManager.sol";
-import { MockSwapHook } from "./mocks/MockSwapHook.sol";
+import { MockSwapHook } from "./mocks/MockSwapHook2.sol";
 import { MockZRouter } from "./mocks/MockZRouter.sol";
 
-contract TradeRouterTest is Test {
+contract TradeRouter2Test is Test {
     bytes32 internal constant PLAYER = keccak256("player-1");
     bytes32 internal constant PLAYER_B = keccak256("player-2");
 

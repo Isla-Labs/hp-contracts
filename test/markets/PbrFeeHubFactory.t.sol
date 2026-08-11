@@ -11,10 +11,8 @@ contract PbrFeeHubFactoryTest is MarketsTestBase {
     bytes32 internal constant LEAGUE_A = keccak256("league-a");
     bytes32 internal constant LEAGUE_B = keccak256("league-b");
 
-    function test_initialize_setsOrchestratorAndBeacon() public view {
-        assertEq(pbrFeeHubFactory.orchestrator(), orchestrator);
-        assertEq(pbrFeeHubFactory.owner(), orchestrator);
-        assertEq(pbrFeeHubFactory.beacon().owner(), orchestrator);
+    function test_constructor_setsBeaconOwnedByTimelock() public view {
+        assertEq(pbrFeeHubFactory.beacon().owner(), timelock);
         assertTrue(pbrFeeHubFactory.implementation() != address(0));
     }
 

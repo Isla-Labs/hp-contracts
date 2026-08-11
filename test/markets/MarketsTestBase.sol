@@ -2,7 +2,6 @@
 pragma solidity ^0.8.34;
 
 import { Test } from "forge-std/Test.sol";
-import { TransparentUpgradeableProxy } from "@openzeppelin/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 import { AddressProvider } from "@src/AddressProvider.sol";
 import { AddressKeys as Addresses } from "@addresses/AddressKeys.sol";
@@ -18,7 +17,6 @@ abstract contract MarketsTestBase is Test {
     uint256 internal constant WAD = 1e18;
     uint256 internal constant BPS = 10_000;
 
-    address internal dao = makeAddr("dao");
     address internal orchestrator = makeAddr("orchestrator");
     address internal timelock = makeAddr("timelock");
     address internal playerSetRegistry = makeAddr("playerSetRegistry");
@@ -41,26 +39,8 @@ abstract contract MarketsTestBase is Test {
         ap.setName(Addresses.TOURNAMENT_REGISTRY, address(tournamentRegistry));
         ap.setName(Addresses.PLAYER_SET_REGISTRY, playerSetRegistry);
 
-        feeRouterFactory = _deployFeeRouterFactory();
-        pbrFeeHubFactory = _deployPbrFeeHubFactory();
-    }
-
-    function _deployFeeRouterFactory() internal returns (FeeRouterFactory) {
-        FeeRouterFactory impl = new FeeRouterFactory(address(ap));
-        return FeeRouterFactory(
-            address(
-                new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(FeeRouterFactory.initialize, ()))
-            )
-        );
-    }
-
-    function _deployPbrFeeHubFactory() internal returns (PbrFeeHubFactory) {
-        PbrFeeHubFactory impl = new PbrFeeHubFactory(address(ap));
-        return PbrFeeHubFactory(
-            address(
-                new TransparentUpgradeableProxy(address(impl), dao, abi.encodeCall(PbrFeeHubFactory.initialize, ()))
-            )
-        );
+        feeRouterFactory = new FeeRouterFactory(address(ap));
+        pbrFeeHubFactory = new PbrFeeHubFactory(address(ap));
     }
 
     function _createFeeRouter(bytes32 playerId, address pbrFeeHub) internal returns (FeeRouter) {

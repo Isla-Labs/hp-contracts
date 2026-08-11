@@ -6,8 +6,6 @@ pragma solidity ^0.8.34;
  * @notice Cross-contract surface for per-domestic-league `PbrFeeHub` deploys.
  */
 interface IPbrFeeHubFactory {
-    function orchestrator() external view returns (address);
-
     function create(bytes32 leagueId, address leagueTreasury) external returns (address hub);
 
     function implementation() external view returns (address);

@@ -3,7 +3,6 @@ pragma solidity ^0.8.34;
 
 import { console2 as console } from "forge-std/console2.sol";
 
-import { InitGuard } from "@base/abstract/InitGuard.sol";
 import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { DeployTournament } from "@deployments/tournaments/DeployTournament.sol";
 import { FeeRouterFactory } from "@markets/factories/FeeRouterFactory.sol";
@@ -17,9 +16,9 @@ import { ProxyUtils } from "./ProxyUtils.sol";
 /**
  * @title DeployFactories
  * @notice Market + vault factories; register on AP; initialize DeployTournament.
- * @dev FeeRouter / PbrFeeHub factories remain InitGuard TUPs (ProxyAdmin → Orchestrator at handoff).
- *      PlayerVault / PbrTreasury factories are immutable (`new` after ORCHESTRATOR is on AP).
- *      DeployTournament initialize runs here so factory names already exist on AddressProvider.
+ * @dev All four factories are immutable (`new` after ORCHESTRATOR + TIMELOCK are on AP).
+ *      Shared beacons are owned by TIMELOCK. DeployTournament initialize runs here so factory
+ *      names already exist on AddressProvider.
  */
 abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
     struct FactoryDeployment {
@@ -27,10 +26,7 @@ abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
         address pbrFeeHubFactory;
         address pbrTreasuryFactory;
         address playerVaultFactory;
-        address feeRouterFactoryImpl;
-        address pbrFeeHubFactoryImpl;
         address deployTournamentImpl;
-        address initGuard;
     }
 
     function _deployFactories(address deployer) internal returns (FactoryDeployment memory f) {
@@ -41,16 +37,8 @@ abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
         _requireName(Keys.ORCHESTRATOR);
         _requireName(Keys.TIMELOCK);
 
-        InitGuard guard = new InitGuard();
-        f.initGuard = address(guard);
-
-        f.feeRouterFactory = _deployInitGuardProxy(guard, deployer);
-        f.pbrFeeHubFactory = _deployInitGuardProxy(guard, deployer);
-
-        f.feeRouterFactoryImpl = address(new FeeRouterFactory(addressProvider));
-        f.pbrFeeHubFactoryImpl = address(new PbrFeeHubFactory(addressProvider));
-
-        // Immutable vault factories (constructor resolves Orchestrator + deploys beacons).
+        f.feeRouterFactory = address(new FeeRouterFactory(addressProvider));
+        f.pbrFeeHubFactory = address(new PbrFeeHubFactory(addressProvider));
         f.playerVaultFactory = address(new PlayerVaultFactory(addressProvider));
         f.pbrTreasuryFactory = address(new PbrTreasuryFactory(addressProvider));
 
@@ -59,18 +47,15 @@ abstract contract DeployFactories is AddressProviderOps, ProxyUtils {
         _registerName(deployer, Keys.PBR_TREASURY_FACTORY, f.pbrTreasuryFactory);
         _registerName(deployer, Keys.PBR_FEE_HUB_FACTORY, f.pbrFeeHubFactory);
 
-        _upgradeAndCall(f.feeRouterFactory, f.feeRouterFactoryImpl, abi.encodeCall(FeeRouterFactory.initialize, ()));
-        _upgradeAndCall(f.pbrFeeHubFactory, f.pbrFeeHubFactoryImpl, abi.encodeCall(PbrFeeHubFactory.initialize, ()));
-
         // DeployTournament resolves factories from AP — initialize only after the names above exist.
         f.deployTournamentImpl = address(new DeployTournament(addressProvider));
         _upgradeAndCall(deployTournament, f.deployTournamentImpl, abi.encodeCall(DeployTournament.initialize, ()));
 
         console.log("=== DeployFactories ===");
-        console.log("FeeRouterFactory (proxy)", f.feeRouterFactory);
+        console.log("FeeRouterFactory (immutable)", f.feeRouterFactory);
+        console.log("PbrFeeHubFactory (immutable)", f.pbrFeeHubFactory);
         console.log("PlayerVaultFactory (immutable)", f.playerVaultFactory);
         console.log("PbrTreasuryFactory (immutable)", f.pbrTreasuryFactory);
-        console.log("PbrFeeHubFactory (proxy)", f.pbrFeeHubFactory);
         console.log("DeployTournament (impl)", f.deployTournamentImpl);
     }
 }

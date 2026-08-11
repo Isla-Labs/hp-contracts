@@ -14,10 +14,8 @@ contract FeeRouterFactoryTest is MarketsTestBase {
     bytes32 internal constant PLAYER_A = keccak256("player-a");
     bytes32 internal constant PLAYER_B = keccak256("player-b");
 
-    function test_initialize_setsOrchestratorAndBeacon() public view {
-        assertEq(feeRouterFactory.orchestrator(), orchestrator);
-        assertEq(feeRouterFactory.owner(), orchestrator);
-        assertEq(feeRouterFactory.beacon().owner(), orchestrator);
+    function test_constructor_setsBeaconOwnedByTimelock() public view {
+        assertEq(feeRouterFactory.beacon().owner(), timelock);
         assertTrue(feeRouterFactory.implementation() != address(0));
     }
 

@@ -61,8 +61,6 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         address playerSetRegistryImpl;
         address deployTournamentImpl;
         address stakeVestingImpl;
-        address feeRouterFactoryImpl;
-        address pbrFeeHubFactoryImpl;
         address dopplerConfigImpl;
         address dopplerLockerImpl;
         address transferLockerImpl;
@@ -98,7 +96,7 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
 
         d = _deployShells(ap, deployer, d);
 
-        // Vault factory beacons are owned by TIMELOCK at construction. Bootstrap placeholder =
+        // Factory beacons are owned by TIMELOCK at construction. Bootstrap placeholder =
         // final owner until ConstitutionalTimelock is deployed and beacon ownership transferred.
         if (ap.getByName(Keys.TIMELOCK) == address(0)) {
             _set(ap, Keys.TIMELOCK, owner);
@@ -193,20 +191,16 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
         d.deployTournament = _deployInitGuardProxy(guard, deployer);
         d.stakeVesting = _deployInitGuardProxy(guard, deployer);
-        d.feeRouterFactory = _deployInitGuardProxy(guard, deployer);
-        d.pbrFeeHubFactory = _deployInitGuardProxy(guard, deployer);
         d.dopplerConfig = _deployInitGuardProxy(guard, deployer);
         d.dopplerLocker = _deployInitGuardProxy(guard, deployer);
         d.transferLocker = _deployInitGuardProxy(guard, deployer);
 
         // Impls after CVM_ROUTER is on AP (locker ctors bind it immutably).
-        // Vault factories are immutable and constructed after ORCHESTRATOR is registered.
+        // Market/vault factories are immutable and constructed after ORCHESTRATOR + TIMELOCK.
         d.tournamentRegistryImpl = address(new TournamentRegistry(apAddr));
         d.playerSetRegistryImpl = address(new PlayerSetRegistry(apAddr));
         d.deployTournamentImpl = address(new DeployTournament(apAddr));
         d.stakeVestingImpl = address(new StakeVesting(apAddr));
-        d.feeRouterFactoryImpl = address(new FeeRouterFactory(apAddr));
-        d.pbrFeeHubFactoryImpl = address(new PbrFeeHubFactory(apAddr));
         d.dopplerConfigImpl = address(new DopplerConfig(apAddr));
         d.dopplerLockerImpl = address(new DopplerLocker(apAddr));
         d.transferLockerImpl = address(new TransferLocker(apAddr));
@@ -225,9 +219,13 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         console.log("--- register protocol ---");
         _set(ap, Keys.ORCHESTRATOR, d.orchestrator);
 
-        // Immutable vault factories require TIMELOCK on AP at construction.
+        // Immutable factories require TIMELOCK on AP at construction (beacon owner).
+        d.feeRouterFactory = address(new FeeRouterFactory(address(ap)));
+        d.pbrFeeHubFactory = address(new PbrFeeHubFactory(address(ap)));
         d.playerVaultFactory = address(new PlayerVaultFactory(address(ap)));
         d.pbrTreasuryFactory = address(new PbrTreasuryFactory(address(ap)));
+        console.log("FEE_ROUTER_FACTORY", d.feeRouterFactory);
+        console.log("PBR_FEE_HUB_FACTORY", d.pbrFeeHubFactory);
         console.log("PLAYER_VAULT_FACTORY", d.playerVaultFactory);
         console.log("PBR_TREASURY_FACTORY", d.pbrTreasuryFactory);
 
@@ -258,9 +256,7 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         );
         _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, abi.encodeCall(PlayerSetRegistry.initialize, ()));
 
-        // 2) Factories (vault factories are immutable — already constructed)
-        _upgradeAndCall(d.feeRouterFactory, d.feeRouterFactoryImpl, abi.encodeCall(FeeRouterFactory.initialize, ()));
-        _upgradeAndCall(d.pbrFeeHubFactory, d.pbrFeeHubFactoryImpl, abi.encodeCall(PbrFeeHubFactory.initialize, ()));
+        // 2) Market/vault factories are immutable — already constructed in _registerProtocol
 
         // 3) StakeVesting (needs registry + HP_TREASURY)
         _upgradeAndCall(d.stakeVesting, d.stakeVestingImpl, abi.encodeCall(StakeVesting.initialize, ()));

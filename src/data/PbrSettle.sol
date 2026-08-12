@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
-
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { Oracle } from "@base/abstract/Oracle.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
@@ -33,9 +30,7 @@ import { AddressProvider } from "@src/AddressProvider.sol";
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
-    ITournamentRegistry public tournamentRegistry;
-
+contract PbrSettle is AddressBook, Oracle, IPbrSettle {
     // --------------------------------------------
     //  Storage
     // --------------------------------------------
@@ -51,24 +46,21 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
     // --------------------------------------------
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_)
-        AddressBook(addressProvider_)
-        Ownable(msg.sender)
-        Oracle(_cvmRouter(addressProvider_))
-    {
+    constructor(address addressProvider_) AddressBook(addressProvider_) Oracle(_cvmRouter(addressProvider_)) {
         if (addressProvider_ == address(0)) revert Errors.ZeroAddress();
-        _disableInitializers();
-    }
-
-    function initialize() external initializer {
-        address orch = _getAddress(_addressKey(Addresses.ORCHESTRATOR));
-        tournamentRegistry = ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
-        _transferOwnership(orch);
     }
 
     function _cvmRouter(address addressProvider_) private view returns (address router) {
         router = AddressProvider(payable(addressProvider_)).get(keccak256(bytes(Addresses.CVM_ROUTER)));
         if (router == address(0)) revert Errors.ZeroAddress();
+    }
+
+    // --------------------------------------------
+    //  AddressBook resolvers
+    // --------------------------------------------
+
+    function _tournamentRegistry() private view returns (ITournamentRegistry) {
+        return ITournamentRegistry(_getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY)));
     }
 
     // --------------------------------------------
@@ -83,6 +75,7 @@ contract PbrSettle is Initializable, AddressBook, Ownable, Oracle, IPbrSettle {
         bytes32 utilizedHash
     ) external returns (bytes32[] memory requestIds) {
         if (utilizedHash == bytes32(0)) revert Errors.ZeroHash();
+        ITournamentRegistry tournamentRegistry = _tournamentRegistry();
 
         address treasury = tournamentRegistry.getPbrTreasury(tournamentId);
         if (treasury == address(0)) revert Errors.TreasuryMissing(tournamentId);

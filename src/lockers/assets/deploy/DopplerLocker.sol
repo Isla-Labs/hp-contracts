@@ -195,9 +195,16 @@ contract DopplerLocker is AddressBook, Oracle, RateLimit, IDopplerLocker {
         RateLimit(DEFAULT_DEPLOY_COOLDOWN)
     {
         if (addressProvider_ == address(0)) revert Errors.ZeroAddress();
-        queueWait = DEFAULT_QUEUE_WAIT;
-        retryWait = DEFAULT_RETRY_WAIT;
-        maxDeployAttempts = DEFAULT_MAX_DEPLOY_ATTEMPTS;
+
+        if (block.chainid == 84_532) {
+            queueWait = 5 minutes;
+            retryWait = 1 minutes;
+            maxDeployAttempts = 3;
+        } else {
+            queueWait = DEFAULT_QUEUE_WAIT;
+            retryWait = DEFAULT_RETRY_WAIT;
+            maxDeployAttempts = DEFAULT_MAX_DEPLOY_ATTEMPTS;
+        }
     }
 
     /// @dev Resolve CVM router at construction (AddressBook not yet usable in base ctor list).
@@ -227,7 +234,7 @@ contract DopplerLocker is AddressBook, Oracle, RateLimit, IDopplerLocker {
     }
 
     // --------------------------------------------
-    //  Admin (queue / deploy ops — launch recipe + modules live on `DopplerConfig`)
+    //  Admin (queue / deploy ops)
     // --------------------------------------------
 
     function setQueueWait(uint256 queueWait_) external onlyTimelock {

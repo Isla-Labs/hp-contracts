@@ -11,7 +11,6 @@ library VaultsErrors {
     error ZeroAddress();
     error ZeroId();
     error Unauthorized();
-    error NothingToClaim();
 
     // --------------------------------------------
     //  PBRTreasury Errors
@@ -36,13 +35,8 @@ library VaultsErrors {
 
     error ZeroAmount();
     error VaultInactive();
-    error OnlyTournamentTreasury();
-    error OnlyStakeRouter();
     error InsufficientStake();
     error MatchweekLock();
-    error RoundNotUtilized(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber);
-    error AlreadyClaimed();
-    error UnknownTournamentTreasury(bytes32 tournamentId);
     error SyncCooldown();
 
     // --------------------------------------------

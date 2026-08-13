@@ -81,7 +81,17 @@ struct DeployParams {
     bytes32[] leagueIds;
 }
 
-struct DeployResult {
+/**
+ * @notice Result of a ringfenced `TournamentInitializer.create` (topology already on-registry).
+ * @dev `pbrFeeHub` is set for `DOMESTIC_LEAGUE` only. Parallel `seasonIds` /
+ *      `seasonStartYears` are bootstrap seasons opened in the same call (Orchestrator →
+ *      RoundManager / EligibilityVerifier).
+ */
+struct CreateTournamentData {
+    bytes32 tournamentId;
+    TournamentType tournamentType;
     address pbrTreasury;
-    address pbrFeeHub; // set for DOMESTIC_LEAGUE only; zero otherwise
+    address pbrFeeHub;
+    bytes32[] seasonIds;
+    uint16[] seasonStartYears;
 }

@@ -17,8 +17,8 @@ import { PbrTreasury } from "@vaults/PbrTreasury.sol";
  * @title PbrTreasuryFactory
  * @notice Immutable factory: deploys per-tournament `PbrTreasury` beacon proxies via CreateX CREATE3.
  * @dev Shared `UpgradeableBeacon` is owned by `TIMELOCK` (delayed logic upgrades). `create` is
- *      Orchestrator-gated via live AddressProvider lookup. Vanity salts (`0x99…`) are mined
- *      offchain (oracle workers) and passed in; CreateX enforces permissioned salts.
+ *      `TournamentInitializer`-gated via live AddressProvider lookup. Vanity salts (`0x99…`) are
+ *      mined offchain (oracle workers) and passed in; CreateX enforces permissioned salts.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -36,8 +36,10 @@ contract PbrTreasuryFactory is AddressBook, IPbrTreasuryFactory {
         );
     }
 
-    modifier onlyOrchestrator() {
-        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.Unauthorized();
+    modifier onlyTournamentInitializer() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TOURNAMENT_INITIALIZER))) {
+            revert Errors.Unauthorized();
+        }
         _;
     }
 
@@ -49,7 +51,7 @@ contract PbrTreasuryFactory is AddressBook, IPbrTreasuryFactory {
         bytes32 tournamentId,
         uint16 initialSeasonStartYear,
         bytes32 salt
-    ) external onlyOrchestrator returns (address pbrTreasury) {
+    ) external onlyTournamentInitializer returns (address pbrTreasury) {
         if (tournamentId == bytes32(0)) revert Errors.ZeroId();
         if (initialSeasonStartYear == 0) revert Errors.ZeroSeason();
         if (salt == bytes32(0)) revert Errors.ZeroSalt();

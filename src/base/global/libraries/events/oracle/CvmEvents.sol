@@ -40,8 +40,6 @@ library CvmEvents {
     //  Coordinator
     // --------------------------------------------
 
-    event OracleRegistered(address indexed transmitter, bytes32 indexed deviceId);
-
     event OracleRegisteredWithAttestation(
         address indexed transmitter, bytes32 indexed deviceId, bytes32 indexed composeHash, uint64 expiresAt
     );

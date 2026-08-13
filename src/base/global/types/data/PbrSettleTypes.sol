@@ -39,6 +39,8 @@ struct FixtureSettlement {
     bytes32 fixtureDigest;
     bytes32 proofHash;
     bytes32 requestId;
+    /// @dev Auto-retries after oracle `err` (permissionless retry does not increment).
+    uint8 retryCount;
 }
 
 struct PendingSettle {

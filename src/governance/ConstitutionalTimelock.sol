@@ -6,84 +6,28 @@ import { GovernanceErrors as Errors } from "@errors/governance/GovernanceErrors.
 
 /**
  * @title ConstitutionalTimelock
- * @notice Long-delay executor for protocol-level changes.
- * @dev OZ `TimelockController` with a fixed target allowlist:
- *      - `addressProvider` / `deployTournament` (immutable)
- *      - `address(this)` (required for `updateDelay` and self-admin ops)
- *      Checks run at schedule and execute.
+ * @notice Cat-1 long-delay executor for constitutional actions.
+ * @dev Thin OZ `TimelockController` wrapper: HP Multisig as sole proposer/canceller,
+ *      open execution (`address(0)` executor).
  */
 contract ConstitutionalTimelock is TimelockController {
     /// @notice Default constitutional notice window.
     uint256 public constant DEFAULT_MIN_DELAY = 7 days;
 
-    /// @notice Sole registry mutation surface for cat-1 name updates.
-    address public immutable addressProvider;
-
-    /// @notice Tournament bootstrap module (league / season create path).
-    address public immutable deployTournament;
-
     /**
-     * @notice Deploys with the Aragon DAO as sole proposer/canceller and open execution.
-     * @param dao Aragon DAO address (`PROPOSER_ROLE`, `CANCELLER_ROLE`, optional `DEFAULT_ADMIN_ROLE`).
-     * @param addressProvider_ Protocol `AddressProvider`.
-     * @param deployTournament_ `DeployTournament` proxy.
+     * @notice Deploys with the HP Multisig as sole proposer/canceller and open execution.
+     * @param multisig HP Multisig address (`PROPOSER_ROLE`, `CANCELLER_ROLE`).
      * @param minDelay Delay in seconds between schedule and execute; `0` → `DEFAULT_MIN_DELAY`.
      */
     constructor(
-        address dao,
-        address addressProvider_,
-        address deployTournament_,
+        address multisig,
         uint256 minDelay
-    ) TimelockController(minDelay == 0 ? DEFAULT_MIN_DELAY : minDelay, _singleton(dao), _openExecutors(), dao) {
-        if (dao == address(0) || addressProvider_ == address(0) || deployTournament_ == address(0)) {
-            revert Errors.ZeroAddress();
-        }
-        addressProvider = addressProvider_;
-        deployTournament = deployTournament_;
-    }
-
-    /// @inheritdoc TimelockController
-    function schedule(
-        address target,
-        uint256 value,
-        bytes calldata data,
-        bytes32 predecessor,
-        bytes32 salt,
-        uint256 delay
-    ) public override onlyRole(PROPOSER_ROLE) {
-        _requireAllowedTarget(target);
-        super.schedule(target, value, data, predecessor, salt, delay);
-    }
-
-    /// @inheritdoc TimelockController
-    function scheduleBatch(
-        address[] calldata targets,
-        uint256[] calldata values,
-        bytes[] calldata payloads,
-        bytes32 predecessor,
-        bytes32 salt,
-        uint256 delay
-    ) public override onlyRole(PROPOSER_ROLE) {
-        uint256 length = targets.length;
-        for (uint256 i; i < length;) {
-            _requireAllowedTarget(targets[i]);
-            unchecked {
-                ++i;
-            }
-        }
-        super.scheduleBatch(targets, values, payloads, predecessor, salt, delay);
-    }
-
-    /// @inheritdoc TimelockController
-    function _execute(address target, uint256 value, bytes calldata data) internal override {
-        _requireAllowedTarget(target);
-        super._execute(target, value, data);
-    }
-
-    function _requireAllowedTarget(address target) private view {
-        if (target != addressProvider && target != deployTournament && target != address(this)) {
-            revert Errors.TargetNotAllowed(target);
-        }
+    )
+        TimelockController(
+            minDelay == 0 ? DEFAULT_MIN_DELAY : minDelay, _singleton(multisig), _openExecutors(), multisig
+        )
+    {
+        if (multisig == address(0)) revert Errors.ZeroAddress();
     }
 
     function _singleton(address account) private pure returns (address[] memory accounts) {

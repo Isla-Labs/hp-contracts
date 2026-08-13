@@ -19,6 +19,13 @@ deploy-base-address-provider:
 		--broadcast --slow
 	$(MAKE) generate-history
 
+deploy-base-timelock:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployTimelockStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
 deploy-base-orchestrator:
 	@forge script script/DeployBase/DeployBase.s.sol:DeployOrchestratorStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
@@ -33,23 +40,8 @@ deploy-base-registries:
 		--broadcast --slow
 	$(MAKE) generate-history
 
-deploy-base-deploy-tournament:
-	@forge script script/DeployBase/DeployBase.s.sol:DeployDeployTournamentStack \
-		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
-		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--broadcast --slow
-	$(MAKE) generate-history
-
-# TEMP: data plane parked — restore DeployDataStack when RoundManager returns to src.
-# deploy-base-data:
-# 	@forge script script/DeployBase/DeployBase.s.sol:DeployDataStack \
-# 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
-# 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-# 		--broadcast --slow
-# 	$(MAKE) generate-history
-
-deploy-base-lockers:
-	@forge script script/DeployBase/DeployBase.s.sol:DeployLockersStack \
+deploy-base-stake-vesting:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployStakeVestingStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
@@ -57,6 +49,34 @@ deploy-base-lockers:
 
 deploy-base-factories:
 	@forge script script/DeployBase/DeployBase.s.sol:DeployFactoriesStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-tournament-initializer:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployTournamentInitializerStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-initializers:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployInitializersStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-data:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployDataStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+deploy-base-pbr-settle:
+	@forge script script/DeployBase/DeployBase.s.sol:DeployPbrSettleStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_MAINNET_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
@@ -75,9 +95,9 @@ deploy-base-handoff:
 
 # Preferred testnet order:
 #   1) make deploy-base-sepolia-oracle
-#   2) make deploy-base-sepolia-all   (core + routers + handoff)
+#   2) make deploy-base-sepolia-all   (core + routers + CT handoff)
 #
-# One-shot bootstrap: AP → Preconfig → shells → init → routers → handoff.
+# One-shot bootstrap: AP → Preconfig → CT → core → routers → AP admin → CT.
 # Requires oracle already launched (deployments.config.toml or deployments/base-sepolia-oracle.json).
 # Passthrough Doppler/Rehype addresses in deployments.config.toml before broadcast.
 # Also requires uniswap_v4_pool_manager (TradeRouter) and z_*=0 for zAMM self-deploy.
@@ -88,7 +108,7 @@ deploy-base-sepolia-all:
 		--broadcast --slow $(FORGE_FLAGS)
 	$(MAKE) generate-history
 
-# Optional: redeploy routers only against an existing AP (post-handoff uses Orchestrator.execute).
+# Optional: redeploy routers only against an existing AP (pre–timelock AP admin).
 # Prefer deploy-base-sepolia-all for first bootstrap.
 deploy-base-sepolia-routers:
 	@forge script script/DeployBase/DeployRouters.s.sol:DeployRouters \
@@ -114,7 +134,15 @@ deploy-base-sepolia-address-provider:
 		--broadcast --slow
 	$(MAKE) generate-history
 
-# 3) Orchestrator
+# 3) ConstitutionalTimelock → TIMELOCK (before factories)
+deploy-base-sepolia-timelock:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployTimelockStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 4) Orchestrator
 deploy-base-sepolia-orchestrator:
 	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployOrchestratorStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
@@ -122,7 +150,7 @@ deploy-base-sepolia-orchestrator:
 		--broadcast --slow
 	$(MAKE) generate-history
 
-# 4) Registries
+# 5) Registries
 deploy-base-sepolia-registries:
 	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployRegistriesStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
@@ -130,31 +158,15 @@ deploy-base-sepolia-registries:
 		--broadcast --slow
 	$(MAKE) generate-history
 
-# 5) DeployTournament
-deploy-base-sepolia-deploy-tournament:
-	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployDeployTournamentStack \
+# 6) StakeVesting
+deploy-base-sepolia-stake-vesting:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployStakeVestingStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
 		--broadcast --slow
 	$(MAKE) generate-history
 
-# 6) Data (RoundManager) — TEMP parked with data plane
-# deploy-base-sepolia-data:
-# 	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployDataStack \
-# 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
-# 		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-# 		--broadcast --slow
-# 	$(MAKE) generate-history
-
-# 7) Lockers
-deploy-base-sepolia-lockers:
-	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployLockersStack \
-		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
-		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--broadcast --slow
-	$(MAKE) generate-history
-
-# 8) Factories
+# 7) Factories (beacons owned by TIMELOCK)
 deploy-base-sepolia-factories:
 	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployFactoriesStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
@@ -162,7 +174,39 @@ deploy-base-sepolia-factories:
 		--broadcast --slow
 	$(MAKE) generate-history
 
-# 9) Handoff AP + ProxyAdmins → Orchestrator
+# 8) TournamentInitializer
+deploy-base-sepolia-tournament-initializer:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployTournamentInitializerStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 9) Market / lifecycle initializers + MigrationListener
+deploy-base-sepolia-initializers:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployInitializersStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 10) Data plane
+deploy-base-sepolia-data:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployDataStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 11) PbrSettle (also included in deploy-base-sepolia-all)
+deploy-base-sepolia-pbr-settle:
+	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployPbrSettleStack \
+		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
+		--verify --verifier-url "$(VERIFIER_URL)$(CHAIN_ID_BASE_SEPOLIA)" --etherscan-api-key $(ETHERSCAN_API_KEY) \
+		--broadcast --slow
+	$(MAKE) generate-history
+
+# 12) Handoff AddressProvider DEFAULT_ADMIN → ConstitutionalTimelock
 deploy-base-sepolia-handoff:
 	@forge script script/DeployBase/DeployBaseSepolia.s.sol:DeployHandoffStack \
 		--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL) \
@@ -263,12 +307,15 @@ fmt-check:
 	forge fmt --check
 
 .PHONY: generate-history \
-	deploy-base-address-provider deploy-base-orchestrator deploy-base-registries \
-	deploy-base-deploy-tournament deploy-base-data deploy-base-lockers deploy-base-factories deploy-base-handoff \
-	deploy-base-sepolia-all \
-	deploy-base-sepolia-oracle deploy-base-sepolia-address-provider deploy-base-sepolia-orchestrator \
-	deploy-base-sepolia-registries deploy-base-sepolia-deploy-tournament deploy-base-sepolia-data \
-	deploy-base-sepolia-lockers deploy-base-sepolia-factories deploy-base-sepolia-handoff \
+	deploy-base-address-provider deploy-base-timelock deploy-base-orchestrator deploy-base-registries \
+	deploy-base-stake-vesting deploy-base-factories deploy-base-tournament-initializer \
+	deploy-base-initializers deploy-base-data deploy-base-pbr-settle deploy-base-handoff \
+	deploy-base-sepolia-all deploy-base-sepolia-routers \
+	deploy-base-sepolia-oracle deploy-base-sepolia-address-provider deploy-base-sepolia-timelock \
+	deploy-base-sepolia-orchestrator deploy-base-sepolia-registries deploy-base-sepolia-stake-vesting \
+	deploy-base-sepolia-factories deploy-base-sepolia-tournament-initializer \
+	deploy-base-sepolia-initializers deploy-base-sepolia-data deploy-base-sepolia-pbr-settle \
+	deploy-base-sepolia-handoff \
 	upgrade-base-sepolia-cvm-coordinator upgrade-base-sepolia-cvm-router \
 	oracle-sepolia-add-compose oracle-sepolia-remove-compose oracle-sepolia-set-verifier \
 	oracle-sepolia-set-config oracle-sepolia-set-ttl deploy-base-sepolia-test-data \

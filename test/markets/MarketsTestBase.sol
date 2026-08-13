@@ -18,6 +18,7 @@ abstract contract MarketsTestBase is Test {
     uint256 internal constant BPS = 10_000;
 
     address internal orchestrator = makeAddr("orchestrator");
+    address internal marketInitializer = makeAddr("marketInitializer");
     address internal timelock = makeAddr("timelock");
     address internal playerSetRegistry = makeAddr("playerSetRegistry");
 
@@ -34,6 +35,7 @@ abstract contract MarketsTestBase is Test {
         hpTreasury = new AcceptingReceiver();
 
         ap.setName(Addresses.ORCHESTRATOR, orchestrator);
+        ap.setName(Addresses.MARKET_INITIALIZER, marketInitializer);
         ap.setName(Addresses.TIMELOCK, timelock);
         ap.setName(Addresses.HP_TREASURY, address(hpTreasury));
         ap.setName(Addresses.TOURNAMENT_REGISTRY, address(tournamentRegistry));
@@ -47,7 +49,7 @@ abstract contract MarketsTestBase is Test {
         if (pbrFeeHub != address(0)) {
             tournamentRegistry.registerDomesticHub(pbrFeeHub);
         }
-        vm.prank(orchestrator);
+        vm.prank(marketInitializer);
         return FeeRouter(payable(feeRouterFactory.create(playerId, pbrFeeHub)));
     }
 

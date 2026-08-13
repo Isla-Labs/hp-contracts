@@ -3,63 +3,70 @@ pragma solidity ^0.8.34;
 
 import { console2 as console } from "forge-std/console2.sol";
 
-import { InitGuard } from "@base/abstract/InitGuard.sol";
 import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { DopplerConfig } from "@deployments/assets/deploy/config/DopplerConfig.sol";
-import { DopplerLocker } from "@deployments/assets/deploy/DopplerLocker.sol";
-import { TransferLocker } from "@deployments/assets/transfer/TransferLocker.sol";
-import { DeployTournament } from "@deployments/tournaments/DeployTournament.sol";
-import { Orchestrator } from "@governance/Orchestrator.sol";
+import { EligibilityVerifier } from "@data/eligibility/EligibilityVerifier.sol";
+import { SquadStore } from "@data/eligibility/SquadStore.sol";
+import { MigrationListener } from "@data/markets/MigrationListener.sol";
+import { RoundManager } from "@data/matchweeks/RoundManager.sol";
+import { PbrHistorical } from "@data/performances/PbrHistorical.sol";
+import { PbrSettle } from "@data/performances/PbrSettle.sol";
+import { ConstitutionalTimelock } from "@governance/ConstitutionalTimelock.sol";
 import { StakeVesting } from "@governance/StakeVesting.sol";
+import { LifecycleManager } from "@initializers/lifecycle/LifecycleManager.sol";
+import { DopplerConfig } from "@initializers/markets/base/DopplerConfig.sol";
+import { MarketInitializer } from "@initializers/markets/MarketInitializer.sol";
+import { TournamentInitializer } from "@initializers/tournaments/TournamentInitializer.sol";
 import { FeeRouterFactory } from "@markets/factories/FeeRouterFactory.sol";
 import { PbrFeeHubFactory } from "@markets/factories/PbrFeeHubFactory.sol";
 import { PlayerSetRegistry } from "@registries/PlayerSetRegistry.sol";
 import { TournamentRegistry } from "@registries/TournamentRegistry.sol";
 import { AddressProvider } from "@src/AddressProvider.sol";
+import { Orchestrator } from "@src/Orchestrator.sol";
 import { PbrTreasuryFactory } from "@vaults/factories/PbrTreasuryFactory.sol";
 import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 
 import { DeployHandoff } from "../utils/DeployHandoff.sol";
 import { DeployRoutersLogic } from "../utils/DeployRoutersLogic.sol";
 import { HpDeployBase } from "../utils/HpDeployBase.sol";
-import { ProxyUtils } from "../utils/ProxyUtils.sol";
 
 /**
  * @title DeployAll
- * @notice One-shot Base Sepolia core bootstrap including routers.
+ * @notice One-shot Base Sepolia core bootstrap including routers + ConstitutionalTimelock handoff.
  * @dev Flow:
- *      1) Deploy AddressProvider
- *      2) Seed Preconfig (treasury, Doppler, Automata, oracle, …)
- *      3) Deploy InitGuard shells + Orchestrator (deployer = DEFAULT_ADMIN)
- *      4) Register all protocol names on AP
- *      5) Initialize in dependency order
- *      6) Authorize DeployTournament + DopplerLocker + TransferLocker
- *      7) Deploy + register zAMM stack, StakeRouter, TradeRouter
- *      8) Handoff ProxyAdmins → Orchestrator (DeployTournament / Doppler* / TransferLocker + vault/market factories are immutable — no ProxyAdmin)
- *      9) Transfer Orchestrator DEFAULT_ADMIN → owner (multisig)
+ *      1) Deploy AddressProvider (deployer = temporary DEFAULT_ADMIN)
+ *      2) Seed Preconfig (treasury, multisig, Doppler, Automata, oracle, …)
+ *      3) ConstitutionalTimelock → TIMELOCK (beacon upgrade authority for factories)
+ *      4) Orchestrator → registries → StakeVesting → factories
+ *      5) DopplerConfig + initializers + data plane + PbrSettle
+ *      6) Deploy + register zAMM stack, StakeRouter, TradeRouter
+ *      7) Soft handoff checks → transfer AddressProvider DEFAULT_ADMIN → ConstitutionalTimelock
  *
- *      Env: PRIVATE_KEY; optional OWNER_ADDRESS / DAO_ADDRESS (default Preconfig.hpMultisig).
+ *      Env: PRIVATE_KEY; optional OWNER_ADDRESS / DAO_ADDRESS (hpMultisig for CT proposer);
+ *           optional TIMELOCK_MIN_DELAY (default 5 minutes on testnet; `0` → CT DEFAULT_MIN_DELAY).
  *      Make: `make deploy-base-sepolia-all` (optional `FORGE_FLAGS="-vvvv"`)
  */
-contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogic {
+contract DeployAll is HpDeployBase, DeployHandoff, DeployRoutersLogic {
     struct CoreDeployment {
         address addressProvider;
+        address constitutionalTimelock;
         address orchestrator;
         address tournamentRegistry;
         address playerSetRegistry;
-        address deployTournament;
         address stakeVesting;
         address feeRouterFactory;
         address playerVaultFactory;
         address pbrTreasuryFactory;
         address pbrFeeHubFactory;
         address dopplerConfig;
-        address dopplerLocker;
-        address transferLocker;
-        address initGuard;
-        address tournamentRegistryImpl;
-        address playerSetRegistryImpl;
-        address stakeVestingImpl;
+        address tournamentInitializer;
+        address marketInitializer;
+        address lifecycleManager;
+        address migrationListener;
+        address roundManager;
+        address squadStore;
+        address eligibilityVerifier;
+        address pbrHistorical;
+        address pbrSettle;
         address zRouter;
         address zQuoterBase;
         address zQuoter;
@@ -76,10 +83,12 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
         require(_isConfiguredTestnet(context.chainId), "DeployAll: expected testnet chain");
 
         address owner = _resolveOwner(context.preconfig);
+        uint256 minDelay = vm.envOr("TIMELOCK_MIN_DELAY", uint256(5 minutes));
         console.log("=== DeployAll ===");
         console.log("chainId", context.chainId);
         console.log("deployer", deployer);
-        console.log("owner (final Orchestrator admin)", owner);
+        console.log("owner (CT proposer / multisig)", owner);
+        console.log("TIMELOCK_MIN_DELAY", minDelay);
 
         vm.startBroadcast(privateKey);
 
@@ -90,18 +99,12 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
 
         _seedPreconfig(ap, context.preconfig);
 
-        d = _deployShells(ap, deployer, d);
+        // Beacon upgrade authority: factories read TIMELOCK at construction.
+        d.constitutionalTimelock = address(new ConstitutionalTimelock(owner, minDelay));
+        _set(ap, Keys.TIMELOCK, d.constitutionalTimelock);
+        console.log("CONSTITUTIONAL_TIMELOCK", d.constitutionalTimelock);
 
-        // Factory beacons are owned by TIMELOCK at construction. Bootstrap placeholder =
-        // final owner until ConstitutionalTimelock is deployed and beacon ownership transferred.
-        if (ap.getByName(Keys.TIMELOCK) == address(0)) {
-            _set(ap, Keys.TIMELOCK, owner);
-            console.log("TIMELOCK bootstrap placeholder (owner) - replace with ConstitutionalTimelock later");
-        }
-
-        d = _registerProtocol(ap, d);
-        _initializeAll(d);
-        _authorizeModules(d.orchestrator, d.deployTournament, d.dopplerLocker, d.transferLocker);
+        d = _deployAndRegister(ap, d);
 
         RouterDeployment memory routers = _deployAndRegisterRouters(ap, d.orchestrator, deployer, context.chainId);
         d.zRouter = routers.zRouter;
@@ -115,18 +118,18 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
 
         // DeployHandoff reads ADDRESS_PROVIDER from env.
         vm.setEnv("ADDRESS_PROVIDER", vm.toString(d.addressProvider));
-        _handoff(deployer);
+        _handoffPreTransfer(deployer);
 
-        // Multisig (or OWNER_ADDRESS) becomes sole Orchestrator admin after bootstrap auth.
-        if (owner != deployer) {
-            Orchestrator(d.orchestrator).transferDefaultAdmin(owner);
-            console.log("Orchestrator DEFAULT_ADMIN ->", owner);
-        }
+        ap.transferDefaultAdmin(d.constitutionalTimelock);
+        console.log("AddressProvider DEFAULT_ADMIN -> ConstitutionalTimelock", d.constitutionalTimelock);
+
+        _handoffPostTransfer(d.constitutionalTimelock);
 
         vm.stopBroadcast();
 
         console.log("=== DeployAll complete - paste into .env ===");
         console.log("ADDRESS_PROVIDER", d.addressProvider);
+        console.log("CONSTITUTIONAL_TIMELOCK", d.constitutionalTimelock);
         console.log("ORCHESTRATOR", d.orchestrator);
         console.log("Z_ROUTER", d.zRouter);
         console.log("Z_QUOTER", d.zQuoter);
@@ -141,6 +144,7 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
     function _seedPreconfig(AddressProvider ap, Preconfig memory p) internal {
         console.log("--- seed Preconfig ---");
         _set(ap, Keys.HP_TREASURY, p.hpTreasury);
+        _set(ap, Keys.HP_MULTISIG, p.hpMultisig);
         _set(ap, Keys.AUTOMATA_DCAP_ATTESTATION, p.automataDcapAttestation);
         _set(ap, Keys.AUTOMATA_PCCS_ROUTER, p.automataPccsRouter);
         _set(ap, Keys.CVM_COORDINATOR, p.cvmCoordinator);
@@ -166,127 +170,101 @@ contract DeployAll is HpDeployBase, ProxyUtils, DeployHandoff, DeployRoutersLogi
     }
 
     // -------------------------------------------------------------------------
-    //  Deploy shells
+    //  Deploy + register (all immutable)
     // -------------------------------------------------------------------------
 
-    function _deployShells(
-        AddressProvider ap,
-        address deployer,
-        CoreDeployment memory d
-    ) internal returns (CoreDeployment memory) {
-        console.log("--- deploy shells ---");
+    function _deployAndRegister(AddressProvider ap, CoreDeployment memory d) internal returns (CoreDeployment memory) {
+        console.log("--- deploy immutable core ---");
         address apAddr = address(ap);
 
-        // Deployer holds DEFAULT_ADMIN through authorize + handoff; transferred to `owner` at end.
-        d.orchestrator = address(new Orchestrator(deployer));
-
-        InitGuard guard = new InitGuard();
-        d.initGuard = address(guard);
-
-        d.tournamentRegistry = _deployInitGuardProxy(guard, deployer);
-        d.playerSetRegistry = _deployInitGuardProxy(guard, deployer);
-        d.stakeVesting = _deployInitGuardProxy(guard, deployer);
-
-        // Impls after CVM_ROUTER is on AP (Oracle consumers bind it in their ctor).
-        // DeployTournament / Doppler* / TransferLocker + market/vault factories are immutable
-        // (constructed in _registerProtocol).
-        d.tournamentRegistryImpl = address(new TournamentRegistry(apAddr));
-        d.playerSetRegistryImpl = address(new PlayerSetRegistry(apAddr));
-        d.stakeVestingImpl = address(new StakeVesting(apAddr));
-
-        return d;
-    }
-
-    // -------------------------------------------------------------------------
-    //  Register
-    // -------------------------------------------------------------------------
-
-    function _registerProtocol(AddressProvider ap, CoreDeployment memory d) internal returns (CoreDeployment memory) {
-        console.log("--- register protocol ---");
+        d.orchestrator = address(new Orchestrator(apAddr, 0));
         _set(ap, Keys.ORCHESTRATOR, d.orchestrator);
 
-        // Immutable contracts: factories need TIMELOCK on AP (beacon owner); DopplerLocker binds CVM_ROUTER.
-        // DopplerConfig seeds launch recipe only; modules resolve via AddressBook at call time.
-        d.feeRouterFactory = address(new FeeRouterFactory(address(ap)));
-        d.pbrFeeHubFactory = address(new PbrFeeHubFactory(address(ap)));
-        d.playerVaultFactory = address(new PlayerVaultFactory(address(ap)));
-        d.pbrTreasuryFactory = address(new PbrTreasuryFactory(address(ap)));
-        d.dopplerConfig = address(new DopplerConfig(address(ap)));
-        d.dopplerLocker = address(new DopplerLocker(address(ap)));
-        d.transferLocker = address(new TransferLocker(address(ap)));
-        d.deployTournament = address(new DeployTournament(address(ap)));
+        d.tournamentRegistry = address(new TournamentRegistry(apAddr));
+        d.playerSetRegistry = address(new PlayerSetRegistry(apAddr));
+        _set(ap, Keys.TOURNAMENT_REGISTRY, d.tournamentRegistry);
+        _set(ap, Keys.PLAYER_SET_REGISTRY, d.playerSetRegistry);
+
+        // Needs HP_TREASURY + HP_MULTISIG on AP (roles + default beneficiaries).
+        d.stakeVesting = address(new StakeVesting(apAddr));
+        _set(ap, Keys.STAKE_VESTING, d.stakeVesting);
+
+        // Factories need TIMELOCK on AP (beacon owner); Oracle consumers bind CVM_ROUTER.
+        d.feeRouterFactory = address(new FeeRouterFactory(apAddr));
+        d.pbrFeeHubFactory = address(new PbrFeeHubFactory(apAddr));
+        d.playerVaultFactory = address(new PlayerVaultFactory(apAddr));
+        d.pbrTreasuryFactory = address(new PbrTreasuryFactory(apAddr));
+        _set(ap, Keys.FEE_ROUTER_FACTORY, d.feeRouterFactory);
+        _set(ap, Keys.PBR_FEE_HUB_FACTORY, d.pbrFeeHubFactory);
+        _set(ap, Keys.PLAYER_VAULT_FACTORY, d.playerVaultFactory);
+        _set(ap, Keys.PBR_TREASURY_FACTORY, d.pbrTreasuryFactory);
+
+        d.dopplerConfig = address(new DopplerConfig(apAddr));
+        d.tournamentInitializer = address(new TournamentInitializer(apAddr));
+        d.marketInitializer = address(new MarketInitializer(apAddr));
+        d.lifecycleManager = address(new LifecycleManager(apAddr));
+        d.migrationListener = address(new MigrationListener(apAddr, 0));
+        _set(ap, Keys.DOPPLER_CONFIG, d.dopplerConfig);
+        _set(ap, Keys.TOURNAMENT_INITIALIZER, d.tournamentInitializer);
+        _set(ap, Keys.MARKET_INITIALIZER, d.marketInitializer);
+        _set(ap, Keys.LIFECYCLE_MANAGER, d.lifecycleManager);
+        _set(ap, Keys.MIGRATION_LISTENER, d.migrationListener);
+
+        d.roundManager = address(new RoundManager(apAddr, 0));
+        d.squadStore = address(new SquadStore(apAddr, 0));
+        // Ctor picks Sepolia 1m / mainnet DEFAULT_COOLDOWN via chainid.
+        d.eligibilityVerifier = address(new EligibilityVerifier(apAddr));
+        d.pbrHistorical = address(new PbrHistorical(apAddr));
+        d.pbrSettle = address(new PbrSettle(apAddr));
+        _set(ap, Keys.ROUND_MANAGER, d.roundManager);
+        _set(ap, Keys.SQUAD_STORE, d.squadStore);
+        _set(ap, Keys.ELIGIBILITY_VERIFIER, d.eligibilityVerifier);
+        _set(ap, Keys.PBR_HISTORICAL, d.pbrHistorical);
+        _set(ap, Keys.PBR_SETTLE, d.pbrSettle);
+
+        console.log("ORCHESTRATOR", d.orchestrator);
+        console.log("STAKE_VESTING", d.stakeVesting);
         console.log("FEE_ROUTER_FACTORY", d.feeRouterFactory);
         console.log("PBR_FEE_HUB_FACTORY", d.pbrFeeHubFactory);
         console.log("PLAYER_VAULT_FACTORY", d.playerVaultFactory);
         console.log("PBR_TREASURY_FACTORY", d.pbrTreasuryFactory);
         console.log("DOPPLER_CONFIG", d.dopplerConfig);
-        console.log("DOPPLER_LOCKER", d.dopplerLocker);
-        console.log("TRANSFER_LOCKER", d.transferLocker);
-        console.log("DEPLOY_TOURNAMENT", d.deployTournament);
+        console.log("TOURNAMENT_INITIALIZER", d.tournamentInitializer);
+        console.log("MARKET_INITIALIZER", d.marketInitializer);
+        console.log("LIFECYCLE_MANAGER", d.lifecycleManager);
+        console.log("MIGRATION_LISTENER", d.migrationListener);
+        console.log("ROUND_MANAGER", d.roundManager);
+        console.log("SQUAD_STORE", d.squadStore);
+        console.log("ELIGIBILITY_VERIFIER", d.eligibilityVerifier);
+        console.log("PBR_HISTORICAL", d.pbrHistorical);
+        console.log("PBR_SETTLE", d.pbrSettle);
 
-        _set(ap, Keys.TOURNAMENT_REGISTRY, d.tournamentRegistry);
-        _set(ap, Keys.PLAYER_SET_REGISTRY, d.playerSetRegistry);
-        _set(ap, Keys.DEPLOY_TOURNAMENT, d.deployTournament);
-        _set(ap, Keys.STAKE_VESTING, d.stakeVesting);
-        _set(ap, Keys.FEE_ROUTER_FACTORY, d.feeRouterFactory);
-        _set(ap, Keys.PLAYER_VAULT_FACTORY, d.playerVaultFactory);
-        _set(ap, Keys.PBR_TREASURY_FACTORY, d.pbrTreasuryFactory);
-        _set(ap, Keys.PBR_FEE_HUB_FACTORY, d.pbrFeeHubFactory);
-        _set(ap, Keys.DOPPLER_CONFIG, d.dopplerConfig);
-        _set(ap, Keys.DOPPLER_LOCKER, d.dopplerLocker);
-        _set(ap, Keys.TRANSFER_LOCKER, d.transferLocker);
         return d;
     }
 
     // -------------------------------------------------------------------------
-    //  Initialize
+    //  Persist
     // -------------------------------------------------------------------------
-
-    function _initializeAll(CoreDeployment memory d) internal {
-        console.log("--- initialize ---");
-
-        // 1) Registries (AP-gated; no initialize)
-        _upgradeAndCall(d.tournamentRegistry, d.tournamentRegistryImpl, "");
-        _upgradeAndCall(d.playerSetRegistry, d.playerSetRegistryImpl, "");
-
-        // 2) DeployTournament / Doppler* / TransferLocker + factories are immutable — constructed in _registerProtocol
-
-        // 3) StakeVesting (needs registry + HP_TREASURY)
-        _upgradeAndCall(d.stakeVesting, d.stakeVestingImpl, abi.encodeCall(StakeVesting.initialize, ()));
-    }
-
-    // -------------------------------------------------------------------------
-    //  Authorize + persist
-    // -------------------------------------------------------------------------
-
-    function _authorizeModules(
-        address orchestrator,
-        address deployTournament,
-        address dopplerLocker,
-        address transferLocker
-    ) internal {
-        Orchestrator orch = Orchestrator(orchestrator);
-        orch.addAuthorizedContract(deployTournament);
-        orch.addAuthorizedContract(dopplerLocker);
-        orch.addAuthorizedContract(transferLocker);
-        console.log("AUTHORIZED_CONTRACT on Orchestrator:");
-        console.log("  DEPLOY_TOURNAMENT", deployTournament);
-        console.log("  DOPPLER_LOCKER", dopplerLocker);
-        console.log("  TRANSFER_LOCKER", transferLocker);
-    }
 
     function _persistOutputs(DeployContext memory context, CoreDeployment memory d) internal {
+        _setConfigAddress(context, "constitutional_timelock", d.constitutionalTimelock);
         _setConfigAddress(context, "orchestrator", d.orchestrator);
         _setConfigAddress(context, "tournament_registry", d.tournamentRegistry);
         _setConfigAddress(context, "player_set_registry", d.playerSetRegistry);
-        _setConfigAddress(context, "deploy_tournament", d.deployTournament);
         _setConfigAddress(context, "stake_vesting", d.stakeVesting);
         _setConfigAddress(context, "fee_router_factory", d.feeRouterFactory);
         _setConfigAddress(context, "player_vault_factory", d.playerVaultFactory);
         _setConfigAddress(context, "pbr_treasury_factory", d.pbrTreasuryFactory);
         _setConfigAddress(context, "pbr_fee_hub_factory", d.pbrFeeHubFactory);
         _setConfigAddress(context, "doppler_config", d.dopplerConfig);
-        _setConfigAddress(context, "doppler_locker", d.dopplerLocker);
-        _setConfigAddress(context, "transfer_locker", d.transferLocker);
+        _setConfigAddress(context, "tournament_initializer", d.tournamentInitializer);
+        _setConfigAddress(context, "market_initializer", d.marketInitializer);
+        _setConfigAddress(context, "lifecycle_manager", d.lifecycleManager);
+        _setConfigAddress(context, "migration_listener", d.migrationListener);
+        _setConfigAddress(context, "round_manager", d.roundManager);
+        _setConfigAddress(context, "squad_store", d.squadStore);
+        _setConfigAddress(context, "eligibility_verifier", d.eligibilityVerifier);
+        _setConfigAddress(context, "pbr_historical", d.pbrHistorical);
+        _setConfigAddress(context, "pbr_settle", d.pbrSettle);
     }
 }

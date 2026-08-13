@@ -33,6 +33,14 @@ library PbrSettleEvents {
         bytes32 indexed requestId, bytes32 indexed tournamentId, bytes32 indexed fixtureId, bytes reason
     );
 
+    event FixtureSettleRetry(
+        bytes32 indexed tournamentId, bytes32 indexed fixtureId, bytes32 requestId, uint8 retryCount
+    );
+
+    event FixtureSettleRetryExhausted(
+        bytes32 indexed tournamentId, bytes32 indexed fixtureId, uint8 retryCount, bytes reason
+    );
+
     event RoundSettleComplete(
         bytes32 indexed tournamentId, uint16 seasonStartYear, uint32 roundNumber, uint32 fixturesSettled
     );

@@ -28,7 +28,7 @@ contract PlayerVaultFactoryTest is VaultsTestBase {
     function test_create_revertsZeroId() public {
         bytes32 vaultSalt = _permissionedSalt(address(vaultFactory), bytes11(uint88(1)));
         bytes32 stSalt = _permissionedSalt(address(vaultFactory), bytes11(uint88(2)));
-        vm.prank(orchestrator);
+        vm.prank(marketInitializer);
         vm.expectRevert(Errors.ZeroId.selector);
         vaultFactory.create(bytes32(0), address(playerToken), "Player", "PLY", vaultSalt, stSalt, "ipfs://staked");
     }
@@ -36,14 +36,14 @@ contract PlayerVaultFactoryTest is VaultsTestBase {
     function test_create_revertsZeroToken() public {
         bytes32 vaultSalt = _permissionedSalt(address(vaultFactory), bytes11(uint88(1)));
         bytes32 stSalt = _permissionedSalt(address(vaultFactory), bytes11(uint88(2)));
-        vm.prank(orchestrator);
+        vm.prank(marketInitializer);
         vm.expectRevert(Errors.ZeroAddress.selector);
         vaultFactory.create(PLAYER, address(0), "Player", "PLY", vaultSalt, stSalt, "ipfs://staked");
     }
 
     function test_create_revertsZeroSalt() public {
         bytes32 vaultSalt = _permissionedSalt(address(vaultFactory), bytes11(uint88(1)));
-        vm.prank(orchestrator);
+        vm.prank(marketInitializer);
         vm.expectRevert(Errors.ZeroSalt.selector);
         vaultFactory.create(PLAYER, address(playerToken), "Player", "PLY", vaultSalt, bytes32(0), "ipfs://staked");
     }
@@ -51,7 +51,7 @@ contract PlayerVaultFactoryTest is VaultsTestBase {
     function test_create_revertsEmptyURI() public {
         bytes32 vaultSalt = _permissionedSalt(address(vaultFactory), bytes11(uint88(1)));
         bytes32 stSalt = _permissionedSalt(address(vaultFactory), bytes11(uint88(2)));
-        vm.prank(orchestrator);
+        vm.prank(marketInitializer);
         vm.expectRevert(Errors.EmptyURI.selector);
         vaultFactory.create(PLAYER, address(playerToken), "Player", "PLY", vaultSalt, stSalt, "");
     }
@@ -63,7 +63,7 @@ contract PlayerVaultFactoryTest is VaultsTestBase {
         address predictedVault = _predictCreate3(address(vaultFactory), vaultSalt);
         address predictedSt = _predictCreate3(address(vaultFactory), stSalt);
 
-        vm.prank(orchestrator);
+        vm.prank(marketInitializer);
         (address vaultAddr, address stAddr) =
             vaultFactory.create(PLAYER, address(playerToken), "Player", "PLY", vaultSalt, stSalt, "ipfs://staked");
 

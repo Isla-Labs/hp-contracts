@@ -18,7 +18,7 @@ import { StakedToken } from "@vaults/StakedToken.sol";
  * @notice Immutable factory: deploys per-market `PlayerVault` beacon proxies + bound `StakedToken`s
  *         via CreateX CREATE3.
  * @dev Shared `UpgradeableBeacon` is owned by `TIMELOCK` (delayed logic upgrades). `create` is
- *      Orchestrator-gated via live AddressProvider lookup. Vanity salts (`0x42…`) are mined
+ *      `MARKET_INITIALIZER`-gated via live AddressProvider lookup. Vanity salts (`0x42…`) are mined
  *      offchain (oracle workers) and passed in; CreateX enforces permissioned salts.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
@@ -37,8 +37,8 @@ contract PlayerVaultFactory is AddressBook {
         );
     }
 
-    modifier onlyOrchestrator() {
-        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.Unauthorized();
+    modifier onlyMarketInitializer() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.MARKET_INITIALIZER))) revert Errors.Unauthorized();
         _;
     }
 
@@ -58,7 +58,7 @@ contract PlayerVaultFactory is AddressBook {
         bytes32 vaultSalt,
         bytes32 stTokenSalt,
         string calldata stakedURI
-    ) external onlyOrchestrator returns (address playerVault, address stToken) {
+    ) external onlyMarketInitializer returns (address playerVault, address stToken) {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
         if (playerToken == address(0)) revert Errors.ZeroAddress();
         if (vaultSalt == bytes32(0) || stTokenSalt == bytes32(0)) revert Errors.ZeroSalt();

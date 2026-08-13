@@ -3,11 +3,11 @@ pragma solidity ^0.8.34;
 
 import { CreateParams } from "@doppler/src/Airlock.sol";
 import { FeeDistributionInfo } from "@doppler/src/types/RehypeTypes.sol";
-import { DopplerTypes } from "@types/lockers/DopplerTypes.sol";
+import { DopplerTypes } from "@types/initializers/DopplerTypes.sol";
 
 /**
  * @title IDopplerConfig
- * @notice Shared launch recipe + AddressBook-resolved Doppler modules for `DopplerLocker`.
+ * @notice Shared launch recipe + AddressBook-resolved Doppler modules for `MarketInitializer`.
  */
 interface IDopplerConfig {
     function initialSupply() external view returns (uint256);
@@ -40,8 +40,8 @@ interface IDopplerConfig {
 
     /**
      * @notice Module bundle used by `buildCreateParams`.
-     * @param feeRouterFactory_ Per-market FeeRouter factory (HP infra; lives on locker).
-     * @param integrator_ Airlock integrator (`Orchestrator`).
+     * @param feeRouterFactory_ Per-market FeeRouter factory (HP infra).
+     * @param integrator_ Airlock integrator (`MarketInitializer`).
      */
     function dopplerModules(
         address feeRouterFactory_,
@@ -49,9 +49,9 @@ interface IDopplerConfig {
     ) external view returns (DopplerTypes.DopplerModules memory);
 
     /**
-     * @notice Full `CreateParams` for `Airlock.create` (encoding lives here, not on the locker).
-     * @param feeRouterFactory_ Per-market FeeRouter factory (HP infra; lives on locker).
-     * @param integrator_ Airlock integrator (`Orchestrator`).
+     * @notice Full `CreateParams` for `Airlock.create` (encoding lives here, not on MarketInitializer).
+     * @param feeRouterFactory_ Per-market FeeRouter factory (HP infra).
+     * @param integrator_ Airlock integrator (`MarketInitializer`).
      */
     function buildCreateParams(
         string calldata name,

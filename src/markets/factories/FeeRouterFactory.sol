@@ -14,8 +14,8 @@ import { FeeRouter } from "@markets/FeeRouter.sol";
  * @title FeeRouterFactory
  * @notice Immutable factory: deploys per-market `FeeRouter` beacon proxies.
  * @dev Shared `UpgradeableBeacon` is owned by `TIMELOCK` (delayed logic upgrades). `create` is
- *      Orchestrator-gated via live AddressProvider lookup. Idempotent per `playerId` so
- *      DopplerLocker deploy retries do not orphan FeeRouters after a partial failure.
+ *      `MARKET_INITIALIZER`-gated via live AddressProvider lookup. Idempotent per `playerId` so
+ *      deploy retries do not orphan FeeRouters after a partial failure.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -34,8 +34,8 @@ contract FeeRouterFactory is AddressBook {
         );
     }
 
-    modifier onlyOrchestrator() {
-        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.Unauthorized();
+    modifier onlyMarketInitializer() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.MARKET_INITIALIZER))) revert Errors.Unauthorized();
         _;
     }
 
@@ -46,7 +46,7 @@ contract FeeRouterFactory is AddressBook {
      *        a FeeRouter already exists for `playerId` (use `FeeRouter.setPbrFeeHub` to change).
      * @return feeRouter Address of the FeeRouter BeaconProxy.
      */
-    function create(bytes32 playerId, address pbrFeeHub) external onlyOrchestrator returns (address feeRouter) {
+    function create(bytes32 playerId, address pbrFeeHub) external onlyMarketInitializer returns (address feeRouter) {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
 
         feeRouter = feeRouterOf[playerId];

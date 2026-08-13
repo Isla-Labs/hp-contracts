@@ -2,7 +2,12 @@
 
 Canonical bootstrap for HighPotential protocol contracts on Base / Base Sepolia.
 
-**Rule:** constructors take `AddressProvider` (via `AddressBook`). Dependencies are resolved from AP at call time (or in `initialize` where Ownable/cached deps remain). Registries (`TournamentRegistry`, `PlayerSetRegistry`) have no `initialize` — AP role checks only. Where Ownable remains, Orchestrator is the owner; the EOA (later Safe) holds `DEFAULT_ADMIN_ROLE` on Orchestrator and calls through `Orchestrator.execute`.
+**Rule:** constructors take `AddressProvider` (via `AddressBook`). Dependencies are resolved from AP at call time. Core modules are **immutable** (`new` + register). Only the oracle CVM pair remains Transparent Upgradeable Proxy.
+
+**Access model:**
+- `AddressProvider` `DEFAULT_ADMIN_ROLE` → temporary deployer, then **`ConstitutionalTimelock`**
+- Factory `UpgradeableBeacon` owners → AP `TIMELOCK` (**ConstitutionalTimelock**) at factory construction
+- `Orchestrator` → entry surface gated by AP `HP_MULTISIG` (and soft `ELIGIBILITY_VERIFIER`); no AccessControl admin / `execute` path
 
 ---
 
@@ -10,45 +15,36 @@ Canonical bootstrap for HighPotential protocol contracts on Base / Base Sepolia.
 
 ```bash
 make deploy-base-sepolia-oracle    # 1) CVM coordinator + router (JSON)
-make deploy-base-sepolia-all       # 2) core + routers + handoff
+make deploy-base-sepolia-all       # 2) core + routers + AP admin → ConstitutionalTimelock
 ```
 
-Optional redeploy routers only: `make deploy-base-sepolia-routers`.
+Optional redeploy routers only: `make deploy-base-sepolia-routers` (requires deployer still holding AP admin).
 
 ### DeployAll (step 2)
 
 Script: [`DeployAll.s.sol`](DeployBase/DeployAll.s.sol)  
-Config / Preconfig: [`deployments.config.toml`](../deployments.config.toml) (treasury, multisig, Doppler, Automata, oracle, `uniswap_v4_pool_manager`, optional z_*)
+Config / Preconfig: [`deployments.config.toml`](../deployments.config.toml)
 
 Order inside DeployAll:
 
-1. Deploy AddressProvider  
-2. Seed Preconfig (incl. existing oracle) onto AP  
-3. Deploy InitGuard shells + Orchestrator (+ StakeVesting)  
-4. Register all protocol names  
-5. Initialize: registries → StakeVesting  
-   (`DeployTournament` / `DopplerConfig` / `DopplerLocker` / `TransferLocker` + factories are immutable — constructed at register, no `initialize`)
-6. Authorize DeployTournament + DopplerLocker  
-7. **Routers** (pre-handoff, direct `setName`): zAMM stack + StakeRouter + TradeRouter  
-8. Handoff AP + ProxyAdmins → Orchestrator  
+1. Deploy AddressProvider (deployer = temporary `DEFAULT_ADMIN`)
+2. Seed Preconfig (treasury, multisig, Doppler, Automata, oracle, …)
+3. Deploy **ConstitutionalTimelock** → register `TIMELOCK` (default `TIMELOCK_MIN_DELAY` = 5 minutes on Sepolia)
+4. Orchestrator → registries → StakeVesting
+5. Factories (beacons owned by TIMELOCK)
+6. DopplerConfig + TournamentInitializer + MarketInitializer + LifecycleManager + MigrationListener
+7. Data plane: RoundManager, SquadStore, EligibilityVerifier, PbrHistorical, PbrSettle
+8. Routers (zAMM + StakeRouter + TradeRouter) via direct `setName`
+9. Soft handoff checks → `transferDefaultAdmin(ConstitutionalTimelock)`
 
-**Routers step** (shared with [`DeployRoutersLogic`](utils/DeployRoutersLogic.sol)):
-
-- Base Sepolia zAMM self-deploy when `z_router` / `z_quoter` / `z_quoter_base` are all zero (`src/routers/base-sepolia/`):
-  1. `ZRouter` → 2. `ZQuoterBase` → 3. `ZQuoter` (SDK address)
-- Registers `Z_ROUTER`, `Z_QUOTER`, `STAKE_ROUTER`, `TRADE_ROUTER`
-- Requires `uniswap_v4_pool_manager` in TOML (TradeRouter ctor)
-- Backend: point zamm SDK at written `z_quoter` / `z_router`
-
-Passthrough Doppler / Rehype addresses in the TOML before broadcasting. Staged make targets below remain for partial redeploys.
+Passthrough Doppler / Rehype addresses in the TOML before broadcasting. Staged make targets remain for partial redeploys.
 
 ---
 
 ## 1. Deploy AddressProvider
 
-- Deploy `AddressProvider` with the deployer EOA as temporary owner.
+- Deploy `AddressProvider` with the deployer EOA as temporary admin.
 - Persist `ADDRESS_PROVIDER` in `.env` and the staging address book.
-- Deployer keeps AP ownership until final handoff (step after init).
 
 **Script:** `DeployAddressProvider.s.sol`  
 **Make:** `make deploy-base-sepolia-address-provider` / `make deploy-base-address-provider`
@@ -57,52 +53,51 @@ Passthrough Doppler / Rehype addresses in the TOML before broadcasting. Staged m
 
 ## 2. Deploy Oracle set
 
-Oracle must exist before lockers / consumers that bind `CVM_ROUTER` (immutable on impl).
+Oracle must exist before consumers that bind `CVM_ROUTER` in the constructor.
 
 | Contract | AddressProvider name |
 |---|---|
 | `CvmCoordinator` (TUP) | `CVM_COORDINATOR` |
 | `CvmRouter` (TUP) | `CVM_ROUTER` |
-| Attestation verifier (Automata or mock) | (not always named; coordinator holds ref) |
-
-Optional / out-of-band: Automata DCAP constants, Phala compose-hash allowlist.
-
-**Register** `CVM_COORDINATOR` + `CVM_ROUTER` on AddressProvider as soon as proxies exist (AP is already live from step 1).
 
 **Script:** `script/oracle/DeployOracle.s.sol`  
 **Make:** `make deploy-base-sepolia-oracle`
 
-> Oracle proxies are a special case: they initialize with explicit constructor/init args (owner, verifier, router config) rather than resolving everything from AddressBook. Prefer Orchestrator (or the eventual Safe) as oracle Ownable owner when wiring production ownership.
+> Prefer registering `CVM_*` on AP as soon as proxies exist. Oracle ProxyAdmins stay with OWNER out of band.
 
 ---
 
-## 3. Deploy all other contracts
+## 3. Deploy ConstitutionalTimelock (before factories)
 
-Deploy upgradeable shells (InitGuard → Transparent proxy) and implementations. Prefer **register-before-init** within each batch; defer `initialize` when a contract’s AddressBook deps are not yet on AP.
+| Contract | Name key | Notes |
+|---|---|---|
+| `ConstitutionalTimelock` | `TIMELOCK` | Multisig = proposer/canceller; open executors. Sepolia default delay 5m; mainnet staged uses `0` → 7 days |
+
+**Make:** `deploy-base-sepolia-timelock` / `deploy-base-timelock`
+
+---
+
+## 4. Deploy core contracts
 
 ### Access / ops
 
 | Contract | Name key | Notes |
 |---|---|---|
-| `Orchestrator` | `ORCHESTRATOR` | Not upgradeable; `constructor(admin)` grants `DEFAULT_ADMIN_ROLE` |
-| `DeployTournament` | `DEPLOY_TOURNAMENT` | Immutable; deps via AddressBook; grant `AUTHORIZED_CONTRACT` on Orchestrator |
+| `Orchestrator` | `ORCHESTRATOR` | `constructor(ap, cooldown)`; admin = `HP_MULTISIG` |
+| `TournamentInitializer` | `TOURNAMENT_INITIALIZER` | Topology create; factories gated to this |
+| `MarketInitializer` | `MARKET_INITIALIZER` | Replaces DopplerLocker; Sepolia shorter queue waits |
+| `LifecycleManager` | `LIFECYCLE_MANAGER` | Replaces TransferLocker; Sepolia `queueWait=5m` |
+| `MigrationListener` | `MIGRATION_LISTENER` | Bonding → spot graduation sync |
 
-### Registries
+### Registries / vesting
 
-| Contract | Name key | Notes |
-|---|---|---|
-| `TournamentRegistry` | `TOURNAMENT_REGISTRY` | Upgrade with empty data (no `initialize`) |
-| `PlayerSetRegistry` | `PLAYER_SET_REGISTRY` | Upgrade with empty data (no `initialize`) |
+| Contract | Name key |
+|---|---|
+| `TournamentRegistry` | `TOURNAMENT_REGISTRY` |
+| `PlayerSetRegistry` | `PLAYER_SET_REGISTRY` |
+| `StakeVesting` | `STAKE_VESTING` |
 
-### Lockers
-
-| Contract | Name key | Notes |
-|---|---|---|
-| `DopplerConfig` | `DOPPLER_CONFIG` | Immutable; launch recipe in ctor; modules via AddressBook |
-| `DopplerLocker` | `DOPPLER_LOCKER` | Immutable; ctor binds `CVM_ROUTER`; no `initialize` |
-| `TransferLocker` | `TRANSFER_LOCKER` | Immutable; ctor binds `CVM_ROUTER`; registries via AddressBook |
-
-### Factories
+### Factories (beacon owner = TIMELOCK)
 
 | Contract | Name key |
 |---|---|
@@ -110,115 +105,77 @@ Deploy upgradeable shells (InitGuard → Transparent proxy) and implementations.
 | `PlayerVaultFactory` | `PLAYER_VAULT_FACTORY` |
 | `PbrTreasuryFactory` | `PBR_TREASURY_FACTORY` |
 | `PbrFeeHubFactory` | `PBR_FEE_HUB_FACTORY` |
+| `DopplerConfig` | `DOPPLER_CONFIG` |
 
-### Data (in progress)
+### Data plane
 
-| Contract | Name key | Status |
+| Contract | Name key | Notes |
 |---|---|---|
-| `RoundManager` | `ROUND_MANAGER` | Live |
-| `EligibilityStore` | `ELIGIBILITY_STORE` | In progress |
-| `EligibilityVerifier` | `ELIGIBILITY_VERIFIER` | In progress |
-| `PpmVerifier` / `PbrSettle` / CRE forwarder | respective keys | In progress |
+| `RoundManager` | `ROUND_MANAGER` | `0` cooldown → 1h default |
+| `SquadStore` | `SQUAD_STORE` | `0` cooldown → 1h default |
+| `EligibilityVerifier` | `ELIGIBILITY_VERIFIER` | Ctor-only; Sepolia 1m / else 1h |
+| `PbrHistorical` | `PBR_HISTORICAL` | Binds `CVM_ROUTER` |
+| `PbrSettle` | `PBR_SETTLE` | Binds `CVM_ROUTER` |
 
-**Make (current staged scripts):**  
-`orchestrator` → `registries` → `deploy-tournament` → `data` → `lockers` → `factories`
+**Staged make order (Sepolia):**  
+`address-provider` → `timelock` → `orchestrator` → `registries` → `stake-vesting` → `factories` → `tournament-initializer` → `initializers` → `data` → `pbr-settle` → `routers` → `handoff`
 
 ---
 
-## 4. Ensure AddressProvider has all contracts registered
-
-Every name in `AddressKeys.sol` that this environment uses must resolve to a non-zero address before dependents initialize.
-
-Minimum for a working markets / tournament bootstrap:
+## 5. AddressProvider registration checklist
 
 ```
+TIMELOCK
 ORCHESTRATOR
-CVM_COORDINATOR
-CVM_ROUTER
 TOURNAMENT_REGISTRY
 PLAYER_SET_REGISTRY
-DEPLOY_TOURNAMENT
-DOPPLER_LOCKER
-TRANSFER_LOCKER
-ROUND_MANAGER
+STAKE_VESTING
 FEE_ROUTER_FACTORY
 PLAYER_VAULT_FACTORY
 PBR_TREASURY_FACTORY
 PBR_FEE_HUB_FACTORY
+DOPPLER_CONFIG
+TOURNAMENT_INITIALIZER
+MARKET_INITIALIZER
+LIFECYCLE_MANAGER
+MIGRATION_LISTENER
+ROUND_MANAGER
+SQUAD_STORE
+ELIGIBILITY_VERIFIER
+PBR_HISTORICAL
+PBR_SETTLE
+STAKE_ROUTER
+TRADE_ROUTER
+Z_ROUTER
+Z_QUOTER
 ```
 
-Keys are `keccak256(bytes(name))` — see `AddressKeys.sol` / `HP8453` / `HP84532`.
-
-Staging helper: `npm run script:set-address` (when a name was missed).
-
----
-
-## 5. Initialize via AddressBook (deps + ownership → Orchestrator)
-
-For each AddressBook contract, `initialize` (or `initialize(...)` with only instance-specific params):
-
-1. Resolve required addresses with `_getAddress(_addressKey(...))`.
-2. Transfer Ownable ownership to `ORCHESTRATOR`.
-3. Never pass Orchestrator / registry / factory addresses as long-lived wiring from the deploy script when they already live on AP.
-
-### Typical `initialize` shape
-
-```solidity
-function initialize() external initializer {
-    // resolve deps from AddressProvider
-    // ...
-    _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
-}
-```
-
-### Init order constraints
-
-| Contract | When to initialize | Resolves |
-|---|---|---|
-| Registries | After both registry names + `ORCHESTRATOR` on AP | Cross-registry + Orchestrator |
-| RoundManager | After `ORCHESTRATOR` + `TOURNAMENT_REGISTRY` | Orchestrator |
-| DopplerConfig / DopplerLocker / TransferLocker | Construct after `CVM_ROUTER` on AP (no `initialize`) | AddressBook at call time |
-| Factories | After `ORCHESTRATOR` on AP | Orchestrator (+ deploy beacon impls) |
-| DeployTournament | Construct anytime after AP; `deploy` needs factories + registry on AP | AddressBook at call time |
-
-Beacon / CREATE3 **instances** (`PbrTreasury`, `PbrFeeHub`, `FeeRouter`, `PlayerVault`) are initialized by factories at market/tournament create time — not in this protocol bootstrap.
-
-### Privileged calls after init
-
-- Admin (EOA / Safe) → `Orchestrator.execute(target, 0, calldata)`.
-- Modules with `AUTHORIZED_CONTRACT` (e.g. DeployTournament) may also `execute` for nested factory/registry writes.
-- Tournament bootstrap: `Orchestrator.execute(DeployTournament, deploy(params))`.
+Plus Preconfig: `HP_*`, `CVM_*`, Doppler modules, Automata, …
 
 ---
 
 ## Post-bootstrap handoff
 
-After all inits succeed:
+1. **AddressProvider `DEFAULT_ADMIN_ROLE` → ConstitutionalTimelock**  
+   (`DeployAll` end, `DeployHandoffStack`, or [`HandoffToTimelock.s.sol`](DeployBase/HandoffToTimelock.s.sol))
 
-1. **ProxyAdmin + AddressProvider ownership → Orchestrator**  
-   (`DeployHandoff` / `make deploy-base-sepolia-handoff`).  
-   Oracle ProxyAdmins may remain with OWNER out of band until explicitly moved.
+2. Further AP mutations go through Timelock schedule/execute (multisig proposes).
 
-2. **Orchestrator admin → Safe** (when ready)  
-   `Orchestrator.transferDefaultAdmin(safe)` — atomic grant + revoke of `DEFAULT_ADMIN_ROLE`.  
-   No need to retouch per-contract Ownable owners.
-
-3. Finish oracle allowlists / compose hashes / router config as needed.
+3. Oracle ProxyAdmins remain with OWNER until explicitly moved.
 
 ---
 
 ## Ownership model (summary)
 
 ```
-Safe / EOA
-  └── DEFAULT_ADMIN_ROLE on Orchestrator
-        ├── execute / executeBatch  →  protocol Ownable targets
-        └── AUTHORIZED_CONTRACT modules (DeployTournament, …)
-              └── nested execute → factories / registries / hubs
+HP Multisig
+  ├── PROPOSER / CANCELLER on ConstitutionalTimelock
+  │     ├── AddressProvider DEFAULT_ADMIN_ROLE
+  │     └── UpgradeableBeacon.owner (via TIMELOCK at factory ctor)
+  └── Orchestrator onlyAdmin / onlyDeployer (HP_MULTISIG + soft ELIGIBILITY_VERIFIER)
 
-AddressProvider.owner  →  Orchestrator (after handoff)
-ProxyAdmin.owner       →  Orchestrator (protocol TUPs; after handoff)
-Contract.owner         →  Orchestrator (set in initialize)
+Open execution on ConstitutionalTimelock (address(0) executor)
+Oracle TUP ProxyAdmins → OWNER (out of band)
 ```
 
 ---
@@ -228,16 +185,18 @@ Contract.owner         →  Orchestrator (set in initialize)
 | Step | Make target |
 |---|---|
 | **One-shot core bootstrap** | `deploy-base-sepolia-all` |
-| 1 AddressProvider | `deploy-base-sepolia-address-provider` |
-| 2 Oracle | `deploy-base-sepolia-oracle` |
-| 3–5 Orchestrator | `deploy-base-sepolia-orchestrator` |
-| 3–5 Registries | `deploy-base-sepolia-registries` |
-| 3 DeployTournament proxy + authorize | `deploy-base-sepolia-deploy-tournament` |
-| 3–5 RoundManager | `deploy-base-sepolia-data` |
-| 3–5 Lockers | `deploy-base-sepolia-lockers` |
-| 3–5 Factories (+ DeployTournament init) | `deploy-base-sepolia-factories` |
-| Handoff | `deploy-base-sepolia-handoff` |
+| AddressProvider | `deploy-base-sepolia-address-provider` |
+| Oracle | `deploy-base-sepolia-oracle` |
+| ConstitutionalTimelock | `deploy-base-sepolia-timelock` |
+| Orchestrator | `deploy-base-sepolia-orchestrator` |
+| Registries | `deploy-base-sepolia-registries` |
+| StakeVesting | `deploy-base-sepolia-stake-vesting` |
+| Factories | `deploy-base-sepolia-factories` |
+| TournamentInitializer | `deploy-base-sepolia-tournament-initializer` |
+| Market/Lifecycle/Migration | `deploy-base-sepolia-initializers` |
+| Data plane | `deploy-base-sepolia-data` |
+| PbrSettle | `deploy-base-sepolia-pbr-settle` |
+| Routers | `deploy-base-sepolia-routers` |
+| Handoff → CT | `deploy-base-sepolia-handoff` |
 
-Mainnet mirrors use `deploy-base-*` without `-sepolia`.
-
-> Staged scripts today may register and initialize in the same broadcast for a given stack. That is fine as long as **all AddressBook dependencies for that contract are already on AP before its `initialize` runs** (where `initialize` still exists). Immutable modules (`DeployTournament`, lockers, factories) only need deps on AP before first operational call.
+Mainnet mirrors use `deploy-base-*` without `-sepolia` (timelock default delay `0` → 7 days).

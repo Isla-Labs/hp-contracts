@@ -12,7 +12,7 @@ import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
 import { RoundSchedule } from "@types/registries/TournamentTypes.sol";
 import { RoundState, RoundStatus } from "@types/vaults/VaultTypes.sol";
-import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/registries/ITournamentRegistry.sol";
 import { IPbrSettle } from "@interfaces/data/IPbrSettle.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";

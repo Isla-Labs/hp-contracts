@@ -16,27 +16,19 @@ import {
     TournamentData,
     VaultData
 } from "@types/registries/PlayerSetTypes.sol";
-import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
-import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
-
-/// @dev Minimal FeeRouter surface (avoids markets import).
-interface IFeeRouterLifecycle {
-    function setStatus(PlayerStatus status_) external;
-    function setPbrFeeHub(address newHub) external;
-}
-
-/// @dev Minimal PlayerVault surface (avoids vaults import cycle).
-interface IPlayerVaultLifecycle {
-    function setActive(bool active_) external;
-    function activeTreasuryCount() external view returns (uint256);
-    function activeTreasuryAt(uint256 index) external view returns (bytes32 tournamentId_, address treasury);
-}
+import { IPlayerSetRegistry } from "@interfaces/registries/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/registries/ITournamentRegistry.sol";
+import { IFeeRouter } from "@interfaces/markets/IFeeRouter.sol";
+import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
 
 /**
  * @title PlayerSetRegistry
  * @notice Canonical per-player market discovery set (`playerId` → `PlayerSet`).
  * @dev Access (AddressProvider; no Ownable / initialize):
- *      - `ORCHESTRATOR`: registration, `graduatePool` / `deactivate` / `reactivate`, `setLeagueId`.
+ *      - `MARKET_INITIALIZER`: `addPlayerSet` (market deploy).
+ *      - `LIFECYCLE_MANAGER`: `deactivate` / `reactivate` / `setLeagueId`.
+ *      - `MIGRATION_LISTENER`: `graduatePool`.
+ *      - `ORCHESTRATOR`: AT attach.
  *      - `TOURNAMENT_REGISTRY`: `add`/`removeActiveTournament` mirror (when TR caller ≠ PSR).
  *      - Vault membership SoT is `TournamentRegistry`. PSR-driven lifecycle updates
  *        `activeTournaments` itself (no PSR→TR→PSR).
@@ -73,6 +65,21 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
         _;
     }
 
+    modifier onlyMarketInitializer() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.MARKET_INITIALIZER))) revert Errors.NotAuthorized();
+        _;
+    }
+
+    modifier onlyLifecycleManager() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.LIFECYCLE_MANAGER))) revert Errors.NotAuthorized();
+        _;
+    }
+
+    modifier onlyMigrationListener() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.MIGRATION_LISTENER))) revert Errors.NotAuthorized();
+        _;
+    }
+
     modifier onlyTournamentRegistry() {
         if (msg.sender != _getAddress(_addressKey(Addresses.TOURNAMENT_REGISTRY))) revert Errors.NotAuthorized();
         _;
@@ -99,7 +106,7 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
         TournamentData calldata tournamentData,
         DopplerData calldata dopplerData,
         VaultData calldata vaultData
-    ) external onlyOrchestrator {
+    ) external onlyMarketInitializer {
         if (playerId == bytes32(0)) revert Errors.ZeroId();
         if (tokenData.token == address(0)) revert Errors.ZeroAddress();
         if (
@@ -139,7 +146,7 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
     /**
      * @notice Attaches Advanced Trade vault + mark source after those deployments.
      */
-    function addAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data) external onlyOrchestrator {
+    function addAdvancedTradeData(bytes32 playerId, AdvancedTradeData calldata data) external onlyMarketInitializer {
         PlayerSet storage set = _requirePlayer(playerId);
         if (set.advancedTradeData.advancedTradeVault != address(0)) {
             revert Errors.AdvancedTradeDataAlreadySet(playerId);
@@ -181,7 +188,7 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
         bytes32 playerId,
         bytes32 newLeagueId,
         bytes32[] calldata activeTournamentIds
-    ) external onlyOrchestrator {
+    ) external onlyLifecycleManager {
         if (newLeagueId == bytes32(0)) revert Errors.ZeroId();
         uint256 n = activeTournamentIds.length;
         if (n == 0) revert Errors.LengthMismatch();
@@ -212,7 +219,7 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
 
         set.tournamentData.leagueId = newLeagueId;
         emit Events.LeagueIdUpdated(playerId, newLeagueId);
-        IFeeRouterLifecycle(feeRouter).setPbrFeeHub(hub);
+        IFeeRouter(feeRouter).setPbrFeeHub(hub);
 
         for (uint256 i; i < n; ++i) {
             _syncVaultOnTournament(activeTournamentIds[i], vault, true);
@@ -237,7 +244,7 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
      * @dev Syncs FeeRouter status cache (spot integrator share). No vault / tournament fan-out.
      *      `activePool.hooks` must be the registered `hookMigrator`.
      */
-    function graduatePool(bytes32 playerId, PoolKey calldata activePool) external onlyOrchestrator {
+    function graduatePool(bytes32 playerId, PoolKey calldata activePool) external onlyMigrationListener {
         PlayerSet storage set = _requirePlayer(playerId);
         if (address(activePool.hooks) != set.dopplerData.hookMigrator) {
             revert Errors.InvalidActivePool(playerId, address(activePool.hooks));
@@ -251,27 +258,27 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
 
         address feeRouter = set.dopplerData.feeRouter;
         if (feeRouter != address(0)) {
-            IFeeRouterLifecycle(feeRouter).setStatus(PlayerStatus.GRADUATED);
+            IFeeRouter(feeRouter).setStatus(PlayerStatus.GRADUATED);
         }
     }
 
     /**
-     * @notice Soft-inactive path (TransferLocker Continuity / LeftLeague).
+     * @notice Soft-inactive path (LifecycleManager Continuity / LeftLeague).
      * @dev FeeRouter OOF, vault inactive, unregister (may defer while Locked), clear discovery topology.
      */
-    function deactivate(bytes32 playerId) external onlyOrchestrator {
+    function deactivate(bytes32 playerId) external onlyLifecycleManager {
         PlayerSet storage set = _requirePlayer(playerId);
         set.status = PlayerStatus.INACTIVE;
         emit Events.StatusUpdated(playerId, PlayerStatus.INACTIVE);
 
         address feeRouter = set.dopplerData.feeRouter;
         if (feeRouter != address(0)) {
-            IFeeRouterLifecycle(feeRouter).setStatus(PlayerStatus.INACTIVE);
+            IFeeRouter(feeRouter).setStatus(PlayerStatus.INACTIVE);
         }
 
         address vault = set.vaultData.playerVault;
         if (vault != address(0)) {
-            IPlayerVaultLifecycle(vault).setActive(false);
+            IPlayerVault(vault).setActive(false);
         }
 
         _unregisterVaultFromAll(vault);
@@ -280,10 +287,10 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
     }
 
     /**
-     * @notice Restore-from-INACTIVE (TransferLocker Reactivate, after `setLeagueId`).
+     * @notice Restore-from-INACTIVE (LifecycleManager Reactivate, after `setLeagueId`).
      * @dev Status derived from `activePool.hooks`. Membership already applied in `setLeagueId`.
      */
-    function reactivate(bytes32 playerId) external onlyOrchestrator {
+    function reactivate(bytes32 playerId) external onlyLifecycleManager {
         PlayerSet storage set = _requirePlayer(playerId);
         PlayerStatus status = _statusFromActivePool(playerId, set);
 
@@ -292,12 +299,12 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
 
         address feeRouter = set.dopplerData.feeRouter;
         if (feeRouter != address(0)) {
-            IFeeRouterLifecycle(feeRouter).setStatus(status);
+            IFeeRouter(feeRouter).setStatus(status);
         }
 
         address vault = set.vaultData.playerVault;
         if (vault != address(0)) {
-            IPlayerVaultLifecycle(vault).setActive(true);
+            IPlayerVault(vault).setActive(true);
         }
     }
 
@@ -425,7 +432,7 @@ contract PlayerSetRegistry is AddressBook, IPlayerSetRegistry {
     function _unregisterVaultFromAll(address vault) private {
         if (vault == address(0)) return;
 
-        IPlayerVaultLifecycle playerVault = IPlayerVaultLifecycle(vault);
+        IPlayerVault playerVault = IPlayerVault(vault);
         uint256 n = playerVault.activeTreasuryCount();
         bytes32[] memory tournamentIds = new bytes32[](n);
         for (uint256 i; i < n; ++i) {

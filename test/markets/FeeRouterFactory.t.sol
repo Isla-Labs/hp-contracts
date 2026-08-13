@@ -25,7 +25,7 @@ contract FeeRouterFactoryTest is MarketsTestBase {
     }
 
     function test_create_revertsZeroId() public {
-        vm.prank(orchestrator);
+        vm.prank(marketInitializer);
         vm.expectRevert(Errors.ZeroId.selector);
         feeRouterFactory.create(bytes32(0), address(0));
     }
@@ -53,7 +53,7 @@ contract FeeRouterFactoryTest is MarketsTestBase {
         AcceptingReceiver hub = new AcceptingReceiver();
         tournamentRegistry.registerDomesticHub(address(hub));
 
-        vm.prank(orchestrator);
+        vm.prank(marketInitializer);
         vm.recordLogs();
         address created = feeRouterFactory.create(PLAYER_A, address(hub));
 

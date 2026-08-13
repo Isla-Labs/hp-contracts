@@ -2,6 +2,7 @@
 pragma solidity ^0.8.34;
 
 import { Position } from "@types/registries/PlayerSetTypes.sol";
+import { SeasonSquadStep, SquadFetchPhase } from "@types/data/SquadStoreTypes.sol";
 
 library EligibilityEvents {
     event AppearancesRecorded(uint256 count);
@@ -18,18 +19,7 @@ library EligibilityEvents {
 
     event WeightedScoreUpdated(bytes32 indexed playerId, bytes32 indexed leagueId, uint256 weightedScoreWad);
 
-    /// @notice Paged score sync completed for `[offset, offset+updated)`.
-    event WeightedScoresSynced(uint256 offset, uint256 limit, uint256 updated, uint32 globalRound);
-
-    /// @notice Squad-fill CRE upsert: new `MinutesStore` rows (skips already-tracked ids).
-    event SquadPlayersCreated(bytes32 indexed seasonId, uint16 pageFetched, uint256 created, uint256 skipped);
-
     event SquadPlayerCreated(bytes32 indexed playerId, uint256 birthDate);
-
-    /// @notice CRE set `MinutesStore.name` / `symbol` (first fill only; empty name skipped).
-    event SquadPlayerMetadataSet(bytes32 indexed playerId, string name, string symbol);
-
-    event SquadFillPageUpdated(bytes32 indexed seasonId, uint16 previousPage, uint16 nextPage);
 
     /// @notice Deployed player queued to TransferLocker (continuity under-threshold).
     event PlayerDeactivated(bytes32 indexed playerId, uint32 effectiveMins);
@@ -49,9 +39,6 @@ library EligibilityEvents {
     /// @notice SORT upsert detected a league move (MinutesStore membership change).
     event PlayerLeagueChanged(bytes32 indexed playerId, bytes32 previousLeagueId, bytes32 newLeagueId);
 
-    /// @notice New `TransparentUpgradeableProxy` for a league EligibilityVerifier.
-    event EligibilityVerifierProxyCreated(address indexed proxy, bytes32 indexed leagueId, address implementation);
-
     /// @notice Governance updated deploy / continuity thresholds (`EligibilityCriteria`).
     event EligibilityThresholdsUpdated(
         uint32 thresholdGk,
@@ -61,15 +48,39 @@ library EligibilityEvents {
         uint256 under21Age
     );
 
-    /// @notice CVM squad fetch opened (`SquadSync` / `HistoricalSquadSync`).
-    event SquadFetchRequested(
+    /// @notice League squad machine armed (seasons ordered earliest → latest).
+    event SquadFetchQueued(
+        bytes32 indexed leagueId, bytes32[] seasonIds, uint16[] seasonStartYears, SquadFetchPhase phase
+    );
+
+    event SquadFetchPhaseChanged(bytes32 indexed leagueId, SquadFetchPhase previous, SquadFetchPhase next);
+
+    event SeasonSquadStepChanged(
+        bytes32 indexed leagueId, bytes32 indexed seasonId, SeasonSquadStep previous, SeasonSquadStep next
+    );
+
+    /// @notice CVM squad job opened (`HistoricalSquadSync` / `SquadSync`).
+    event SquadOracleRequested(
         bytes32 indexed requestId,
         bytes32 indexed leagueId,
         bytes32 indexed seasonId,
-        uint16 pageToFetch,
+        uint16 seasonStartYear,
+        SeasonSquadStep step,
+        uint32 cursor,
         uint16 personsOffset
     );
 
-    /// @notice CVM fulfill returned `err` or empty `response` (pending cleared; retry via `requestFetch`).
-    event SquadOracleFailed(bytes32 indexed requestId, bytes err);
+    /// @notice Historical squad bootstrap requested by Orchestrator / Verifier.
+    event SquadDataRequested(
+        bytes32 indexed tournamentId, bytes32[] seasonIds, uint16[] seasonStartYears, bytes32 requestId
+    );
+
+    /// @notice CVM fulfill returned `err` (pending cleared; retry by re-opening request).
+    event SquadOracleFailed(bytes32 indexed requestId, bytes32 indexed leagueId, bytes err);
+
+    /// @notice Permissionless live squad refresh kicked (`CvmJob.SquadSync`).
+    event SquadRefreshQueued(bytes32 indexed leagueId, bytes32 seasonId, uint16 seasonStartYear, bytes32 requestId);
+
+    /// @notice RoundManager adopted a newly opened season onto the Live cursor.
+    event SeasonAdopted(bytes32 indexed leagueId, bytes32 indexed seasonId, uint16 seasonStartYear);
 }

@@ -12,8 +12,8 @@ import { AddressKeys as Addresses } from "@base/global/libraries/addresses/Addre
 import { VaultsErrors as Errors } from "@errors/vaults/VaultsErrors.sol";
 import { VaultsEvents as Events } from "@events/vaults/VaultsEvents.sol";
 import { RoundStatus } from "@types/vaults/VaultTypes.sol";
-import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
-import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/registries/ITournamentRegistry.sol";
+import { IPlayerSetRegistry } from "@interfaces/registries/IPlayerSetRegistry.sol";
 import { IStakedToken } from "@interfaces/vaults/IStakedToken.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";

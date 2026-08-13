@@ -7,59 +7,72 @@ import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKey
 import { AddressProvider } from "@src/AddressProvider.sol";
 
 import { AddressProviderOps } from "./AddressProviderOps.sol";
-import { ProxyUtils } from "./ProxyUtils.sol";
 
 /**
  * @title DeployHandoff
- * @notice Step 9: transfer ProxyAdmins to Orchestrator.
- * @dev AddressProvider `DEFAULT_ADMIN_ROLE` stays with deployer until a later
- *      `transferDefaultAdmin(ConstitutionalTimelock)`. Oracle proxy admins stay
- *      with OWNER (out of band). Call after factories.
+ * @notice Post-bootstrap sanity checks around AddressProvider admin → ConstitutionalTimelock.
+ * @dev Protocol cores are immutable — there are no ProxyAdmins to transfer. Oracle TUPs stay
+ *      with OWNER out of band. Factory beacons are owned by AP `TIMELOCK` (ConstitutionalTimelock)
+ *      from construction.
  */
-abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
+abstract contract DeployHandoff is AddressProviderOps {
+    /// @notice Staged-script entry: transfer AP admin to TIMELOCK when deployer still holds it.
     function _handoff(address deployer) internal {
+        AddressProvider ap = _requireAddressProvider();
+        address timelock = ap.getByName(Keys.TIMELOCK);
+        if (ap.hasRole(ap.DEFAULT_ADMIN_ROLE(), deployer)) {
+            _handoffPreTransfer(deployer);
+            if (timelock == address(0)) revert("TIMELOCK missing - deploy ConstitutionalTimelock first");
+            ap.transferDefaultAdmin(timelock);
+            console.log("AddressProvider DEFAULT_ADMIN -> ConstitutionalTimelock", timelock);
+            _handoffPostTransfer(timelock);
+            return;
+        }
+        if (timelock != address(0) && ap.hasRole(ap.DEFAULT_ADMIN_ROLE(), timelock)) {
+            _handoffPostTransfer(timelock);
+            return;
+        }
+        revert("AddressProvider DEFAULT_ADMIN is neither deployer nor TIMELOCK");
+    }
+
+    /// @notice Pre-transfer: deployer must still hold DEFAULT_ADMIN; required names must exist.
+    function _handoffPreTransfer(address deployer) internal view {
         if (deployer == address(0)) revert("deployer required");
 
         AddressProvider ap = _requireAddressProvider();
         if (!ap.hasRole(ap.DEFAULT_ADMIN_ROLE(), deployer)) {
-            revert("AddressProvider DEFAULT_ADMIN must be deployer for handoff");
+            revert("AddressProvider DEFAULT_ADMIN must be deployer before transfer");
         }
 
-        address orchestrator = _requireName(Keys.ORCHESTRATOR);
-        address tournamentRegistry = _requireName(Keys.TOURNAMENT_REGISTRY);
-        address playerSetRegistry = _requireName(Keys.PLAYER_SET_REGISTRY);
+        _requireName(Keys.TIMELOCK);
+        _requireName(Keys.ORCHESTRATOR);
+        _requireName(Keys.TOURNAMENT_REGISTRY);
+        _requireName(Keys.PLAYER_SET_REGISTRY);
+        _requireName(Keys.STAKE_VESTING);
+        _requireName(Keys.FEE_ROUTER_FACTORY);
+        _requireName(Keys.PLAYER_VAULT_FACTORY);
+        _requireName(Keys.PBR_TREASURY_FACTORY);
+        _requireName(Keys.PBR_FEE_HUB_FACTORY);
+        _requireName(Keys.DOPPLER_CONFIG);
+        _requireName(Keys.TOURNAMENT_INITIALIZER);
+        _requireName(Keys.MARKET_INITIALIZER);
+        _requireName(Keys.LIFECYCLE_MANAGER);
+        _requireName(Keys.MIGRATION_LISTENER);
+        _requireName(Keys.ROUND_MANAGER);
+        _requireName(Keys.SQUAD_STORE);
+        _requireName(Keys.ELIGIBILITY_VERIFIER);
+        _requireName(Keys.PBR_HISTORICAL);
+        _requireName(Keys.PBR_SETTLE);
 
-        // Soft-require lockers / factories so handoff can proceed if partial — but warn.
-        // TEMP: ROUND_MANAGER parked with data plane — restore when DeployData returns.
-        // _warnIfMissing(Keys.ROUND_MANAGER);
-        _warnIfMissing(Keys.STAKE_VESTING);
-        _warnIfMissing(Keys.DEPLOY_TOURNAMENT);
-        _warnIfMissing(Keys.DOPPLER_CONFIG);
-        _warnIfMissing(Keys.DOPPLER_LOCKER);
-        _warnIfMissing(Keys.TRANSFER_LOCKER);
-        _warnIfMissing(Keys.FEE_ROUTER_FACTORY);
-        _warnIfMissing(Keys.PLAYER_VAULT_FACTORY);
-        _warnIfMissing(Keys.PBR_TREASURY_FACTORY);
-        _warnIfMissing(Keys.PBR_FEE_HUB_FACTORY);
+        // Routers optional on mainnet staged path; DeployAll always registers them on Sepolia.
+        _warnIfMissing(Keys.STAKE_ROUTER);
+        _warnIfMissing(Keys.TRADE_ROUTER);
+        _warnIfMissing(Keys.Z_ROUTER);
+        _warnIfMissing(Keys.Z_QUOTER);
 
-        _transferProxyAdmin(tournamentRegistry, orchestrator);
-        _transferProxyAdmin(playerSetRegistry, orchestrator);
-        // _transferProxyAdminIfSet(Keys.ROUND_MANAGER, orchestrator);
-
-        _transferProxyAdminIfSet(Keys.STAKE_VESTING, orchestrator);
-        // Immutable — no ProxyAdmin: DEPLOY_TOURNAMENT, DOPPLER_CONFIG, DOPPLER_LOCKER,
-        // TRANSFER_LOCKER, FEE_ROUTER_FACTORY, PLAYER_VAULT_FACTORY, PBR_TREASURY_FACTORY,
-        // PBR_FEE_HUB_FACTORY.
-
-        console.log("=== DeployHandoff ===");
-        console.log("AddressProvider DEFAULT_ADMIN remains deployer (transfer to ConstitutionalTimelock later)");
-        console.log("ProxyAdmins transferred for registries / StakeVesting ->", orchestrator);
-    }
-
-    function _transferProxyAdminIfSet(string memory name, address newOwner) internal {
-        address proxy = _requireAddressProvider().getByName(name);
-        if (proxy == address(0)) return;
-        _transferProxyAdmin(proxy, newOwner);
+        console.log("=== DeployHandoff (pre-transfer) ===");
+        console.log("AddressProvider DEFAULT_ADMIN is deployer; transferring to TIMELOCK next");
+        console.log("No protocol ProxyAdmins (immutable core) - oracle ProxyAdmins unchanged");
     }
 
     function _warnIfMissing(string memory name) internal view {
@@ -67,5 +80,23 @@ abstract contract DeployHandoff is AddressProviderOps, ProxyUtils {
         if (addr == address(0)) {
             console.log("WARN: missing on AddressProvider before handoff:", name);
         }
+    }
+
+    /// @notice Post-transfer: ConstitutionalTimelock must be sole DEFAULT_ADMIN.
+    function _handoffPostTransfer(address constitutionalTimelock) internal view {
+        if (constitutionalTimelock == address(0)) revert("constitutionalTimelock required");
+
+        AddressProvider ap = _requireAddressProvider();
+        address timelock = ap.getByName(Keys.TIMELOCK);
+        if (timelock != constitutionalTimelock) {
+            revert("TIMELOCK on AddressProvider must equal ConstitutionalTimelock");
+        }
+        if (!ap.hasRole(ap.DEFAULT_ADMIN_ROLE(), constitutionalTimelock)) {
+            revert("AddressProvider DEFAULT_ADMIN must be ConstitutionalTimelock after transfer");
+        }
+
+        console.log("=== DeployHandoff (post-transfer) ===");
+        console.log("AddressProvider DEFAULT_ADMIN -> ConstitutionalTimelock", constitutionalTimelock);
+        console.log("Factory beacons owned by TIMELOCK (ConstitutionalTimelock)");
     }
 }

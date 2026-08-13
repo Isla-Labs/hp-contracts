@@ -32,7 +32,6 @@ library RegistryErrors {
     error HubAlreadyRegistered(bytes32 leagueId);
     error HubNotRegistered(bytes32 leagueId);
     error HubAlreadyLinked(bytes32 tournamentId, bytes32 leagueId);
-    error HubNotLinked(bytes32 tournamentId, bytes32 leagueId);
     error HubMismatch(bytes32 leagueId, address expected, address actual);
     error InvalidLinkTarget(TournamentType tournamentType);
     error SeasonExists(bytes32 tournamentId, uint16 seasonStartYear);

@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.34;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
-import { Initializable } from "@openzeppelin/proxy/utils/Initializable.sol";
 import { ReentrancyGuard } from "@openzeppelin/utils/ReentrancyGuard.sol";
 import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
-import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { IPlayerSetRegistry } from "@interfaces/registries/IPlayerSetRegistry.sol";
 import { AdvancedTradeData, VaultData } from "@types/registries/PlayerSetTypes.sol";
 import { PlayerVault } from "@vaults/PlayerVault.sol";
+import { AddressProvider } from "@src/AddressProvider.sol";
 
 import { StakeVestingErrors as Errors } from "@errors/governance/StakeVestingErrors.sol";
 import { StakeVestingEvents as Events } from "@events/governance/StakeVestingEvents.sol";
@@ -30,15 +29,18 @@ import { Beneficiary, Position } from "@types/governance/StakeVestingTypes.sol";
  *      Mature tranches are unstaked only when someone calls `unlock` / `unlockAndDistribute`.
  *      Unlocked underlying and PBR ETH yield are distributed to a configurable beneficiary split.
  *
+ *      Access: `HP_MULTISIG` (via AddressProvider) for beneficiary edits and `rescueToken`.
+ *      Cranks (`allocate`, unlock/distribute, AT release, `claimPbr`) are public.
+ *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
  */
-contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
+contract StakeVesting is AddressBook, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Config
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     uint256 public constant WAD = 1e18;
     uint256 public constant TRANCHE_COUNT = 4;
@@ -48,30 +50,34 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
     address public constant BENEFICIARY_A = 0x6B5aA3294BeD96Bb5092b62D1b1C9dBEC7D05C56; // 20%
     address public constant BENEFICIARY_B = 0x536F81818B2c05690ee9B5b74F52C79bd7A69bf9; // 40%
 
-    IPlayerSetRegistry public playerSetRegistry;
-
     Beneficiary[] private _beneficiaries;
 
     mapping(address token => Position) public positions;
 
-    // -------------------------------------------------------------------------
-    //  Initialization
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  Access Control
+    // --------------------------------------------
 
-    /// @param addressProvider_ Canonical `AddressProvider` (implementation immutable).
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address addressProvider_) AddressBook(addressProvider_) Ownable(msg.sender) {
-        _disableInitializers();
+    modifier onlyAdmin() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.HP_MULTISIG))) revert Errors.Unauthorized();
+        _;
     }
 
-    /**
-     * @notice Resolve registry; default beneficiaries HP Treasury 40% / B 40% / A 20%; ownership → Orchestrator.
-     */
-    function initialize() external initializer {
-        playerSetRegistry = IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+    // --------------------------------------------
+    //  Construction
+    // --------------------------------------------
 
-        address hpTreasury = _getAddress(_addressKey(Addresses.HP_TREASURY));
-        if (hpTreasury == address(0)) revert Errors.ZeroAddress();
+    /**
+     * @param addressProvider_ Canonical `AddressProvider`.
+     * @dev Requires `HP_TREASURY` and `HP_MULTISIG` already on AP (`PLAYER_SET_REGISTRY` at allocate).
+     */
+    constructor(address addressProvider_) AddressBook(addressProvider_) {
+        if (addressProvider_ == address(0)) revert Errors.ZeroAddress();
+
+        AddressProvider ap = AddressProvider(payable(addressProvider_));
+        address hpTreasury = ap.get(keccak256(bytes(Addresses.HP_TREASURY)));
+        address hpMultisig = ap.get(keccak256(bytes(Addresses.HP_MULTISIG)));
+        if (hpTreasury == address(0) || hpMultisig == address(0)) revert Errors.ZeroAddress();
 
         address[] memory accounts = new address[](3);
         accounts[0] = hpTreasury;
@@ -82,52 +88,39 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
         sharesWad[1] = 4e17; // 40%
         sharesWad[2] = 2e17; // 20%
         _setBeneficiaries(accounts, sharesWad);
-
-        _transferOwnership(_getAddress(_addressKey(Addresses.ORCHESTRATOR)));
     }
 
     receive() external payable { }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  AddressBook resolvers
+    // --------------------------------------------
+
+    function _playerSetRegistry() private view returns (IPlayerSetRegistry) {
+        return IPlayerSetRegistry(_getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY)));
+    }
+
+    // --------------------------------------------
     //  Admin
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     /**
      * @notice Replace beneficiary split (`sharesWad` must sum to `WAD`).
      * @dev Applies to subsequent vested / PBR distributions (not retroactive to already-sent funds).
      */
-    function setBeneficiaries(address[] calldata accounts, uint256[] calldata sharesWad) external onlyOwner {
+    function setBeneficiaries(address[] calldata accounts, uint256[] calldata sharesWad) external onlyAdmin {
         _setBeneficiaries(accounts, sharesWad);
     }
 
     /**
-     * @notice Release full ringfenced AT inventory to the registry `advancedTradeVault`.
-     * @dev Reverts if AT vault unset, reserve is zero, or ERC20 balance is below reserve.
-     */
-    function releaseAdvancedTrade(address token) external onlyOwner nonReentrant {
-        if (token == address(0)) revert Errors.ZeroAddress();
-        Position storage p = positions[token];
-        if (!p.allocated) revert Errors.NotConfigured();
-
-        uint256 amount = p.advancedTradeReserve;
-        if (amount == 0) revert Errors.ZeroAmount();
-        if (IERC20(token).balanceOf(address(this)) < amount) revert Errors.InsufficientExcessReserve();
-
-        AdvancedTradeData memory at = playerSetRegistry.getAdvancedTradeData(p.playerId);
-        address vault = at.advancedTradeVault;
-        if (vault == address(0)) revert Errors.VaultMissing(p.playerId);
-
-        p.advancedTradeReserve = 0;
-        IERC20(token).safeTransfer(vault, amount);
-        emit Events.AdvancedTradeReleased(token, vault, amount);
-    }
-
-    /**
-     * @notice Owner escape hatch: send all free ERC20 balance of `token` → HP Treasury.
+     * @notice Admin escape hatch: send all free ERC20 balance of `token` → HP Treasury.
      * @dev Leaves `advancedTradeReserve` and `unlockedClaimable` untouched. Staked principal
      *      remains in the PlayerVault. Prefer `releaseAdvancedTrade` / `distributeUnlocked`.
+     *
+     *      Must stay admin-gated: between Airlock excess transfer and `allocate`, the full
+     *      balance is "free" — a public rescue would grief the 50/50 AT + vesting split to treasury.
      */
-    function rescueToken(address token) external onlyOwner nonReentrant {
+    function rescueToken(address token) external onlyAdmin nonReentrant {
         if (token == address(0)) revert Errors.ZeroAddress();
 
         address hpTreasury = _getAddress(_addressKey(Addresses.HP_TREASURY));
@@ -141,21 +134,45 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
         emit Events.ExcessTokenRescued(token, hpTreasury, free);
     }
 
-    // -------------------------------------------------------------------------
-    //  Allocate (DopplerLocker → Orchestrator.execute)
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  Allocate / AT release (permissionless cranks)
+    // --------------------------------------------
+
+    /**
+     * @notice Release full ringfenced AT inventory to the registry `advancedTradeVault`.
+     * @dev Reverts if AT vault unset, reserve is zero, or ERC20 balance is below reserve.
+     */
+    function releaseAdvancedTrade(address token) external nonReentrant {
+        if (token == address(0)) revert Errors.ZeroAddress();
+        Position storage p = positions[token];
+        if (!p.allocated) revert Errors.NotConfigured();
+
+        uint256 amount = p.advancedTradeReserve;
+        if (amount == 0) revert Errors.ZeroAmount();
+        if (IERC20(token).balanceOf(address(this)) < amount) revert Errors.InsufficientExcessReserve();
+
+        AdvancedTradeData memory at = _playerSetRegistry().getAdvancedTradeData(p.playerId);
+        address vault = at.advancedTradeVault;
+        if (vault == address(0)) revert Errors.VaultMissing(p.playerId);
+
+        p.advancedTradeReserve = 0;
+        IERC20(token).safeTransfer(vault, amount);
+        emit Events.AdvancedTradeReleased(token, vault, amount);
+    }
 
     /**
      * @notice Split held excess 50/50: AT reserve + PlayerVault stake (full vault half stays staked).
      * @dev Requires vault already on `PlayerSetRegistry`. Idempotent guard per token.
-     *      Tranche 0 is already mature at `allocatedAt`; beneficiaries (or anyone) call
-     *      `unlockAndDistribute` when they want to unstake + pay out.
+     *      Permissionless — anyone may crank after Doppler market deploy (DopplerLocker still
+     *      calls this via Orchestrator today; direct calls are fine).
      */
-    function allocate(address token) external onlyOwner nonReentrant {
+    function allocate(address token) external nonReentrant {
         if (token == address(0)) revert Errors.ZeroAddress();
         Position storage p = positions[token];
         if (p.allocated) return; // idempotent for DopplerLocker deploy retries
         if (_beneficiaries.length == 0) revert Errors.EmptyBeneficiaries();
+
+        IPlayerSetRegistry playerSetRegistry = _playerSetRegistry();
 
         bytes32 playerId = playerSetRegistry.playerIdOfToken(token);
         if (playerId == bytes32(0)) revert Errors.NotConfigured();
@@ -188,9 +205,9 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
         emit Events.ExcessAllocated(token, playerId, atAmount, vaultAmount);
     }
 
-    // -------------------------------------------------------------------------
-    //  Vesting / yield
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
+    //  Vesting / yield (permissionless)
+    // --------------------------------------------
 
     /// @notice Unstake any mature tranches into `unlockedClaimable`.
     function unlock(address token) external nonReentrant {
@@ -239,9 +256,9 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
         emit Events.ExcessPbrDistributed(token, received);
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Views
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     function balanceOf(address token) external view returns (uint256) {
         return IERC20(token).balanceOf(address(this));
@@ -271,9 +288,9 @@ contract StakeVesting is Initializable, AddressBook, Ownable, ReentrancyGuard {
         }
     }
 
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
     //  Internal
-    // -------------------------------------------------------------------------
+    // --------------------------------------------
 
     function _unlockMatured(address token, Position storage p) private {
         while (p.nextTranche < TRANCHE_COUNT) {

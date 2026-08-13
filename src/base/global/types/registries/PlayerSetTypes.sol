@@ -28,11 +28,6 @@ struct TokenData {
     string symbol;
 }
 
-struct PositionData {
-    Position expectedPosition;
-    PositionMins positionMins;
-}
-
 struct TournamentData {
     bytes32 leagueId;
     bytes32[] activeTournaments;
@@ -74,9 +69,4 @@ enum Position {
     RW,
     LW,
     ST
-}
-
-struct PositionMins {
-    Position position;
-    uint8 minsPlayed;
 }

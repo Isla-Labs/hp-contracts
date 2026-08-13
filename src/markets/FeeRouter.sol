@@ -8,7 +8,7 @@ import { AddressBook } from "@base/abstract/AddressBook.sol";
 import { AddressKeys as Addresses } from "@base/global/libraries/addresses/AddressKeys.sol";
 import { MarketsErrors as Errors } from "@errors/markets/MarketsErrors.sol";
 import { MarketsEvents as Events } from "@events/markets/MarketsEvents.sol";
-import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/registries/ITournamentRegistry.sol";
 import { PlayerStatus } from "@types/registries/PlayerSetTypes.sol";
 
 /**

@@ -7,8 +7,8 @@ import { RegistryErrors as Errors } from "@errors/registries/RegistryErrors.sol"
 import { RegistryEvents as Events } from "@events/registries/RegistryEvents.sol";
 import { Hub, Season, Tournament, TournamentType, RoundSchedule } from "@types/registries/TournamentTypes.sol";
 import { RoundStatus } from "@types/vaults/VaultTypes.sol";
-import { ITournamentRegistry } from "@interfaces/ITournamentRegistry.sol";
-import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { ITournamentRegistry } from "@interfaces/registries/ITournamentRegistry.sol";
+import { IPlayerSetRegistry } from "@interfaces/registries/IPlayerSetRegistry.sol";
 import { IPbrFeeHub } from "@interfaces/markets/IPbrFeeHub.sol";
 import { IPbrTreasury } from "@interfaces/vaults/IPbrTreasury.sol";
 import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
@@ -22,8 +22,9 @@ import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
  *        - `UCL`: CONTINENTAL, feeHubs = all domestic hubs, treasury = UCL pot
  *
  *      Access (AddressProvider; no Ownable / initialize):
- *      - `ORCHESTRATOR`: `registerHub`, tournament create, `linkHub`, vault membership,
- *        and season calendar (`openSeason` / `upsertRound(s)`).
+ *      - `TOURNAMENT_INITIALIZER`: `registerHub`, `createTournament`, `openSeason`, `linkHub`.
+ *      - `ROUND_MANAGER`: `upsertRound` / `upsertRounds`.
+ *      - `ORCHESTRATOR`: vault membership.
  *      - `PLAYER_SET_REGISTRY`: vault register/unregister fan-out.
  *      - Tournament `PbrTreasury` or Orchestrator: `flushPendingUnregisters` after settle.
  *
@@ -69,8 +70,17 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
     //  Access Control
     // --------------------------------------------
 
-    modifier onlyOrchestrator() {
-        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.NotAuthorized();
+    modifier onlyInitializer() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TOURNAMENT_INITIALIZER))) {
+            revert Errors.NotAuthorized();
+        }
+        _;
+    }
+
+    modifier onlyRoundManager() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.ROUND_MANAGER))) {
+            revert Errors.NotAuthorized();
+        }
         _;
     }
 
@@ -82,7 +92,7 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
     constructor(address addressProvider_) AddressBook(addressProvider_) { }
 
     // --------------------------------------------
-    //  Domestic hubs (FeeRouter) — Orchestrator
+    //  Domestic hubs (FeeRouter) — TournamentInitializer
     // --------------------------------------------
 
     /**
@@ -91,7 +101,7 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
      *      STEP1: call registerHub
      *      STEP2: call createTournament
      */
-    function registerHub(Hub calldata hub) external onlyOrchestrator {
+    function registerHub(Hub calldata hub) external onlyInitializer {
         if (hub.leagueId == bytes32(0)) revert Errors.ZeroId();
         if (hub.pbrFeeHub == address(0)) revert Errors.ZeroAddress();
         if (pbrFeeHubOf[hub.leagueId] != address(0)) revert Errors.HubAlreadyRegistered(hub.leagueId);
@@ -102,7 +112,7 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
     }
 
     // --------------------------------------------
-    //  Tournament registration — Orchestrator
+    //  Tournament registration — TournamentInitializer
     // --------------------------------------------
 
     /**
@@ -120,7 +130,7 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
         TournamentType tournamentType,
         Hub[] calldata feeHubs,
         address pbrTreasury
-    ) external onlyOrchestrator {
+    ) external onlyInitializer {
         if (tournamentId == bytes32(0)) revert Errors.ZeroId();
         if (pbrTreasury == address(0)) revert Errors.ZeroAddress();
         if (_tournaments[tournamentId].tournamentId != bytes32(0)) revert Errors.Exists();
@@ -140,19 +150,16 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
 
         _tournamentIds.push(tournamentId);
         emit Events.TournamentCreated(tournamentId, tournamentType, pbrTreasury);
-        if (tournamentType == TournamentType.DOMESTIC_LEAGUE) {
-            emit Events.DomesticLeagueCreated(tournamentId, pbrTreasury);
-        }
     }
 
     /**
      * @notice Links an additional registered domestic hub to a CONTINENTAL / INTERNATIONAL tournament.
-     * @dev Used when a new domestic league comes online and existing multi-hub tournaments must
-     *      include its hub. Also appends this tournament's treasury onto the hub's continental /
-     *      international destination list. Domestic leagues/cups get their hub only at
-     *      `createTournament`.
+     * @dev Called by `TournamentInitializer` when a new `DOMESTIC_LEAGUE` comes online so existing
+     *      multi-hub tournaments include its hub. Also appends this tournament's treasury onto the
+     *      hub's continental / international destination list. Domestic leagues/cups get their hub
+     *      only at `createTournament`.
      */
-    function linkHub(bytes32 tournamentId, Hub calldata hub) external onlyOrchestrator {
+    function linkHub(bytes32 tournamentId, Hub calldata hub) external onlyInitializer {
         Tournament storage t = _requireTournament(tournamentId);
         TournamentType tournamentType = t.tournamentType;
         if (tournamentType != TournamentType.CONTINENTAL && tournamentType != TournamentType.INTERNATIONAL) {
@@ -224,15 +231,16 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
         if (count != 0) emit Events.VaultUnregisterFlushed(tournamentId, count);
     }
 
-    /// @dev Orchestrator or `PlayerSetRegistry` (lifecycle fan-out).
+    /// @dev Orchestrator, `MarketInitializer` (deploy), or `PlayerSetRegistry` (lifecycle fan-out).
     function _checkVaultMembershipCaller() internal view {
         if (msg.sender == _getAddress(_addressKey(Addresses.ORCHESTRATOR))) return;
+        if (msg.sender == _getAddress(_addressKey(Addresses.MARKET_INITIALIZER))) return;
         if (msg.sender == _getAddress(_addressKey(Addresses.PLAYER_SET_REGISTRY))) return;
         revert Errors.NotAuthorized();
     }
 
     // --------------------------------------------
-    //  Season calendar — Orchestrator
+    //  Season calendar
     // --------------------------------------------
 
     /**
@@ -247,7 +255,7 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
         bytes32 seasonId,
         uint16 seasonStartYear,
         uint32 finalRound
-    ) external onlyOrchestrator {
+    ) external onlyInitializer {
         if (seasonId == bytes32(0) || seasonStartYear == 0) revert Errors.ZeroId();
         if (finalRound == 0) revert Errors.InvalidFinalRound();
 
@@ -270,17 +278,15 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
                     rounds: new RoundSchedule[](0)
                 })
             );
+
         emit Events.SeasonOpened(tournamentId, seasonId, seasonStartYear, finalRound);
-        if (t.tournamentType == TournamentType.DOMESTIC_LEAGUE) {
-            emit Events.DomesticSeasonOpened(tournamentId, seasonId, seasonStartYear);
-        }
     }
 
     function upsertRound(
         bytes32 tournamentId,
         uint16 seasonStartYear,
         RoundSchedule calldata round
-    ) external onlyOrchestrator {
+    ) external onlyRoundManager {
         _upsertRound(tournamentId, seasonStartYear, round);
     }
 
@@ -289,7 +295,7 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
         bytes32 tournamentId,
         uint16 seasonStartYear,
         RoundSchedule[] calldata rounds
-    ) external onlyOrchestrator {
+    ) external onlyRoundManager {
         uint256 length = rounds.length;
         for (uint256 i; i < length; ++i) {
             _upsertRound(tournamentId, seasonStartYear, rounds[i]);
@@ -302,6 +308,16 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
 
     function tournamentCount() external view returns (uint256) {
         return _tournamentIds.length;
+    }
+
+    /// @inheritdoc ITournamentRegistry
+    function tournamentIdAt(uint256 index) external view returns (bytes32) {
+        return _tournamentIds[index];
+    }
+
+    /// @inheritdoc ITournamentRegistry
+    function getTournamentType(bytes32 tournamentId) external view returns (TournamentType) {
+        return _requireTournament(tournamentId).tournamentType;
     }
 
     /// @inheritdoc ITournamentRegistry
@@ -404,8 +420,8 @@ contract TournamentRegistry is AddressBook, ITournamentRegistry {
 
     /**
      * @notice Seasons under one tournament, oldest `seasonStartYear` first.
-     * @dev CRE `eligibility-store` uses this on `DomesticLeagueCreated` / `DomesticSeasonOpened`
-     *      to `SYNC_LEAGUE` into EligibilityStore's RunBook (domestic leagues only).
+     * @dev CRE squad sync uses `TournamentCreated` / `SeasonOpened` (domestic leagues) to
+     *      `SYNC_LEAGUE` into EligibilityStore's RunBook.
      */
     function getSeasonsOldestFirst(bytes32 tournamentId)
         external

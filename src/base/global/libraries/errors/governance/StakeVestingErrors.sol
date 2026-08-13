@@ -3,6 +3,7 @@ pragma solidity ^0.8.34;
 
 library StakeVestingErrors {
     error ZeroAddress();
+    error Unauthorized();
     error ZeroAmount();
     error NotConfigured();
     error VaultMissing(bytes32 playerId);

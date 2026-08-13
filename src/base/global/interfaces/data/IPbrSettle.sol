@@ -20,6 +20,17 @@ interface IPbrSettle {
         bytes32 utilizedHash
     ) external returns (bytes32[] memory requestIds);
 
+    /**
+     * @notice Re-open `SettleDms` for one fixture after oracle `err` exhausted auto-retries (or any `None` phase).
+     * @dev Permissionless. Round must still be `Requested`; fixture must be `None` (not in-flight / not Proven).
+     */
+    function retryFixtureSettle(
+        bytes32 tournamentId,
+        uint16 seasonStartYear,
+        uint32 roundNumber,
+        bytes32 fixtureId
+    ) external returns (bytes32 requestId);
+
     function roundId(bytes32 tournamentId, uint16 seasonStartYear, uint32 roundNumber) external pure returns (bytes32);
 
     function fixtureJobId(

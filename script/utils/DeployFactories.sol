@@ -15,7 +15,7 @@ import { AddressProviderOps } from "./AddressProviderOps.sol";
  * @title DeployFactories
  * @notice Market + vault factories; register on AP.
  * @dev All four factories are immutable (`new` after ORCHESTRATOR + TIMELOCK are on AP).
- *      Shared beacons are owned by TIMELOCK. DeployTournament is a separate immutable deploy.
+ *      Shared beacons are owned by TIMELOCK (ConstitutionalTimelock).
  */
 abstract contract DeployFactories is AddressProviderOps {
     struct FactoryDeployment {

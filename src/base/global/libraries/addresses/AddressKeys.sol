@@ -8,6 +8,14 @@ library AddressKeys {
     string internal constant TIMELOCK = "TIMELOCK";
     string internal constant ORCHESTRATOR = "ORCHESTRATOR";
     string internal constant DEPLOY_TOURNAMENT = "DEPLOY_TOURNAMENT";
+    /// @dev Formats treasury/hub + registry args for `Orchestrator.createTournament`.
+    string internal constant TOURNAMENT_INITIALIZER = "TOURNAMENT_INITIALIZER";
+    /// @dev Market deploy intake (replaces DopplerLocker): metadata → lockup → FinalConfig → Airlock.
+    string internal constant MARKET_INITIALIZER = "MARKET_INITIALIZER";
+    /// @dev Lifecycle waiting room (replaces TransferLocker): deactivate / reactivate / transfer.
+    string internal constant LIFECYCLE_MANAGER = "LIFECYCLE_MANAGER";
+    /// @dev Bonding → spot graduation sync (Airlock.migrate + PlayerSetRegistry.graduatePool).
+    string internal constant MIGRATION_LISTENER = "MIGRATION_LISTENER";
 
     // Governance
     string internal constant STAKE_VESTING = "STAKE_VESTING";
@@ -29,10 +37,14 @@ library AddressKeys {
     string internal constant DOPPLER_CONFIG = "DOPPLER_CONFIG";
     string internal constant TRANSFER_LOCKER = "TRANSFER_LOCKER";
     string internal constant ELIGIBILITY_STORE = "ELIGIBILITY_STORE";
+    /// @dev Squad ingest SoT + historical/live oracle machine (replaces CRE EligibilityStore path).
+    string internal constant SQUAD_STORE = "SQUAD_STORE";
     string internal constant ELIGIBILITY_VERIFIER = "ELIGIBILITY_VERIFIER";
     string internal constant PPM_VERIFIER = "PPM_VERIFIER";
     string internal constant CRE_FORWARDER = "CRE_FORWARDER";
     string internal constant PBR_SETTLE = "PBR_SETTLE";
+    /// @dev Historical DMS ingest (RSS digests + Appearance staging) after round/squad bootstrap.
+    string internal constant PBR_HISTORICAL = "PBR_HISTORICAL";
     string internal constant ROUND_MANAGER = "ROUND_MANAGER";
 
     // DAO / fee beneficiaries

@@ -12,7 +12,7 @@ import { DeployRoutersLogic } from "../utils/DeployRoutersLogic.sol";
  * @title DeployRouters
  * @notice Standalone / redeploy path for routers (also included in DeployAll before handoff).
  * @dev Prefer `make deploy-base-sepolia-all` for a full bootstrap. Use this target to redeploy
- *      routers against an existing AddressProvider (post-handoff → Orchestrator.execute).
+ *      routers while deployer still holds AddressProvider DEFAULT_ADMIN (pre–timelock handoff).
  *
  *      Make: `make deploy-base-sepolia-routers`
  */

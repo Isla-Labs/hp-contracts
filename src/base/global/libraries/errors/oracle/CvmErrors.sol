@@ -18,11 +18,8 @@ library CvmErrors {
     error RequestTimedOut(bytes32 requestId);
     error RequestNotTimedOut(bytes32 requestId);
     error DuplicateRequestId(bytes32 requestId);
-    error AlreadyOracle(address transmitter);
     error NotOracle(address transmitter);
     error AttestationVerifierNotSet();
     error ComposeNotAllowed(bytes32 composeHash);
-    error RegistrationExpired(address transmitter);
     error ZeroRegistrationTtl();
-    error AttestationFailed();
 }

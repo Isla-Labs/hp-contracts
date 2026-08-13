@@ -8,7 +8,7 @@ import { AddressKeys as Addresses } from "@base/global/libraries/addresses/Addre
 import { RoutersErrors as Errors } from "@errors/routers/RoutersErrors.sol";
 import { RoutersEvents as Events } from "@events/routers/RoutersEvents.sol";
 import { VaultData } from "@types/registries/PlayerSetTypes.sol";
-import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { IPlayerSetRegistry } from "@interfaces/registries/IPlayerSetRegistry.sol";
 import { IPlayerVault } from "@interfaces/vaults/IPlayerVault.sol";
 
 /**

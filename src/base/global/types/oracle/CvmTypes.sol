@@ -35,7 +35,11 @@ enum CvmJob {
     ///      Args: `abi.encode(bytes32 playerId)`
     ///      Response: `abi.encode(bytes32 newLeagueId, bytes32[] activeTournamentIds)`
     ///      (`activeTournamentIds` must include `newLeagueId`; TransferLocker validates before apply.)
-    LeagueTransfer
+    LeagueTransfer,
+    /// @dev MigrationListener: scan BONDING markets; return tokens needing migrate/graduate sync.
+    ///      Args: empty
+    ///      Response: `abi.encode(address[] tokens)` (capped; already Exited or tick-ready)
+    BondingMigrationScan
 }
 
 /// @notice Which vanity salt set `CvmJob.VanitySalts` should mine.

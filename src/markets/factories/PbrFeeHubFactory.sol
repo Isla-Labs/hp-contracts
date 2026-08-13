@@ -15,7 +15,7 @@ import { PbrFeeHub } from "@markets/PbrFeeHub.sol";
  * @title PbrFeeHubFactory
  * @notice Immutable factory: deploys per-domestic-league `PbrFeeHub` beacon proxies.
  * @dev Shared `UpgradeableBeacon` is owned by `TIMELOCK` (delayed logic upgrades). `create` is
- *      Orchestrator-gated via live AddressProvider lookup.
+ *      `TournamentInitializer`-gated via live AddressProvider lookup.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -31,8 +31,10 @@ contract PbrFeeHubFactory is AddressBook, IPbrFeeHubFactory {
         );
     }
 
-    modifier onlyOrchestrator() {
-        if (msg.sender != _getAddress(_addressKey(Addresses.ORCHESTRATOR))) revert Errors.Unauthorized();
+    modifier onlyTournamentInitializer() {
+        if (msg.sender != _getAddress(_addressKey(Addresses.TOURNAMENT_INITIALIZER))) {
+            revert Errors.Unauthorized();
+        }
         _;
     }
 
@@ -42,7 +44,7 @@ contract PbrFeeHubFactory is AddressBook, IPbrFeeHubFactory {
      * @param leagueId Domestic league id.
      * @param leagueTreasury Primary domestic-league `PbrTreasury`.
      */
-    function create(bytes32 leagueId, address leagueTreasury) external onlyOrchestrator returns (address hub) {
+    function create(bytes32 leagueId, address leagueTreasury) external onlyTournamentInitializer returns (address hub) {
         if (leagueId == bytes32(0)) revert Errors.ZeroId();
         if (leagueTreasury == address(0)) revert Errors.ZeroAddress();
 

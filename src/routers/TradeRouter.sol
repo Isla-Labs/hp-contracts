@@ -10,7 +10,8 @@ import { AddressKeys as Addresses } from "@base/global/libraries/addresses/Addre
 import { RoutersErrors as Errors } from "@errors/routers/RoutersErrors.sol";
 import { RoutersEvents as Events } from "@events/routers/RoutersEvents.sol";
 import { DopplerData } from "@types/registries/PlayerSetTypes.sol";
-import { IPlayerSetRegistry } from "@interfaces/IPlayerSetRegistry.sol";
+import { UnlockData } from "@types/routers/TradeRouterTypes.sol";
+import { IPlayerSetRegistry } from "@interfaces/registries/IPlayerSetRegistry.sol";
 
 import { IUnlockCallback } from "@v4-core/interfaces/callback/IUnlockCallback.sol";
 import { IPoolManager } from "@v4-core/interfaces/IPoolManager.sol";
@@ -34,13 +35,6 @@ contract TradeRouter is AddressBook, ReentrancyGuard, IUnlockCallback {
     using CurrencyLibrary for Currency;
 
     IPoolManager public immutable poolManager;
-
-    struct UnlockData {
-        PoolKey key;
-        bool zeroForOne;
-        uint256 amountIn;
-        address recipient;
-    }
 
     /// @param addressProvider_ Protocol `AddressProvider` (`PLAYER_SET_REGISTRY`, `Z_ROUTER`).
     /// @param poolManager_ Uniswap v4 `PoolManager` for this deployment.

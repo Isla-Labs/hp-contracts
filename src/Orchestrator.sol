@@ -120,8 +120,9 @@ contract Orchestrator is AddressBook, RateLimit, IOrchestrator {
                 data.tournamentId, data.seasonIds, data.seasonStartYears, squadRequestId
             );
         } else {
-            // TODO: register existing vaults under new PbrTreasury
-            // Can be shipped later --- focus on EPL first
+            // TODO: register league squads under cup treasury
+            // _knockoutManager().syncVaults(data.tournamentId);
+            // _knockoutManager().refreshKnockouts();
         }
 
         emit Events.TournamentFlowDeployed(

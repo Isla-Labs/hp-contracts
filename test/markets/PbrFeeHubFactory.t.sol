@@ -24,13 +24,13 @@ contract PbrFeeHubFactoryTest is MarketsTestBase {
 
     function test_create_revertsZeroId() public {
         AcceptingReceiver treasury = new AcceptingReceiver();
-        vm.prank(orchestrator);
+        vm.prank(tournamentInitializer);
         vm.expectRevert(Errors.ZeroId.selector);
         pbrFeeHubFactory.create(bytes32(0), address(treasury));
     }
 
     function test_create_revertsZeroTreasury() public {
-        vm.prank(orchestrator);
+        vm.prank(tournamentInitializer);
         vm.expectRevert(Errors.ZeroAddress.selector);
         pbrFeeHubFactory.create(LEAGUE_A, address(0));
     }

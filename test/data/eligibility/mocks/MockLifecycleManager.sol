@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import { LifecycleReason } from "@types/initializers/LifecycleTypes.sol";
 
-/// @notice Captures `enqueueLifecycle` calls from Orchestrator (LifecycleManager stand-in).
+/// @notice Captures `queueChanges` calls from Orchestrator (LifecycleManager stand-in).
 contract MockLifecycleManager {
     struct EnqueueCall {
         bytes32[] playerIds;
@@ -13,7 +13,7 @@ contract MockLifecycleManager {
 
     EnqueueCall[] internal _calls;
 
-    function enqueueLifecycle(
+    function queueChanges(
         bytes32[] calldata playerIds,
         LifecycleReason reason,
         uint32[] calldata effectiveMins

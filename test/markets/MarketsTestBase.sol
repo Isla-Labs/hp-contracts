@@ -19,6 +19,7 @@ abstract contract MarketsTestBase is Test {
 
     address internal orchestrator = makeAddr("orchestrator");
     address internal marketInitializer = makeAddr("marketInitializer");
+    address internal tournamentInitializer = makeAddr("tournamentInitializer");
     address internal timelock = makeAddr("timelock");
     address internal playerSetRegistry = makeAddr("playerSetRegistry");
 
@@ -36,6 +37,7 @@ abstract contract MarketsTestBase is Test {
 
         ap.setName(Addresses.ORCHESTRATOR, orchestrator);
         ap.setName(Addresses.MARKET_INITIALIZER, marketInitializer);
+        ap.setName(Addresses.TOURNAMENT_INITIALIZER, tournamentInitializer);
         ap.setName(Addresses.TIMELOCK, timelock);
         ap.setName(Addresses.HP_TREASURY, address(hpTreasury));
         ap.setName(Addresses.TOURNAMENT_REGISTRY, address(tournamentRegistry));
@@ -54,7 +56,7 @@ abstract contract MarketsTestBase is Test {
     }
 
     function _createPbrFeeHub(bytes32 leagueId, address leagueTreasury) internal returns (PbrFeeHub) {
-        vm.prank(orchestrator);
+        vm.prank(tournamentInitializer);
         return PbrFeeHub(payable(pbrFeeHubFactory.create(leagueId, leagueTreasury)));
     }
 

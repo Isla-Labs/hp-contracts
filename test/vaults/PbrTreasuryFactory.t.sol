@@ -25,20 +25,20 @@ contract PbrTreasuryFactoryTest is VaultsTestBase {
 
     function test_create_revertsZeroId() public {
         bytes32 salt = _permissionedSalt(address(treasuryFactory), bytes11(uint88(1)));
-        vm.prank(orchestrator);
+        vm.prank(tournamentInitializer);
         vm.expectRevert(Errors.ZeroId.selector);
         treasuryFactory.create(bytes32(0), START_YEAR, salt);
     }
 
     function test_create_revertsZeroSeason() public {
         bytes32 salt = _permissionedSalt(address(treasuryFactory), bytes11(uint88(1)));
-        vm.prank(orchestrator);
+        vm.prank(tournamentInitializer);
         vm.expectRevert(Errors.ZeroSeason.selector);
         treasuryFactory.create(TOURNAMENT, 0, salt);
     }
 
     function test_create_revertsZeroSalt() public {
-        vm.prank(orchestrator);
+        vm.prank(tournamentInitializer);
         vm.expectRevert(Errors.ZeroSalt.selector);
         treasuryFactory.create(TOURNAMENT, START_YEAR, bytes32(0));
     }
@@ -47,7 +47,7 @@ contract PbrTreasuryFactoryTest is VaultsTestBase {
         bytes32 salt = _permissionedSalt(address(treasuryFactory), bytes11(uint88(99)));
         address predicted = _predictCreate3(address(treasuryFactory), salt);
 
-        vm.prank(orchestrator);
+        vm.prank(tournamentInitializer);
         address treasuryAddr = treasuryFactory.create(TOURNAMENT, START_YEAR, salt);
 
         assertEq(treasuryAddr, predicted);

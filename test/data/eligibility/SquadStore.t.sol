@@ -362,10 +362,15 @@ contract SquadStoreTest is EligibilityTestBase {
         bytes32 requestId = _openLeagueSingle(SEASON_B, YEAR_B);
         _ingestOneSeasonPage(requestId, _singlePlayerPage(PLAYER_OUT, CLUB_A, _birthYearsAgo(26)));
 
+        vm.expectEmit(true, false, false, true, address(squadStore));
+        emit Events.PlayerExpectedPositionChanged(PLAYER_OUT, Position.GK, Position.CM);
         _recordAppearance(SEASON_B, YEAR_B, PLAYER_OUT, 1, Position.CM, 100);
+
         _recordAppearance(SEASON_B, YEAR_B, PLAYER_OUT, 2, Position.ST, 100); // tie — keep CM
         assertEq(uint8(squadStore.getMinutesStore(PLAYER_OUT).expectedPosition), uint8(Position.CM));
 
+        vm.expectEmit(true, false, false, true, address(squadStore));
+        emit Events.PlayerExpectedPositionChanged(PLAYER_OUT, Position.CM, Position.ST);
         _recordAppearance(SEASON_B, YEAR_B, PLAYER_OUT, 3, Position.ST, 1); // 101 > 100
         assertEq(uint8(squadStore.getMinutesStore(PLAYER_OUT).expectedPosition), uint8(Position.ST));
     }

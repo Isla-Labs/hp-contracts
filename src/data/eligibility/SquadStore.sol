@@ -209,7 +209,7 @@ contract SquadStore is AddressBook, Oracle, RateLimit, ISquadStore {
             if (posIndex >= POSITION_COUNT) revert Errors.ZeroId();
 
             MinutesStore storage store = _minutesStore[appearance.playerId];
-            uint32 cumulative = _accumulatePosition(store, posIndex, appearance.minsPlayed);
+            uint32 cumulative = _accumulatePosition(store, appearance.playerId, posIndex, appearance.minsPlayed);
 
             bytes32 leagueId = store.currentLeagueId;
             if (leagueId != bytes32(0) && _isScoringSeason(leagueId, seasonId, seasonStartYear)) {
@@ -775,6 +775,7 @@ contract SquadStore is AddressBook, Oracle, RateLimit, ISquadStore {
      */
     function _accumulatePosition(
         MinutesStore storage store,
+        bytes32 playerId,
         uint256 posIndex,
         uint32 minsPlayed
     ) private returns (uint32 cumulative) {
@@ -783,7 +784,10 @@ contract SquadStore is AddressBook, Oracle, RateLimit, ISquadStore {
 
         uint256 bestIdx = uint256(uint8(store.expectedPosition));
         if (posIndex != bestIdx && cumulative > store.positionMinutes[bestIdx]) {
-            store.expectedPosition = Position(uint8(posIndex));
+            Position previous = store.expectedPosition;
+            Position next = Position(uint8(posIndex));
+            store.expectedPosition = next;
+            emit Events.PlayerExpectedPositionChanged(playerId, previous, next);
         }
     }
 

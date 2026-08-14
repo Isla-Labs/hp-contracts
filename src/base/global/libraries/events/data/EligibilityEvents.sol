@@ -19,6 +19,9 @@ library EligibilityEvents {
 
     event WeightedScoreUpdated(bytes32 indexed playerId, bytes32 indexed leagueId, uint256 weightedScoreWad);
 
+    /// @notice Career minutes flipped the player's modal position (strict beat; ties keep incumbent).
+    event PlayerExpectedPositionChanged(bytes32 indexed playerId, Position previous, Position next);
+
     event SquadPlayerCreated(bytes32 indexed playerId, uint256 birthDate);
 
     /// @notice Deployed player queued to TransferLocker (continuity under-threshold).

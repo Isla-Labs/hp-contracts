@@ -10,6 +10,13 @@ optimizer_runs = 0
 bytecode_hash = "none"
 gas_limit = "8000000000"
 create2_deployer = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
+# Unused local Doppler hook copies `new Quoter()` and pull view-quoter-v4's exact
+# `pragma solidity 0.8.26`. Nothing in src/script/test imports them — live Doppler
+# is consumed via narrow interfaces. Skip so HP compiles on 0.8.34 only.
+skip = [
+  "src/base/abstract/RehypeDopplerHookInitializer.sol",
+  "src/base/abstract/RehypeDopplerHookMigrator.sol",
+]
 fs_permissions = [
   { access = "read", path = "./lib" },
   { access = "read", path = "./script" },

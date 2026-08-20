@@ -9,6 +9,7 @@ import { CvmJob, VanityDeployKind } from "@types/oracle/CvmTypes.sol";
  * @notice Sepolia consumer for CVM `VanitySalts` end-to-end smokes.
  * @dev Flow: `requestAsset` / `requestTournament` → `CvmRouter` → attested worker mines
  *      vanity salts → `_fulfillRequest` stores results for inspection.
+ *      The consumer must be allowlisted (`CvmRouter.setRequester`) or `sendRequest` reverts.
  *
  *      This consumer is also a sketch for future deploy state machines:
  *        - `VanityDeployKind` selects which salt set is requested / returned

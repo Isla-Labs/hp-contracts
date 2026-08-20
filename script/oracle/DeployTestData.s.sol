@@ -4,6 +4,7 @@ pragma solidity ^0.8.34;
 import { Script, console2 } from "forge-std/Script.sol";
 
 import { TestData } from "@oracle/test/TestData.sol";
+import { CvmRouter } from "@src/oracle/CvmRouter.sol";
 
 /**
  * @title DeployTestData
@@ -11,7 +12,7 @@ import { TestData } from "@oracle/test/TestData.sol";
  * @dev Makefile: `make deploy-base-sepolia-test-data`
  *
  *      Env:
- *        PRIVATE_KEY
+ *        PRIVATE_KEY — must own `CvmRouter` (allowlists this consumer via `setRequester`)
  *        CVM_ROUTER — from Make / deployments/base-sepolia-oracle.json
  *
  *      Writes `deployments/base-sepolia-test-data.json`.
@@ -23,6 +24,7 @@ contract DeployTestData is Script {
 
         vm.startBroadcast(privateKey);
         TestData testData = new TestData(router);
+        CvmRouter(router).setRequester(address(testData), true);
         vm.stopBroadcast();
 
         console2.log("TestData", address(testData));

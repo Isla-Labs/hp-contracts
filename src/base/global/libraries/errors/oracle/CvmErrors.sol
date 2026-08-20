@@ -14,6 +14,7 @@ library CvmErrors {
     error NoLiveOracle();
     error OnlyRouter(address caller);
     error OnlyRequester(address caller);
+    error RequesterNotAllowed(address caller);
     error UnknownRequest(bytes32 requestId);
     error RequestTimedOut(bytes32 requestId);
     error RequestNotTimedOut(bytes32 requestId);

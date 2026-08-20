@@ -10,13 +10,14 @@ import { DopplerConfig } from "@initializers/markets/base/DopplerConfig.sol";
 import { MarketInitializer } from "@initializers/markets/MarketInitializer.sol";
 
 import { AddressProviderOps } from "./AddressProviderOps.sol";
+import { CvmRequesterOps } from "./CvmRequesterOps.sol";
 
 /**
  * @title DeployInitializers
  * @notice Immutable DopplerConfig + MarketInitializer + LifecycleManager + MigrationListener.
  * @dev `CVM_ROUTER` must already be on AddressProvider (Oracle-binding ctors).
  */
-abstract contract DeployInitializers is AddressProviderOps {
+abstract contract DeployInitializers is AddressProviderOps, CvmRequesterOps {
     struct InitializerDeployment {
         address dopplerConfig;
         address marketInitializer;
@@ -38,6 +39,11 @@ abstract contract DeployInitializers is AddressProviderOps {
         _registerName(deployer, Keys.MARKET_INITIALIZER, d.marketInitializer);
         _registerName(deployer, Keys.LIFECYCLE_MANAGER, d.lifecycleManager);
         _registerName(deployer, Keys.MIGRATION_LISTENER, d.migrationListener);
+
+        address router = _requireName(Keys.CVM_ROUTER);
+        _allowCvmRequester(router, d.marketInitializer);
+        _allowCvmRequester(router, d.lifecycleManager);
+        _allowCvmRequester(router, d.migrationListener);
 
         console.log("=== DeployInitializers (immutable) ===");
         console.log("DOPPLER_CONFIG", d.dopplerConfig);

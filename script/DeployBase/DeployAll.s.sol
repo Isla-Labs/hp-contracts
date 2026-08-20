@@ -25,6 +25,7 @@ import { Orchestrator } from "@src/Orchestrator.sol";
 import { PbrTreasuryFactory } from "@vaults/factories/PbrTreasuryFactory.sol";
 import { PlayerVaultFactory } from "@vaults/factories/PlayerVaultFactory.sol";
 
+import { CvmRequesterOps } from "../utils/CvmRequesterOps.sol";
 import { DeployHandoff } from "../utils/DeployHandoff.sol";
 import { DeployRoutersLogic } from "../utils/DeployRoutersLogic.sol";
 import { HpDeployBase } from "../utils/HpDeployBase.sol";
@@ -45,7 +46,7 @@ import { HpDeployBase } from "../utils/HpDeployBase.sol";
  *           optional TIMELOCK_MIN_DELAY (default 5 minutes on testnet; `0` → CT DEFAULT_MIN_DELAY).
  *      Make: `make deploy-base-sepolia-all` (optional `FORGE_FLAGS="-vvvv"`)
  */
-contract DeployAll is HpDeployBase, DeployHandoff, DeployRoutersLogic {
+contract DeployAll is HpDeployBase, DeployHandoff, DeployRoutersLogic, CvmRequesterOps {
     struct CoreDeployment {
         address addressProvider;
         address constitutionalTimelock;
@@ -221,6 +222,8 @@ contract DeployAll is HpDeployBase, DeployHandoff, DeployRoutersLogic {
         _set(ap, Keys.ELIGIBILITY_VERIFIER, d.eligibilityVerifier);
         _set(ap, Keys.PBR_HISTORICAL, d.pbrHistorical);
         _set(ap, Keys.PBR_SETTLE, d.pbrSettle);
+
+        _seedCvmRequesters(ap.getByName(Keys.CVM_ROUTER), ap);
 
         console.log("ORCHESTRATOR", d.orchestrator);
         console.log("STAKE_VESTING", d.stakeVesting);

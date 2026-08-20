@@ -76,6 +76,7 @@ contract CvmRouterTest is Test {
         consumer = new MockCvmConsumer(address(router));
 
         vm.startPrank(dao);
+        router.setRequester(address(consumer), true);
         coordinator.addComposeHash(COMPOSE_A);
         coordinator.addComposeHash(COMPOSE_B);
         vm.stopPrank();
@@ -167,5 +168,40 @@ contract CvmRouterTest is Test {
         address picked = coordinator.pickAssignee(bytes32(uint256(0)));
         assertEq(picked, oracleB);
         assertEq(coordinator.pickAssignee(keccak256("x")), oracleB);
+    }
+
+    function test_sendRequest_revertsWhenRequesterNotAllowed() public {
+        MockCvmConsumer stranger = new MockCvmConsumer(address(router));
+        assertFalse(router.isRequester(address(stranger)));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RequesterNotAllowed.selector, address(stranger)));
+        stranger.request("hello");
+    }
+
+    function test_sendRequest_revertsForDirectCaller() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.RequesterNotAllowed.selector, address(this)));
+        router.sendRequest(CvmJob.TestFetch, "hello");
+    }
+
+    function test_setRequester_onlyOwner() public {
+        address other = makeAddr("other");
+        vm.prank(other);
+        vm.expectRevert();
+        router.setRequester(other, true);
+    }
+
+    function test_setRequester_zeroAddressReverts() public {
+        vm.prank(dao);
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        router.setRequester(address(0), true);
+    }
+
+    function test_setRequester_revokeStopsRequests() public {
+        vm.prank(dao);
+        router.setRequester(address(consumer), false);
+        assertFalse(router.isRequester(address(consumer)));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RequesterNotAllowed.selector, address(consumer)));
+        consumer.request("hello");
     }
 }

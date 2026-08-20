@@ -7,13 +7,14 @@ import { AddressKeys as Keys } from "@base/global/libraries/addresses/AddressKey
 import { PbrSettle } from "@src/data/performances/PbrSettle.sol";
 
 import { AddressProviderOps } from "./AddressProviderOps.sol";
+import { CvmRequesterOps } from "./CvmRequesterOps.sol";
 
 /**
  * @title DeployPbrSettle
  * @notice Immutable PbrSettle; register `PBR_SETTLE` on AddressProvider.
  * @dev `CVM_ROUTER` must already be on AddressProvider (ctor binds Oracle router).
  */
-abstract contract DeployPbrSettle is AddressProviderOps {
+abstract contract DeployPbrSettle is AddressProviderOps, CvmRequesterOps {
     function _deployPbrSettle(address deployer) internal returns (address pbrSettle) {
         if (deployer == address(0)) revert("deployer required");
 
@@ -23,6 +24,7 @@ abstract contract DeployPbrSettle is AddressProviderOps {
 
         pbrSettle = address(new PbrSettle(addressProvider));
         _registerName(deployer, Keys.PBR_SETTLE, pbrSettle);
+        _allowCvmRequester(_requireName(Keys.CVM_ROUTER), pbrSettle);
 
         console.log("=== DeployPbrSettle (immutable) ===");
         console.log("PbrSettle", pbrSettle);

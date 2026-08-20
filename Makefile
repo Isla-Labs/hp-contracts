@@ -275,6 +275,18 @@ oracle-sepolia-remove-compose:
 		cast send "$$COORD" "removeComposeHash(bytes32)" "$(COMPOSE_HASH)" \
 			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL)
 
+# CONSUMER=0x…  ALLOWED=true|false (default true)
+oracle-sepolia-set-requester:
+	@test -n "$(CONSUMER)" || (echo "CONSUMER=0x… required" && exit 1)
+	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy first" && exit 1)
+	@ROUTER=$$(sed -n 's/.*"cvmRouter": "\([^"]*\)".*/\1/p' deployments/base-sepolia-oracle.json | head -1); \
+		test -n "$$ROUTER" || (echo "could not parse cvmRouter" && exit 1); \
+		ALLOWED="$(or $(ALLOWED),true)"; \
+		echo "setRequester $$ROUTER $(CONSUMER) $$ALLOWED"; \
+		cast send "$$ROUTER" "setRequester(address,bool)" "$(CONSUMER)" "$$ALLOWED" \
+			--private-key $(PRIVATE_KEY) --rpc-url $(BASE_SEPOLIA_RPC_URL); \
+		echo "onchain isRequester:" $$(cast call "$$ROUTER" "isRequester(address)(bool)" "$(CONSUMER)" --rpc-url $(BASE_SEPOLIA_RPC_URL))
+
 deploy-base-sepolia-test-data:
 	@test -f deployments/base-sepolia-oracle.json || (echo "missing deployments/base-sepolia-oracle.json — deploy oracle first" && exit 1)
 	@ROUTER=$${CVM_ROUTER:-$$(sed -n 's/.*"cvmRouter": "\([^"]*\)".*/\1/p' deployments/base-sepolia-oracle.json | head -1)}; \
@@ -318,5 +330,6 @@ fmt-check:
 	deploy-base-sepolia-handoff \
 	upgrade-base-sepolia-cvm-coordinator upgrade-base-sepolia-cvm-router \
 	oracle-sepolia-add-compose oracle-sepolia-remove-compose oracle-sepolia-set-verifier \
-	oracle-sepolia-set-config oracle-sepolia-set-ttl deploy-base-sepolia-test-data \
+	oracle-sepolia-set-config oracle-sepolia-set-ttl oracle-sepolia-set-requester \
+	deploy-base-sepolia-test-data \
 	install build test coverage fmt fmt-check

@@ -17,6 +17,7 @@ import { CvmCommitment, CvmJob, CvmRouterConfig } from "@types/oracle/CvmTypes.s
  * @notice Request bus for Phala CVM oracles (soft assignee + single fulfill).
  * @dev Intended behind `TransparentUpgradeableProxy` so sealed CVM env can keep a stable
  *      `CVM_ROUTER` across logic upgrades. Assignee exclusive windows are per-`CvmJob`.
+ *      `sendRequest` is allowlisted: only addresses passed to `setRequester` may open jobs.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co
@@ -44,6 +45,7 @@ contract CvmRouter is Initializable, Ownable, Pausable, ICvmRouter {
 
     mapping(bytes32 requestId => CvmCommitment) private _commitments;
     mapping(CvmJob job => uint32 exclusiveSeconds) private _jobExclusiveSeconds;
+    mapping(address consumer => bool) private _requesterAllowed;
 
     // --------------------------------------------
     //  Initialization
@@ -100,12 +102,18 @@ contract CvmRouter is Initializable, Ownable, Pausable, ICvmRouter {
         return _commitments[requestId].requester != address(0);
     }
 
+    /// @inheritdoc ICvmRouter
+    function isRequester(address consumer) public view returns (bool) {
+        return _requesterAllowed[consumer];
+    }
+
     // --------------------------------------------
     //  Requests
     // --------------------------------------------
 
     /// @inheritdoc ICvmRouter
     function sendRequest(CvmJob job, bytes calldata args) external whenNotPaused returns (bytes32 requestId) {
+        if (!_requesterAllowed[msg.sender]) revert Errors.RequesterNotAllowed(msg.sender);
         if (job == CvmJob.None) revert Errors.InvalidJob(job);
 
         CvmRouterConfig memory config = _config;
@@ -221,6 +229,13 @@ contract CvmRouter is Initializable, Ownable, Pausable, ICvmRouter {
     function setCoordinator(address coordinator_) external onlyOwner {
         if (coordinator_ == address(0)) revert Errors.ZeroAddress();
         _coordinator = ICvmCoordinator(coordinator_);
+    }
+
+    /// @notice Allow or revoke `consumer` for `sendRequest`. Empty until the owner seeds it.
+    function setRequester(address consumer, bool allowed) external onlyOwner {
+        if (consumer == address(0)) revert Errors.ZeroAddress();
+        _requesterAllowed[consumer] = allowed;
+        emit Events.RequesterSet(consumer, allowed);
     }
 
     function pause() external onlyOwner {

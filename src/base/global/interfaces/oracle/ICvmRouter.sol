@@ -19,8 +19,11 @@ interface ICvmRouter {
 
     function isPending(bytes32 requestId) external view returns (bool);
 
+    /// @notice Whether `consumer` may call `sendRequest`.
+    function isRequester(address consumer) external view returns (bool);
+
     /// @notice Open a request; emits `RequestStart` for CVM listeners.
-    /// @dev Callback gas is always router `maxCallbackGasLimit` (DAO-configured).
+    /// @dev Caller must be allowlisted via `CvmRouter.setRequester`. Callback gas is router `maxCallbackGasLimit`.
     function sendRequest(CvmJob job, bytes calldata args) external returns (bytes32 requestId);
 
     /// @notice Oracle-only fulfill; callbacks `handleOracleFulfillment` on the requester.

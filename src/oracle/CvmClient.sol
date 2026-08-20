@@ -10,7 +10,8 @@ import { CvmJob } from "@types/oracle/CvmTypes.sol";
  * @title CvmClient
  * @notice Inherit to open Phala CVM oracle requests via `CvmRouter`.
  * @dev Mirrors Chainlink FunctionsClient: `_sendRequest` → router → `handleOracleFulfillment`
- *      → child `_fulfillRequest`. Put `RateLimit` on the consumer's public kickoff, not here.
+ *      → child `_fulfillRequest`. The router allowlists callers via `setRequester`; put
+ *      `RateLimit` on the consumer's public kickoff, not here.
  *
  * @custom:experimental Learn more at https://docs.highpotential.io/
  * @custom:security-contact security@islalabs.co

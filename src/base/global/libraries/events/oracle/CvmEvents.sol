@@ -36,6 +36,8 @@ library CvmEvents {
 
     event JobExclusiveSecondsSet(CvmJob indexed job, uint32 exclusiveSeconds);
 
+    event RequesterSet(address indexed requester, bool allowed);
+
     // --------------------------------------------
     //  Coordinator
     // --------------------------------------------

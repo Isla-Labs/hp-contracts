@@ -25,8 +25,9 @@ contract ConstitutionalTimelock is TimelockController {
     )
         TimelockController(
             minDelay == 0 ? (block.chainid == 84_532 ? 5 minutes : DEFAULT_MIN_DELAY) : minDelay,
-            _singleton(multisig), 
-            _openExecutors(), multisig
+            _singleton(multisig),
+            _openExecutors(),
+            multisig
         )
     {
         if (multisig == address(0)) revert Errors.ZeroAddress();
